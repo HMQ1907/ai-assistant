@@ -40,6 +40,28 @@
     </div>
 
     <div class="grid two">
+      <section class="card">
+        <h3>Symbol scores</h3>
+        <table class="history-table">
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Score</th>
+              <th>Bias</th>
+              <th>Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in result.symbol_scores" :key="item.symbol">
+              <td>{{ item.symbol }}</td>
+              <td>{{ item.score }}</td>
+              <td>{{ item.bias }}</td>
+              <td class="muted">{{ item.reason }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
       <RiskFactorsCard :result="result" />
       <PreEntryChecklist :result="result" />
     </div>

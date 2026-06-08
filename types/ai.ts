@@ -1,10 +1,18 @@
 import type { TradeDecision, TradeDirection } from './trading'
 
+export interface SymbolScore {
+  symbol: string
+  score: number
+  bias: TradeDirection
+  reason: string
+}
+
 export interface AiTradeRecommendation {
   decision: TradeDecision
   symbol: string
   direction: TradeDirection
   confidence: number
+  symbol_scores: SymbolScore[]
   entry_zone: {
     from: number
     to: number

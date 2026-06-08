@@ -6,6 +6,7 @@
         <nav class="nav">
           <NuxtLink to="/">Dashboard</NuxtLink>
           <NuxtLink to="/history">History</NuxtLink>
+          <NuxtLink to="/stats">Stats</NuxtLink>
         </nav>
       </div>
     </header>

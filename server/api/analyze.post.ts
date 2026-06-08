@@ -5,6 +5,7 @@ import { IndicatorService } from '../services/IndicatorService'
 import { MarketDataService } from '../services/MarketDataService'
 import { NewsService } from '../services/NewsService'
 import { OpportunityPayloadBuilder } from '../services/OpportunityPayloadBuilder'
+import { SupabaseService } from '../services/SupabaseService'
 
 export default defineEventHandler(async () => {
   try {
@@ -19,14 +20,19 @@ export default defineEventHandler(async () => {
       baseUrl: config.evolinkBaseUrl,
       timeoutMs: config.aiTimeoutMs
     })
-    const historyService = new AnalysisHistoryService(config.databasePath)
+    const historyService = new AnalysisHistoryService(
+      new SupabaseService({
+        url: config.supabaseUrl,
+        serviceRoleKey: config.supabaseServiceRoleKey
+      }).getClient()
+    )
 
     const market = await marketService.collectAll()
     const indicators = indicatorService.calculateMany(market)
     const news = await newsService.collect()
     const payload = payloadBuilder.build(market, indicators, news)
     const aiResult = await aiService.analyze(payload)
-    const history = historyService.create({
+    const history = await historyService.create({
       requestPayload: payload,
       aiResponseRaw: aiResult.raw,
       parsedResult: aiResult.parsed

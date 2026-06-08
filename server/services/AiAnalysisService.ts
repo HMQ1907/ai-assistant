@@ -1,15 +1,24 @@
 import { z } from 'zod'
 import type { AiAnalysisResult, AiTradeRecommendation } from '../../types/ai'
 import type { AnalysisPayload } from '../../types/trading'
+import { tradingRules } from '../config/tradingRules'
 import { buildTradingAnalysisPrompt } from '../prompts/trading-analysis.prompt'
 import { extractJsonObject } from '../utils/jsonParser'
-import { parseRiskReward } from '../utils/risk'
+import { TradeValidationService } from './TradeValidationService'
 
 const recommendationSchema = z.object({
   decision: z.enum(['TRADE', 'NO_TRADE']),
   symbol: z.string(),
   direction: z.enum(['BUY', 'SELL', 'NONE']),
   confidence: z.number().min(0).max(100),
+  symbol_scores: z.array(
+    z.object({
+      symbol: z.string(),
+      score: z.number().min(0).max(100),
+      bias: z.enum(['BUY', 'SELL', 'NONE']),
+      reason: z.string()
+    })
+  ),
   entry_zone: z.object({ from: z.number(), to: z.number() }),
   stop_loss: z.number(),
   take_profit: z.number(),
@@ -49,6 +58,8 @@ const recommendationSchema = z.object({
 })
 
 export class AiAnalysisService {
+  private readonly validationService = new TradeValidationService()
+
   constructor(
     private readonly options: {
       apiKey: string
@@ -60,14 +71,14 @@ export class AiAnalysisService {
 
   async analyze(payload: AnalysisPayload): Promise<AiAnalysisResult> {
     if (!this.options.apiKey) {
-      const parsed = this.applyLocalSafetyRules(this.mockRecommendation(payload))
+      const parsed = this.validationService.validate(this.mockRecommendation(payload))
       return { raw: JSON.stringify(parsed), parsed }
     }
 
     const prompt = buildTradingAnalysisPrompt(payload)
     const raw = await this.callWithRetry(prompt)
     const parsed = this.parseAndValidate(raw)
-    return { raw, parsed: this.applyLocalSafetyRules(parsed) }
+    return { raw, parsed: this.validationService.validate(parsed) }
   }
 
   private async callWithRetry(prompt: string): Promise<string> {
@@ -119,19 +130,6 @@ export class AiAnalysisService {
     return recommendationSchema.parse(extracted)
   }
 
-  private applyLocalSafetyRules(recommendation: AiTradeRecommendation): AiTradeRecommendation {
-    const riskReward = parseRiskReward(recommendation.risk_reward)
-    if (recommendation.confidence < 70 || riskReward < 1.5) {
-      return {
-        ...recommendation,
-        decision: 'NO_TRADE',
-        direction: 'NONE',
-        no_trade_reason: recommendation.no_trade_reason || 'Local safety rule blocked the trade because confidence or risk reward did not meet minimum requirements.'
-      }
-    }
-    return recommendation
-  }
-
   private mockRecommendation(payload: AnalysisPayload): AiTradeRecommendation {
     const nearest = payload.symbols[0]
     const symbol = nearest?.market.symbol ?? 'XAUUSD'
@@ -141,15 +139,21 @@ export class AiAnalysisService {
       symbol,
       direction: 'NONE',
       confidence: 62,
+      symbol_scores: payload.symbols.map((item, index) => ({
+        symbol: item.market.symbol,
+        score: Math.max(40, 62 - index * 2),
+        bias: 'NONE',
+        reason: `${item.market.symbol} is not clear enough for a manual trade in mock analysis.`
+      })),
       entry_zone: { from: 0, to: 0 },
       stop_loss: 0,
       take_profit: 0,
       risk_reward: '1:1.2',
       expected_holding_time: '15-60 minutes',
       position_sizing: {
-        account_size_usd: 100,
-        risk_percent: 1,
-        max_loss_usd: 1,
+        account_size_usd: tradingRules.accountSizeUsd,
+        risk_percent: tradingRules.riskPercent,
+        max_loss_usd: (tradingRules.accountSizeUsd * tradingRules.riskPercent) / 100,
         suggested_lot: 'No lot suggested because the mock analysis returns NO_TRADE.'
       },
       summary: 'Mock analysis finds no clean setup strong enough for a manual trade.',

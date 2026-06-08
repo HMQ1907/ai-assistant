@@ -18,7 +18,7 @@ export type SymbolCode = (typeof SYMBOLS)[number]
 export type Timeframe = (typeof TIMEFRAMES)[number]
 export type TradeDecision = 'TRADE' | 'NO_TRADE'
 export type TradeDirection = 'BUY' | 'SELL' | 'NONE'
-export type ResultStatus = 'PENDING' | 'WIN' | 'LOSS' | 'SKIPPED'
+export type ResultStatus = 'PENDING' | 'WIN' | 'LOSS' | 'BREAKEVEN' | 'SKIPPED'
 
 export interface Candle {
   time: string
@@ -96,18 +96,45 @@ export interface AnalysisPayload {
 }
 
 export interface AnalysisHistoryRecord {
-  id: number
+  id: string
   created_at: string
-  request_payload: string
+  request_payload: AnalysisPayload
   ai_response_raw: string
-  parsed_result: string
+  parsed_result: unknown
   decision: TradeDecision
   symbol: string
   direction: TradeDirection
   confidence: number
-  entry: string
+  entry_from: number
+  entry_to: number
   stop_loss: number
   take_profit: number
   result_status: ResultStatus
+  actual_entry: number | null
+  actual_exit: number | null
+  actual_profit_loss: number | null
   user_note: string
+}
+
+export interface SymbolPerformance {
+  symbol: string
+  trades: number
+  wins: number
+  losses: number
+  totalProfitLoss: number
+}
+
+export interface PerformanceStats {
+  totalAnalysis: number
+  totalTrades: number
+  wins: number
+  losses: number
+  breakevens: number
+  skipped: number
+  winRate: number
+  avgConfidence: number
+  avgConfidenceOfWinners: number
+  avgConfidenceOfLosers: number
+  bestSymbols: SymbolPerformance[]
+  worstSymbols: SymbolPerformance[]
 }

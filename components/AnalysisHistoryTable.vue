@@ -11,6 +11,9 @@
           <th>Direction</th>
           <th>Confidence</th>
           <th>Status</th>
+          <th>Actual Entry</th>
+          <th>Actual Exit</th>
+          <th>P/L</th>
           <th>Note</th>
           <th></th>
         </tr>
@@ -27,8 +30,36 @@
               <option>PENDING</option>
               <option>WIN</option>
               <option>LOSS</option>
+              <option>BREAKEVEN</option>
               <option>SKIPPED</option>
             </select>
+          </td>
+          <td>
+            <input
+              :value="numberDraft(record.id, 'actual_entry', record.actual_entry)"
+              class="input compact"
+              type="number"
+              step="0.00001"
+              @input="setNumber(record.id, 'actual_entry', $event)"
+            />
+          </td>
+          <td>
+            <input
+              :value="numberDraft(record.id, 'actual_exit', record.actual_exit)"
+              class="input compact"
+              type="number"
+              step="0.00001"
+              @input="setNumber(record.id, 'actual_exit', $event)"
+            />
+          </td>
+          <td>
+            <input
+              :value="numberDraft(record.id, 'actual_profit_loss', record.actual_profit_loss)"
+              class="input compact"
+              type="number"
+              step="0.01"
+              @input="setNumber(record.id, 'actual_profit_loss', $event)"
+            />
           </td>
           <td>
             <input
@@ -53,7 +84,15 @@ import type { AnalysisHistoryRecord, ResultStatus } from '~/types/trading'
 const props = defineProps<{ records: AnalysisHistoryRecord[] }>()
 const emit = defineEmits<{ updated: [record: AnalysisHistoryRecord] }>()
 
-const drafts = reactive<Record<number, { result_status: ResultStatus; user_note: string }>>({})
+type Draft = {
+  result_status: ResultStatus
+  actual_entry: number | null
+  actual_exit: number | null
+  actual_profit_loss: number | null
+  user_note: string
+}
+
+const drafts = reactive<Record<string, Draft>>({})
 
 watch(
   () => props.records,
@@ -61,6 +100,9 @@ watch(
     for (const record of records) {
       drafts[record.id] = {
         result_status: record.result_status,
+        actual_entry: record.actual_entry,
+        actual_exit: record.actual_exit,
+        actual_profit_loss: record.actual_profit_loss,
         user_note: record.user_note
       }
     }
@@ -68,7 +110,7 @@ watch(
   { immediate: true }
 )
 
-async function save(id: number): Promise<void> {
+async function save(id: string): Promise<void> {
   const draft = drafts[id]
   if (!draft) return
   const updated = await $fetch<AnalysisHistoryRecord>(`/api/history/${id}`, {
@@ -78,18 +120,39 @@ async function save(id: number): Promise<void> {
   emit('updated', updated)
 }
 
-function setStatus(id: number, event: Event): void {
+function setStatus(id: string, event: Event): void {
   const target = event.target as HTMLSelectElement | null
   const value = target?.value
-  if (value !== 'PENDING' && value !== 'WIN' && value !== 'LOSS' && value !== 'SKIPPED') return
-  drafts[id] ??= { result_status: value, user_note: '' }
+  if (value !== 'PENDING' && value !== 'WIN' && value !== 'LOSS' && value !== 'BREAKEVEN' && value !== 'SKIPPED') return
+  drafts[id] ??= emptyDraft(value)
   drafts[id].result_status = value
 }
 
-function setNote(id: number, event: Event): void {
+function setNote(id: string, event: Event): void {
   const target = event.target as HTMLInputElement | null
-  drafts[id] ??= { result_status: 'PENDING', user_note: '' }
+  drafts[id] ??= emptyDraft('PENDING')
   drafts[id].user_note = target?.value ?? ''
+}
+
+function setNumber(id: string, key: 'actual_entry' | 'actual_exit' | 'actual_profit_loss', event: Event): void {
+  const target = event.target as HTMLInputElement | null
+  drafts[id] ??= emptyDraft('PENDING')
+  drafts[id][key] = target?.value ? Number(target.value) : null
+}
+
+function numberDraft(id: string, key: 'actual_entry' | 'actual_exit' | 'actual_profit_loss', fallback: number | null): string {
+  const value = drafts[id]?.[key] ?? fallback
+  return value === null ? '' : String(value)
+}
+
+function emptyDraft(status: ResultStatus): Draft {
+  return {
+    result_status: status,
+    actual_entry: null,
+    actual_exit: null,
+    actual_profit_loss: null,
+    user_note: ''
+  }
 }
 
 function formatTime(value: string): string {
@@ -104,5 +167,9 @@ function formatTime(value: string): string {
 .small {
   min-height: 34px;
   padding: 0 10px;
+}
+
+.compact {
+  min-width: 92px;
 }
 </style>

@@ -10,11 +10,11 @@ export default defineEventHandler(async () => {
         url: config.supabaseUrl,
         serviceRoleKey: config.supabaseServiceRoleKey
       }).getClient()
-    ).list()
+    ).stats()
   } catch (error) {
     throw createError({
       statusCode: 500,
-      statusMessage: error instanceof Error ? error.message : 'Could not load history'
+      statusMessage: error instanceof Error ? error.message : 'Could not load stats'
     })
   }
 })

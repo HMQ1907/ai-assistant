@@ -1,12 +1,16 @@
 import type { AnalysisPayload } from '../../types/trading'
+import { tradingRules } from '../config/tradingRules'
 
 export function buildTradingAnalysisPrompt(payload: AnalysisPayload): string {
   return [
     'You are a conservative AI Trading Assistant for manual trading only. You never place orders.',
     'Analyze all provided symbols across M5, M15, H1 and H4 where available. Compare opportunities and counterarguments.',
+    'Score every provided symbol from 0-100 before choosing the best candidate. The selected symbol must come from the scored list.',
+    'Explain why the chosen symbol is better and why each non-selected symbol is not chosen.',
     'Prefer NO_TRADE unless the setup is clear, risk is controlled, spread is acceptable, and news risk is acceptable.',
-    'Mandatory rules: confidence below 70 means NO_TRADE. Risk reward below 1:1.5 means NO_TRADE. High-impact red news within 30 minutes means prefer NO_TRADE. Wide spread or sideway market means NO_TRADE.',
+    `Mandatory rules: confidence below ${tradingRules.minConfidence} means NO_TRADE. Risk reward below 1:${tradingRules.minRiskReward} means NO_TRADE. High-impact red news within 30 minutes means prefer NO_TRADE. Wide spread or sideway market means NO_TRADE.`,
     'Never recommend martingale, DCA into losses, all-in, increasing lot after a loss, or risking more than 1-2% per trade.',
+    'Never claim certainty, guaranteed wins, fake winrate, "will win", "certainly rises", or "100%".',
     'Confidence is only confidence in the setup, never certainty or winrate.',
     'Return only valid JSON matching this schema exactly. No markdown.',
     JSON.stringify({
@@ -14,6 +18,14 @@ export function buildTradingAnalysisPrompt(payload: AnalysisPayload): string {
       symbol: 'XAUUSD',
       direction: 'BUY | SELL | NONE',
       confidence: 0,
+      symbol_scores: [
+        {
+          symbol: 'XAUUSD',
+          score: 82,
+          bias: 'BUY | SELL | NONE',
+          reason: 'Strong bullish trend'
+        }
+      ],
       entry_zone: { from: 0, to: 0 },
       stop_loss: 0,
       take_profit: 0,

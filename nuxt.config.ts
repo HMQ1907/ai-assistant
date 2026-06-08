@@ -10,7 +10,8 @@ export default defineNuxtConfig({
     aiTimeoutMs: Number(process.env.AI_TIMEOUT_MS || 90000),
     marketDataProvider: process.env.MARKET_DATA_PROVIDER || 'mock',
     newsProvider: process.env.NEWS_PROVIDER || 'mock',
-    databasePath: process.env.DATABASE_PATH || './data/analysis-history.sqlite'
+    supabaseUrl: process.env.SUPABASE_URL || '',
+    supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || ''
   },
   typescript: {
     strict: true,
