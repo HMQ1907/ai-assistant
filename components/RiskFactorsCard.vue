@@ -1,10 +1,10 @@
 <template>
   <section class="card">
-    <h3>Risk factors</h3>
+    <h3>Yếu tố rủi ro</h3>
     <ul class="list">
       <li v-for="item in result.risk_factors" :key="item">{{ item }}</li>
     </ul>
-    <h3>Invalid conditions</h3>
+    <h3>Điều kiện vô hiệu</h3>
     <ul class="list">
       <li v-for="item in result.invalid_conditions" :key="item">{{ item }}</li>
     </ul>
@@ -12,7 +12,7 @@
 </template>
 
 <script setup lang="ts">
-import type { AiTradeRecommendation } from '~/types/ai'
+import type { AiTradeRecommendation } from "~/types/ai";
 
-defineProps<{ result: AiTradeRecommendation }>()
+defineProps<{ result: AiTradeRecommendation }>();
 </script>

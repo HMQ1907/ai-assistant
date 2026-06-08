@@ -1,29 +1,45 @@
-import type { MarketSnapshot, SymbolCode } from '../../types/trading'
-import { SYMBOLS } from '../../types/trading'
-import { MockMarketDataProvider } from '../providers/market/MockMarketDataProvider'
-import type { MarketDataProvider } from '../providers/market/MarketDataProvider'
+import { SYMBOLS } from "../../types/trading";
+import { RealMarketDataProvider } from "../providers/market/RealMarketDataProvider";
+import type {
+  MarketDataCollection,
+  MarketDataProvider,
+} from "../providers/market/MarketDataProvider";
+import type { SymbolCode } from "../../types/trading";
 
 export class MarketDataService {
-  private readonly provider: MarketDataProvider
+  private readonly provider: MarketDataProvider;
 
-  constructor(providerName = 'mock') {
-    this.provider = this.createProvider(providerName)
+  constructor(
+    private readonly options: {
+      providerName: string;
+      apiKey: string;
+      baseUrl: string;
+    },
+  ) {
+    this.provider = this.createProvider(options.providerName);
   }
 
   getDefaultSymbols(): SymbolCode[] {
-    return [...SYMBOLS]
+    return [...SYMBOLS];
   }
 
-  async collectAll(symbols: SymbolCode[] = this.getDefaultSymbols()): Promise<MarketSnapshot[]> {
-    return this.provider.getSnapshots(symbols)
+  async collectAll(
+    symbols: SymbolCode[] = this.getDefaultSymbols(),
+  ): Promise<MarketDataCollection> {
+    return this.provider.getSnapshots(symbols);
   }
 
   private createProvider(providerName: string): MarketDataProvider {
     switch (providerName) {
-      case 'mock':
-        return new MockMarketDataProvider()
+      case "twelvedata":
+        return new RealMarketDataProvider({
+          apiKey: this.options.apiKey,
+          baseUrl: this.options.baseUrl,
+        });
       default:
-        throw new Error(`Unsupported market data provider: ${providerName}`)
+        throw new Error(
+          `Provider dữ liệu thị trường không được hỗ trợ hoặc chưa cấu hình: ${providerName}`,
+        );
     }
   }
 }

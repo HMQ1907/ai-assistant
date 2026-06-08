@@ -3,60 +3,84 @@
     <div class="toolbar">
       <div class="heading">
         <h1>Manual trading assistant</h1>
-        <p>Quet XAUUSD, crypto, forex va indices. Tool chi phan tich, khong dat lenh.</p>
+        <p>
+          Quét XAUUSD, crypto, forex và indices bằng dữ liệu thật. Tool chỉ phân
+          tích, không đặt lệnh.
+        </p>
       </div>
       <AnalyzeButton :loading="loading" @analyze="analyze" />
     </div>
 
     <div v-if="error" class="card">
-      <strong>Analysis failed</strong>
+      <strong>Phân tích thất bại</strong>
       <p class="muted">{{ error }}</p>
     </div>
 
     <div v-if="loading" class="card">
-      <strong>Dang thu thap market data, news va goi AI...</strong>
-      <p class="muted">Timeout AI co the mat 60-120 giay neu dung Evolink that.</p>
+      <strong
+        >Đang lấy dữ liệu thị trường thật, tin tức thật và gọi AI...</strong
+      >
+      <p class="muted">Quá trình này có thể mất 60-120 giây tùy provider.</p>
     </div>
 
-    <RecommendationCard v-if="result" :result="result" />
+    <RecommendationCard
+      v-if="result"
+      :history="latestHistory"
+      :result="result"
+    />
 
-    <AnalysisHistoryTable :records="history" class="history-block" @updated="replaceHistoryRecord" />
+    <AnalysisHistoryTable
+      :records="history"
+      class="history-block"
+      @updated="replaceHistoryRecord"
+    />
   </main>
 </template>
 
 <script setup lang="ts">
-import type { AiTradeRecommendation } from '~/types/ai'
-import type { AnalysisHistoryRecord } from '~/types/trading'
+import type { AiTradeRecommendation } from "~/types/ai";
+import type { AnalysisHistoryRecord } from "~/types/trading";
 
-const loading = ref(false)
-const error = ref('')
-const result = ref<AiTradeRecommendation | null>(null)
-const history = ref<AnalysisHistoryRecord[]>([])
+const loading = ref(false);
+const error = ref("");
+const result = ref<AiTradeRecommendation | null>(null);
+const history = ref<AnalysisHistoryRecord[]>([]);
+const latestHistory = computed(() =>
+  result.value ? (history.value[0] ?? null) : null,
+);
 
-onMounted(loadHistory)
+onMounted(loadHistory);
 
 async function analyze(): Promise<void> {
-  loading.value = true
-  error.value = ''
+  loading.value = true;
+  error.value = "";
   try {
-    const response = await $fetch<{ result: AiTradeRecommendation; history: AnalysisHistoryRecord }>('/api/analyze', {
-      method: 'POST'
-    })
-    result.value = response.result
-    history.value = [response.history, ...history.value.filter((record) => record.id !== response.history.id)]
+    const response = await $fetch<{
+      result: AiTradeRecommendation;
+      history: AnalysisHistoryRecord;
+    }>("/api/analyze", {
+      method: "POST",
+    });
+    result.value = response.result;
+    history.value = [
+      response.history,
+      ...history.value.filter((record) => record.id !== response.history.id),
+    ];
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : 'Unknown error'
+    error.value = caught instanceof Error ? caught.message : "Unknown error";
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 async function loadHistory(): Promise<void> {
-  history.value = await $fetch<AnalysisHistoryRecord[]>('/api/history')
+  history.value = await $fetch<AnalysisHistoryRecord[]>("/api/history");
 }
 
 function replaceHistoryRecord(record: AnalysisHistoryRecord): void {
-  history.value = history.value.map((item) => (item.id === record.id ? record : item))
+  history.value = history.value.map((item) =>
+    item.id === record.id ? record : item,
+  );
 }
 </script>
 

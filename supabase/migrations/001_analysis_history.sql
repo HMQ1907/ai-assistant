@@ -19,6 +19,13 @@ create table if not exists analysis_history (
   actual_exit numeric,
   actual_profit_loss numeric,
   user_note text,
+  market_data_provider text,
+  news_provider text,
+  data_quality text,
+  data_warnings jsonb default '[]'::jsonb,
+  skipped_symbols jsonb default '[]'::jsonb,
+  market_data_timestamp timestamptz,
+  news_data_timestamp timestamptz,
   constraint analysis_history_result_status_check check (result_status in ('PENDING', 'WIN', 'LOSS', 'BREAKEVEN', 'SKIPPED'))
 );
 

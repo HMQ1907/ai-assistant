@@ -1,0 +1,235 @@
+import type {
+  Candle,
+  DataQuality,
+  MarketSnapshot,
+  SymbolCode,
+  Timeframe,
+} from "../../../types/trading";
+import { TIMEFRAMES } from "../../../types/trading";
+import type {
+  MarketDataCollection,
+  MarketDataProvider,
+  SkippedSymbol,
+} from "./MarketDataProvider";
+
+const timeframeIntervals: Record<Timeframe, string> = {
+  M5: "5min",
+  M15: "15min",
+  H1: "1h",
+  H4: "4h",
+};
+
+const twelveDataSymbols: Record<SymbolCode, string> = {
+  XAUUSD: "XAU/USD",
+  BTCUSD: "BTC/USD",
+  ETHUSD: "ETH/USD",
+  EURUSD: "EUR/USD",
+  GBPUSD: "GBP/USD",
+  USDJPY: "USD/JPY",
+  USDCHF: "USD/CHF",
+  USDCAD: "USD/CAD",
+  AUDUSD: "AUD/USD",
+  NAS100: "NDX",
+  US30: "DJI",
+};
+
+interface TwelveDataTimeSeriesResponse {
+  status?: string;
+  message?: string;
+  values?: Array<{
+    datetime?: string;
+    open?: string;
+    high?: string;
+    low?: string;
+    close?: string;
+    volume?: string;
+  }>;
+}
+
+interface TwelveDataQuoteResponse {
+  status?: string;
+  message?: string;
+  symbol?: string;
+  close?: string;
+  bid?: string;
+  ask?: string;
+  datetime?: string;
+}
+
+export class RealMarketDataProvider implements MarketDataProvider {
+  readonly name = "twelvedata";
+
+  constructor(
+    private readonly options: {
+      apiKey: string;
+      baseUrl: string;
+    },
+  ) {
+    if (!options.apiKey || !options.baseUrl) {
+      throw new Error("Chưa cấu hình API dữ liệu thật.");
+    }
+  }
+
+  async getSnapshots(symbols: SymbolCode[]): Promise<MarketDataCollection> {
+    const timestamp = new Date().toISOString();
+    const warnings: string[] = [];
+    const skippedSymbols: SkippedSymbol[] = [];
+    const snapshots: MarketSnapshot[] = [];
+
+    for (const symbol of symbols) {
+      try {
+        const snapshot = await this.getSnapshot(symbol);
+        if (snapshot.data_quality === "LOW") {
+          skippedSymbols.push({
+            symbol,
+            reason:
+              snapshot.data_warnings.join("; ") || "Chất lượng dữ liệu thấp.",
+          });
+          warnings.push(`${symbol}: dữ liệu candle không đủ, đã bỏ qua.`);
+          continue;
+        }
+        snapshots.push(snapshot);
+      } catch (error) {
+        const reason =
+          error instanceof Error
+            ? error.message
+            : "Không lấy được dữ liệu thị trường.";
+        console.warn(`[market:${this.name}] skipped ${symbol}: ${reason}`);
+        skippedSymbols.push({ symbol, reason });
+        warnings.push(`${symbol}: ${reason}`);
+      }
+    }
+
+    if (snapshots.length === 0) {
+      throw new Error(
+        "Không có symbol nào có dữ liệu realtime hợp lệ từ provider thật.",
+      );
+    }
+
+    return {
+      provider: this.name,
+      timestamp,
+      dataQuality:
+        skippedSymbols.length === 0
+          ? "HIGH"
+          : snapshots.length >= 3
+            ? "MEDIUM"
+            : "LOW",
+      warnings,
+      skippedSymbols,
+      snapshots,
+    };
+  }
+
+  private async getSnapshot(symbol: SymbolCode): Promise<MarketSnapshot> {
+    const providerSymbol = twelveDataSymbols[symbol];
+    const warnings: string[] = [];
+    const candles = {} as Record<Timeframe, Candle[]>;
+
+    for (const timeframe of TIMEFRAMES) {
+      const series = await this.getTimeSeries(providerSymbol, timeframe);
+      candles[timeframe] = series;
+      if (
+        (timeframe === "M5" || timeframe === "M15" || timeframe === "H1") &&
+        series.length < 100
+      ) {
+        warnings.push(
+          `${timeframe} chỉ có ${series.length} candles, cần tối thiểu 100.`,
+        );
+      }
+    }
+
+    const quote = await this.getQuote(providerSymbol);
+    const lastM5Close = candles.M5.at(-1)?.close;
+    const price = parseNumber(quote.close) ?? lastM5Close;
+    if (!price)
+      throw new Error("Không có giá realtime hoặc close price hợp lệ.");
+
+    const bid = parseNumber(quote.bid);
+    const ask = parseNumber(quote.ask);
+    const spread =
+      bid !== undefined && ask !== undefined ? Math.max(0, ask - bid) : 0;
+    if (spread === 0) warnings.push("Provider không trả bid/ask/spread.");
+
+    const snapshot: MarketSnapshot = {
+      symbol,
+      price,
+      spread,
+      data_quality: warnings.length > 0 ? "LOW" : "HIGH",
+      data_warnings: warnings,
+      updated_at: quote.datetime
+        ? new Date(quote.datetime).toISOString()
+        : new Date().toISOString(),
+      provider: this.name,
+      candles,
+    };
+    if (bid !== undefined) snapshot.bid = bid;
+    if (ask !== undefined) snapshot.ask = ask;
+    return snapshot;
+  }
+
+  private async getTimeSeries(
+    symbol: string,
+    timeframe: Timeframe,
+  ): Promise<Candle[]> {
+    const url = this.url("/time_series", {
+      symbol,
+      interval: timeframeIntervals[timeframe],
+      outputsize: "120",
+      apikey: this.options.apiKey,
+    });
+    const json = await this.fetchJson<TwelveDataTimeSeriesResponse>(url);
+    if (json.status === "error")
+      throw new Error(
+        json.message || `Twelve Data không hỗ trợ ${symbol} ${timeframe}.`,
+      );
+    const values = json.values ?? [];
+
+    return values
+      .map((item) => ({
+        time: item.datetime ? new Date(item.datetime).toISOString() : "",
+        open: Number(item.open),
+        high: Number(item.high),
+        low: Number(item.low),
+        close: Number(item.close),
+        volume: Number(item.volume ?? 0),
+      }))
+      .filter(
+        (item) =>
+          item.time &&
+          [item.open, item.high, item.low, item.close].every(Number.isFinite),
+      )
+      .reverse();
+  }
+
+  private async getQuote(symbol: string): Promise<TwelveDataQuoteResponse> {
+    const json = await this.fetchJson<TwelveDataQuoteResponse>(
+      this.url("/quote", {
+        symbol,
+        apikey: this.options.apiKey,
+      }),
+    );
+    if (json.status === "error")
+      throw new Error(json.message || `Không lấy được quote cho ${symbol}.`);
+    return json;
+  }
+
+  private url(path: string, params: Record<string, string>): string {
+    const url = new URL(path, this.options.baseUrl);
+    for (const [key, value] of Object.entries(params))
+      url.searchParams.set(key, value);
+    return url.toString();
+  }
+
+  private async fetchJson<T>(url: string): Promise<T> {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Provider trả HTTP ${response.status}.`);
+    return (await response.json()) as T;
+  }
+}
+
+function parseNumber(value: string | undefined): number | undefined {
+  if (value === undefined || value === "") return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}

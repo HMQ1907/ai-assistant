@@ -1,6 +1,6 @@
 <template>
   <section class="card">
-    <h3>Pre-entry checklist</h3>
+    <h3>Checklist trước khi tự vào lệnh</h3>
     <ul class="list">
       <li v-for="item in result.pre_entry_checklist" :key="item">{{ item }}</li>
     </ul>
@@ -8,7 +8,7 @@
 </template>
 
 <script setup lang="ts">
-import type { AiTradeRecommendation } from '~/types/ai'
+import type { AiTradeRecommendation } from "~/types/ai";
 
-defineProps<{ result: AiTradeRecommendation }>()
+defineProps<{ result: AiTradeRecommendation }>();
 </script>

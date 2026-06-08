@@ -1,24 +1,35 @@
-import type { NewsSnapshot } from '../../types/trading'
-import { MockNewsProvider } from '../providers/news/MockNewsProvider'
-import type { NewsProvider } from '../providers/news/NewsProvider'
+import type { NewsSnapshot } from "../../types/trading";
+import type { NewsProvider } from "../providers/news/NewsProvider";
+import { RealNewsProvider } from "../providers/news/RealNewsProvider";
 
 export class NewsService {
-  private readonly provider: NewsProvider
+  private readonly provider: NewsProvider;
 
-  constructor(providerName = 'mock') {
-    this.provider = this.createProvider(providerName)
+  constructor(
+    private readonly options: {
+      providerName: string;
+      apiKey: string;
+      baseUrl: string;
+    },
+  ) {
+    this.provider = this.createProvider(options.providerName);
   }
 
   async collect(): Promise<NewsSnapshot> {
-    return this.provider.getLatestNews()
+    return this.provider.getLatestNews();
   }
 
   private createProvider(providerName: string): NewsProvider {
     switch (providerName) {
-      case 'mock':
-        return new MockNewsProvider()
+      case "newsapi":
+        return new RealNewsProvider({
+          apiKey: this.options.apiKey,
+          baseUrl: this.options.baseUrl,
+        });
       default:
-        throw new Error(`Unsupported news provider: ${providerName}`)
+        throw new Error(
+          `Provider tin tức không được hỗ trợ hoặc chưa cấu hình: ${providerName}`,
+        );
     }
   }
 }

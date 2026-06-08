@@ -1,18 +1,18 @@
 <template>
   <div>
     <div class="kv-row">
-      <span>Confidence</span>
+      <span>Độ tin cậy</span>
       <strong>{{ value }}%</strong>
     </div>
-    <div class="track" aria-label="Confidence">
+    <div class="track" aria-label="Độ tin cậy">
       <div class="fill" :style="{ width: `${safeValue}%` }" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-const props = defineProps<{ value: number }>()
-const safeValue = computed(() => Math.max(0, Math.min(100, props.value)))
+const props = defineProps<{ value: number }>();
+const safeValue = computed(() => Math.max(0, Math.min(100, props.value)));
 </script>
 
 <style scoped>

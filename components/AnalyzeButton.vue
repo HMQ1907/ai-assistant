@@ -1,10 +1,10 @@
 <template>
   <button class="button" :disabled="loading" @click="$emit('analyze')">
-    {{ loading ? 'Dang phan tich...' : 'Hien thi lenh goi y' }}
+    {{ loading ? "Đang phân tích..." : "Hiển thị lệnh gợi ý" }}
   </button>
 </template>
 
 <script setup lang="ts">
-defineProps<{ loading: boolean }>()
-defineEmits<{ analyze: [] }>()
+defineProps<{ loading: boolean }>();
+defineEmits<{ analyze: [] }>();
 </script>

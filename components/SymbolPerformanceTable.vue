@@ -1,12 +1,14 @@
 <template>
-  <p v-if="items.length === 0" class="muted">No recorded symbols yet.</p>
+  <p v-if="items.length === 0" class="muted">
+    Chưa có symbol nào được ghi nhận.
+  </p>
   <table v-else class="history-table">
     <thead>
       <tr>
         <th>Symbol</th>
-        <th>Trades</th>
-        <th>Wins</th>
-        <th>Losses</th>
+        <th>Lệnh</th>
+        <th>Thắng</th>
+        <th>Thua</th>
         <th>P/L</th>
       </tr>
     </thead>
@@ -23,7 +25,7 @@
 </template>
 
 <script setup lang="ts">
-import type { SymbolPerformance } from '~/types/trading'
+import type { SymbolPerformance } from "~/types/trading";
 
-defineProps<{ items: SymbolPerformance[] }>()
+defineProps<{ items: SymbolPerformance[] }>();
 </script>

@@ -2,19 +2,26 @@
   <main class="page">
     <div class="toolbar">
       <div class="heading">
-        <h1>Performance stats</h1>
-        <p>Thong ke ket qua user da ghi nhan sau khi tu trade ben ngoai he thong.</p>
+        <h1>Thống kê hiệu quả</h1>
+        <p>
+          Thống kê kết quả người dùng đã ghi nhận sau khi tự giao dịch bên ngoài
+          hệ thống.
+        </p>
       </div>
-      <button class="button" @click="loadStats">Refresh</button>
+      <button class="button" @click="loadStats">Tải lại</button>
     </div>
 
     <div v-if="error" class="card">
-      <strong>Stats failed</strong>
+      <strong>Không tải được thống kê</strong>
       <p class="muted">{{ error }}</p>
     </div>
 
     <section class="stats-grid">
-      <div v-for="card in summaryCards" :key="card.label" class="card stat-card">
+      <div
+        v-for="card in summaryCards"
+        :key="card.label"
+        class="card stat-card"
+      >
         <span class="muted">{{ card.label }}</span>
         <strong>{{ card.value }}</strong>
       </div>
@@ -22,37 +29,40 @@
 
     <section class="grid two stats-section">
       <div class="card">
-        <h2>Confidence stats</h2>
+        <h2>Thống kê confidence</h2>
         <div class="kv">
           <div class="kv-row">
-            <span class="muted">Average Confidence</span>
+            <span class="muted">Độ tin cậy trung bình</span>
             <strong>{{ stats.avgConfidence }}%</strong>
           </div>
           <div class="kv-row">
-            <span class="muted">Average Confidence Of Winners</span>
+            <span class="muted">Độ tin cậy trung bình của lệnh thắng</span>
             <strong>{{ stats.avgConfidenceOfWinners }}%</strong>
           </div>
           <div class="kv-row">
-            <span class="muted">Average Confidence Of Losers</span>
+            <span class="muted">Độ tin cậy trung bình của lệnh thua</span>
             <strong>{{ stats.avgConfidenceOfLosers }}%</strong>
           </div>
         </div>
       </div>
 
       <div class="card">
-        <h2>Win rate</h2>
+        <h2>Tỷ lệ thắng</h2>
         <div class="win-rate">{{ stats.winRate }}%</div>
-        <p class="muted">Win rate uses WIN / (WIN + LOSS), excluding PENDING, BREAKEVEN and SKIPPED.</p>
+        <p class="muted">
+          Tỷ lệ thắng = THẮNG / (THẮNG + THUA), không tính CHƯA CẬP NHẬT, HÒA
+          VỐN và BỎ QUA.
+        </p>
       </div>
     </section>
 
     <section class="grid two stats-section">
       <div class="card">
-        <h2>Top Winning Symbols</h2>
+        <h2>Symbol thắng tốt nhất</h2>
         <SymbolPerformanceTable :items="stats.bestSymbols" />
       </div>
       <div class="card">
-        <h2>Top Losing Symbols</h2>
+        <h2>Symbol thua nhiều nhất</h2>
         <SymbolPerformanceTable :items="stats.worstSymbols" />
       </div>
     </section>
@@ -60,7 +70,7 @@
 </template>
 
 <script setup lang="ts">
-import type { PerformanceStats } from '~/types/trading'
+import type { PerformanceStats } from "~/types/trading";
 
 const emptyStats: PerformanceStats = {
   totalAnalysis: 0,
@@ -74,29 +84,29 @@ const emptyStats: PerformanceStats = {
   avgConfidenceOfWinners: 0,
   avgConfidenceOfLosers: 0,
   bestSymbols: [],
-  worstSymbols: []
-}
+  worstSymbols: [],
+};
 
-const stats = ref<PerformanceStats>({ ...emptyStats })
-const error = ref('')
+const stats = ref<PerformanceStats>({ ...emptyStats });
+const error = ref("");
 
 const summaryCards = computed(() => [
-  { label: 'Total Analysis', value: stats.value.totalAnalysis },
-  { label: 'Total Trades Recorded', value: stats.value.totalTrades },
-  { label: 'WIN', value: stats.value.wins },
-  { label: 'LOSS', value: stats.value.losses },
-  { label: 'BREAKEVEN', value: stats.value.breakevens },
-  { label: 'SKIPPED', value: stats.value.skipped }
-])
+  { label: "Tổng phân tích", value: stats.value.totalAnalysis },
+  { label: "Giao dịch đã ghi nhận", value: stats.value.totalTrades },
+  { label: "THẮNG", value: stats.value.wins },
+  { label: "THUA", value: stats.value.losses },
+  { label: "HÒA VỐN", value: stats.value.breakevens },
+  { label: "BỎ QUA", value: stats.value.skipped },
+]);
 
-onMounted(loadStats)
+onMounted(loadStats);
 
 async function loadStats(): Promise<void> {
-  error.value = ''
+  error.value = "";
   try {
-    stats.value = await $fetch<PerformanceStats>('/api/stats')
+    stats.value = await $fetch<PerformanceStats>("/api/stats");
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : 'Unknown error'
+    error.value = caught instanceof Error ? caught.message : "Unknown error";
   }
 }
 </script>
