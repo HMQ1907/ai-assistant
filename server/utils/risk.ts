@@ -6,7 +6,3 @@ export function parseRiskReward(value: string): number {
   if (!Number.isFinite(risk) || !Number.isFinite(reward) || risk <= 0) return 0;
   return reward / risk;
 }
-
-export function maxLoss(accountSizeUsd: number, riskPercent: number): number {
-  return Number(((accountSizeUsd * riskPercent) / 100).toFixed(2));
-}

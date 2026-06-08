@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "nuxt dev",
-    "build": "npm run typecheck && nuxt build",
+    "build": "npm run typecheck && set NUXT_IGNORE_LOCK=1&& nuxt build",
     "preview": "nuxt preview",
     "typecheck": "nuxt typecheck"
   },
