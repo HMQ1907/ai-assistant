@@ -5,32 +5,31 @@ import type {
 } from "../../../types/trading";
 import type { NewsProvider } from "./NewsProvider";
 
-interface NewsApiResponse {
-  status?: string;
-  message?: string;
+// GNews API: https://gnews.io/docs/v4
+// Free plan: 100 req/day, works on production servers (no domain restriction)
+interface GNewsResponse {
+  totalArticles?: number;
   articles?: Array<{
-    source?: { name?: string };
+    source?: { name?: string; url?: string };
     title?: string;
     description?: string;
     publishedAt?: string;
   }>;
+  errors?: string[];
 }
 
 const query = [
   "USD",
   "gold",
-  "XAUUSD",
   "Federal Reserve",
   "CPI",
   "NFP",
-  "PPI",
-  "PMI",
   "interest rate",
-  "geopolitical risk",
+  "geopolitical",
 ].join(" OR ");
 
 export class RealNewsProvider implements NewsProvider {
-  readonly name = "newsapi";
+  readonly name = "gnews";
 
   constructor(
     private readonly options: {
@@ -49,26 +48,26 @@ export class RealNewsProvider implements NewsProvider {
   async getLatestNews(): Promise<NewsSnapshot> {
     const updatedAt = new Date().toISOString();
     try {
-      const url = new URL("/v2/everything", this.options.baseUrl);
+      const url = new URL("/v4/search", this.options.baseUrl);
       url.searchParams.set("q", query);
-      url.searchParams.set("language", "en");
-      url.searchParams.set("sortBy", "publishedAt");
-      url.searchParams.set("pageSize", "30");
-      url.searchParams.set("apiKey", this.options.apiKey);
+      url.searchParams.set("lang", "en");
+      url.searchParams.set("sortby", "publishedAt");
+      url.searchParams.set("max", "10");
+      url.searchParams.set("apikey", this.options.apiKey);
 
       const response = await fetch(url);
       if (!response.ok)
         throw new Error(`Provider tin tức trả HTTP ${response.status}.`);
-      const json = (await response.json()) as NewsApiResponse;
-      if (json.status === "error")
-        throw new Error(json.message || "Provider tin tức trả lỗi.");
+      const json = (await response.json()) as GNewsResponse;
+      if (json.errors?.length)
+        throw new Error(json.errors[0] ?? "Provider tin tức trả lỗi.");
 
       const items = (json.articles ?? []).flatMap((article): NewsItem[] => {
         if (!article.title || !article.publishedAt) return [];
         return [
           {
             title: article.title,
-            source: article.source?.name ?? "Provider tin tức",
+            source: article.source?.name ?? "GNews",
             publishedAt: article.publishedAt,
             category: categorize(article.title, article.description ?? ""),
             impact: impact(article.title, article.description ?? ""),

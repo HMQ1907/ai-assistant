@@ -21,7 +21,7 @@ export class NewsService {
 
   private createProvider(providerName: string): NewsProvider {
     switch (providerName) {
-      case "newsapi":
+      case "gnews":
         return new RealNewsProvider({
           apiKey: this.options.apiKey,
           baseUrl: this.options.baseUrl,
