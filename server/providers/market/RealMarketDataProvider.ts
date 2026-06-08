@@ -72,14 +72,12 @@ export class RealMarketDataProvider implements MarketDataProvider {
     for (const symbol of symbols) {
       try {
         const snapshot = await this.getSnapshot(symbol);
+        // Vẫn đưa vào snapshots dù LOW quality — TradeValidationService sẽ
+        // tự force NO_TRADE. Chỉ skip khi throw (không có giá realtime).
         if (snapshot.data_quality === "LOW") {
-          skippedSymbols.push({
-            symbol,
-            reason:
-              snapshot.data_warnings.join("; ") || "Chất lượng dữ liệu thấp.",
-          });
-          warnings.push(`${symbol}: dữ liệu candle không đủ, đã bỏ qua.`);
-          continue;
+          warnings.push(
+            `${symbol}: dữ liệu candle không đủ (${snapshot.data_warnings.join("; ")}), AI sẽ trả NO_TRADE.`,
+          );
         }
         snapshots.push(snapshot);
       } catch (error) {
