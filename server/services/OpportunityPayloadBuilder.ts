@@ -27,7 +27,6 @@ export class OpportunityPayloadBuilder {
       newsProvider: news.provider,
       dataQuality,
       dataWarnings,
-      skippedSymbols: market.skippedSymbols,
       marketDataTimestamp: market.timestamp,
       newsDataTimestamp: news.updatedAt,
       newsDataStatus: news.status,

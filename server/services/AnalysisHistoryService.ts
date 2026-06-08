@@ -42,7 +42,6 @@ interface AnalysisHistoryRow {
   news_provider: string | null;
   data_quality: string | null;
   data_warnings: unknown;
-  skipped_symbols: unknown;
   market_data_timestamp: string | null;
   news_data_timestamp: string | null;
 }
@@ -86,7 +85,6 @@ export class AnalysisHistoryService {
         news_provider: input.requestPayload.newsProvider,
         data_quality: input.requestPayload.dataQuality,
         data_warnings: input.requestPayload.dataWarnings,
-        skipped_symbols: input.requestPayload.skippedSymbols,
         market_data_timestamp: input.requestPayload.marketDataTimestamp,
         news_data_timestamp: input.requestPayload.newsDataTimestamp,
       })
@@ -202,7 +200,6 @@ function toRecord(row: unknown): AnalysisHistoryRecord {
         ? value.data_quality
         : "LOW",
     data_warnings: stringArray(value.data_warnings),
-    skipped_symbols: skippedSymbolArray(value.skipped_symbols),
     market_data_timestamp: value.market_data_timestamp ?? "",
     news_data_timestamp: value.news_data_timestamp ?? "",
   };
@@ -223,19 +220,6 @@ function nullableNumber(value: number | null): number | null {
 function stringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === "string");
-}
-
-function skippedSymbolArray(
-  value: unknown,
-): Array<{ symbol: string; reason: string }> {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const row = item as Record<string, unknown>;
-    return typeof row.symbol === "string" && typeof row.reason === "string"
-      ? [{ symbol: row.symbol, reason: row.reason }]
-      : [];
-  });
 }
 
 function average(values: number[]): number {

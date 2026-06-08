@@ -10,16 +10,42 @@ export function ema(values: number[], period: number): number {
 
 export function rsi(values: number[], period = 14): number {
   if (values.length <= period) return 50;
+
+  const changes: number[] = [];
+  for (let i = 1; i < values.length; i += 1) {
+    const current = values[i];
+    const prev = values[i - 1];
+    if (current !== undefined && prev !== undefined) {
+      changes.push(current - prev);
+    }
+  }
+
   let gains = 0;
   let losses = 0;
-  const slice = values.slice(-period - 1);
-  for (let i = 1; i < slice.length; i += 1) {
-    const diff = (slice[i] ?? 0) - (slice[i - 1] ?? 0);
-    if (diff >= 0) gains += diff;
-    else losses += Math.abs(diff);
+  for (let i = 0; i < period; i += 1) {
+    const change = changes[i] ?? 0;
+    if (change > 0) {
+      gains += change;
+    } else {
+      losses += Math.abs(change);
+    }
   }
-  if (losses === 0) return 100;
-  return round(100 - 100 / (1 + gains / losses), 2);
+
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+
+  for (let i = period; i < changes.length; i += 1) {
+    const change = changes[i] ?? 0;
+    const gain = change > 0 ? change : 0;
+    const loss = change < 0 ? Math.abs(change) : 0;
+
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+  }
+
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return round(100 - 100 / (1 + rs), 2);
 }
 
 export function macd(values: number[]): {
@@ -69,13 +95,24 @@ export function supportResistance(candles: Candle[]): {
   swingLow: number;
 } {
   const recent = candles.slice(-40);
+  if (recent.length === 0) {
+    return {
+      support: 0,
+      resistance: 0,
+      swingHigh: 0,
+      swingLow: 0,
+    };
+  }
   const lows = recent.map((candle) => candle.low);
   const highs = recent.map((candle) => candle.high);
+  const swingWindow = recent.slice(-12);
+  const swingLows = swingWindow.map((candle) => candle.low);
+  const swingHighs = swingWindow.map((candle) => candle.high);
   return {
     support: round(Math.min(...lows)),
     resistance: round(Math.max(...highs)),
-    swingHigh: round(Math.max(...highs.slice(-12))),
-    swingLow: round(Math.min(...lows.slice(-12))),
+    swingHigh: round(Math.max(...swingHighs)),
+    swingLow: round(Math.min(...swingLows)),
   };
 }
 

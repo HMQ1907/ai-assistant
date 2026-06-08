@@ -9,7 +9,6 @@ import { TIMEFRAMES } from "../../../types/trading";
 import type {
   MarketDataCollection,
   MarketDataProvider,
-  SkippedSymbol,
 } from "./MarketDataProvider";
 
 const timeframeIntervals: Record<Timeframe, string> = {
@@ -66,14 +65,13 @@ export class RealMarketDataProvider implements MarketDataProvider {
   async getSnapshots(symbols: SymbolCode[]): Promise<MarketDataCollection> {
     const timestamp = new Date().toISOString();
     const warnings: string[] = [];
-    const skippedSymbols: SkippedSymbol[] = [];
     const snapshots: MarketSnapshot[] = [];
 
     for (const symbol of symbols) {
       try {
         const snapshot = await this.getSnapshot(symbol);
-        // Vẫn đưa vào snapshots dù LOW quality — TradeValidationService sẽ
-        // tự force NO_TRADE. Chỉ skip khi throw (không có giá realtime).
+        // Vẫn đưa vào snapshots dù LOW quality; TradeValidationService sẽ
+        // tự force NO_TRADE. Provider chỉ throw khi thiếu dữ liệu thật bắt buộc.
         if (snapshot.data_quality === "LOW") {
           warnings.push(
             `${symbol}: dữ liệu candle không đủ (${snapshot.data_warnings.join("; ")}), AI sẽ trả NO_TRADE.`,
@@ -85,24 +83,21 @@ export class RealMarketDataProvider implements MarketDataProvider {
           error instanceof Error
             ? error.message
             : "Không lấy được dữ liệu thị trường.";
-        console.warn(`[market:${this.name}] skipped ${symbol}: ${reason}`);
-        skippedSymbols.push({ symbol, reason });
         warnings.push(`${symbol}: ${reason}`);
       }
     }
 
     if (snapshots.length === 0) {
       throw new Error(
-        "Không có symbol nào có dữ liệu realtime hợp lệ từ provider thật.",
+        "Không lấy được dữ liệu realtime hợp lệ cho XAUUSD từ provider thật.",
       );
     }
 
     return {
       provider: this.name,
       timestamp,
-      dataQuality: combineCollectionQuality(snapshots, skippedSymbols),
+      dataQuality: combineCollectionQuality(snapshots),
       warnings,
-      skippedSymbols,
       snapshots,
     };
   }
@@ -117,6 +112,12 @@ export class RealMarketDataProvider implements MarketDataProvider {
       candles[timeframe] = series;
       if (
         (timeframe === "M5" || timeframe === "M15" || timeframe === "H1") &&
+        series.length === 0
+      ) {
+        throw new Error(`${timeframe} không có candles thật từ provider.`);
+      }
+      if (
+        (timeframe === "M5" || timeframe === "M15" || timeframe === "H1") &&
         series.length < 100
       ) {
         warnings.push(
@@ -126,16 +127,15 @@ export class RealMarketDataProvider implements MarketDataProvider {
     }
 
     const quote = await this.getQuote(providerSymbol);
-    const lastM5Close = candles.M5.at(-1)?.close;
-    const price = parseNumber(quote.close) ?? lastM5Close;
-    if (!price)
-      throw new Error("Không có giá realtime hoặc close price hợp lệ.");
+    const price = parseNumber(quote.close);
+    if (!price) throw new Error("Không có giá realtime hợp lệ từ quote.");
 
     const bid = parseNumber(quote.bid);
     const ask = parseNumber(quote.ask);
-    const spread =
-      bid !== undefined && ask !== undefined ? Math.max(0, ask - bid) : 0;
-    if (spread === 0) warnings.push("Provider không trả bid/ask/spread.");
+    if (bid === undefined || ask === undefined || ask <= bid) {
+      throw new Error("Provider không trả bid/ask/spread hợp lệ.");
+    }
+    const spread = ask - bid;
 
     const snapshot: MarketSnapshot = {
       symbol,
@@ -214,14 +214,10 @@ export class RealMarketDataProvider implements MarketDataProvider {
   }
 }
 
-function combineCollectionQuality(
-  snapshots: MarketSnapshot[],
-  skippedSymbols: SkippedSymbol[],
-): DataQuality {
+function combineCollectionQuality(snapshots: MarketSnapshot[]): DataQuality {
   if (snapshots.some((snapshot) => snapshot.data_quality === "LOW"))
     return "LOW";
-  if (skippedSymbols.length === 0) return "HIGH";
-  return snapshots.length >= 3 ? "MEDIUM" : "LOW";
+  return "HIGH";
 }
 
 function parseNumber(value: string | undefined): number | undefined {

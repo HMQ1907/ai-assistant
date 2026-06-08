@@ -102,7 +102,6 @@ export interface AnalysisPayload {
   newsProvider: string;
   dataQuality: DataQuality;
   dataWarnings: string[];
-  skippedSymbols: Array<{ symbol: string; reason: string }>;
   marketDataTimestamp: string;
   newsDataTimestamp: string;
   newsDataStatus: NewsDataStatus;
@@ -134,7 +133,6 @@ export interface AnalysisHistoryRecord {
   news_provider: string;
   data_quality: DataQuality;
   data_warnings: string[];
-  skipped_symbols: Array<{ symbol: string; reason: string }>;
   market_data_timestamp: string;
   news_data_timestamp: string;
 }

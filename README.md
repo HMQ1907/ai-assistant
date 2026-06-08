@@ -37,9 +37,9 @@ MARKET_DATA_PROVIDER=twelvedata
 MARKET_DATA_API_KEY=
 MARKET_DATA_BASE_URL=https://api.twelvedata.com
 
-NEWS_PROVIDER=newsapi
+NEWS_PROVIDER=gnews
 NEWS_API_KEY=
-NEWS_BASE_URL=https://newsapi.org
+NEWS_BASE_URL=https://gnews.io
 
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=

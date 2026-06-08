@@ -24,8 +24,10 @@ const query = [
   "Federal Reserve",
   "CPI",
   "NFP",
+  "PPI",
+  "PMI",
   "interest rate",
-  "geopolitical",
+  "geopolitical risk",
 ].join(" OR ");
 
 export class RealNewsProvider implements NewsProvider {

@@ -54,12 +54,47 @@ export class TradeValidationService {
       );
     }
 
+    if (isFinitePositive(entry) && isFinitePositive(recommendation.stop_loss)) {
+      const distance = Math.abs(entry - recommendation.stop_loss);
+      if (distance > 0) {
+        // 1 lot XAUUSD = 100 ounces
+        const minLotLoss = 0.01 * distance * 100;
+        if (minLotLoss > tradingRules.maxLossUsdPerTrade) {
+          reasons.push(
+            `Khoảng cách SL (${distance.toFixed(2)} USD) quá xa. Kể cả với volume nhỏ nhất (0.01 lot), mức lỗ dự kiến sẽ là $${minLotLoss.toFixed(2)} USD, vượt quá giới hạn $${tradingRules.maxLossUsdPerTrade} USD.`
+          );
+        } else {
+          const calculatedLot = tradingRules.maxLossUsdPerTrade / (distance * 100);
+          let lotSize = Number(calculatedLot.toFixed(2));
+          let realLoss = Number((lotSize * distance * 100).toFixed(2));
+          if (realLoss > tradingRules.maxLossUsdPerTrade) {
+            lotSize = Number((Math.floor(calculatedLot * 100) / 100).toFixed(2));
+            realLoss = Number((lotSize * distance * 100).toFixed(2));
+          }
+
+          // Ghi đè thông tin chính xác toán học
+          recommendation.position_sizing.estimated_loss_if_sl_hit = realLoss;
+          recommendation.position_sizing.position_sizing_explanation = 
+            `Volume khuyến nghị: ${lotSize} lot (1 lot = 100 oz). Mức lỗ thực tế khi chạm SL (${recommendation.stop_loss}) tại Entry TB (${entry.toFixed(2)}) là $${realLoss} USD (tối đa cho phép: $${tradingRules.maxLossUsdPerTrade} USD).`;
+        }
+      }
+    } else {
+      reasons.push("Giá trị entry hoặc stop_loss không hợp lệ để tính toán volume");
+    }
     if (
-      recommendation.position_sizing.estimated_loss_if_sl_hit >
+      recommendation.position_sizing.account_size_usd !==
+      tradingRules.accountSizeUsd
+    ) {
+      reasons.push(
+        `account_size_usd ${recommendation.position_sizing.account_size_usd} khác cấu hình ${tradingRules.accountSizeUsd}`,
+      );
+    }
+    if (
+      recommendation.position_sizing.max_loss_usd !==
       tradingRules.maxLossUsdPerTrade
     ) {
       reasons.push(
-        `estimated_loss_if_sl_hit ${recommendation.position_sizing.estimated_loss_if_sl_hit} USD cao hơn giới hạn ${tradingRules.maxLossUsdPerTrade} USD`,
+        `max_loss_usd ${recommendation.position_sizing.max_loss_usd} khác cấu hình ${tradingRules.maxLossUsdPerTrade}`,
       );
     }
 
