@@ -180,9 +180,9 @@ function setNumber(
 function numberDraft(
   id: string,
   key: "actual_entry" | "actual_exit" | "actual_profit_loss",
-  fallback: number | null,
+  defaultValue: number | null,
 ): string {
-  const value = drafts[id]?.[key] ?? fallback;
+  const value = drafts[id]?.[key] ?? defaultValue;
   return value === null ? "" : String(value);
 }
 

@@ -10,11 +10,11 @@ export default defineNuxtConfig({
       process.env.EVOLINK_BASE_URL ||
       "https://api.evolink.ai/v1/chat/completions",
     aiTimeoutMs: Number(process.env.AI_TIMEOUT_MS || 90000),
-    marketDataProvider: process.env.MARKET_DATA_PROVIDER || "",
+    marketDataProvider: process.env.MARKET_DATA_PROVIDER || "twelvedata",
     marketDataApiKey: process.env.MARKET_DATA_API_KEY || "",
     marketDataBaseUrl:
       process.env.MARKET_DATA_BASE_URL || "https://api.twelvedata.com",
-    newsProvider: process.env.NEWS_PROVIDER || "",
+    newsProvider: process.env.NEWS_PROVIDER || "newsapi",
     newsApiKey: process.env.NEWS_API_KEY || "",
     newsBaseUrl: process.env.NEWS_BASE_URL || "https://newsapi.org",
     supabaseUrl: process.env.SUPABASE_URL || "",

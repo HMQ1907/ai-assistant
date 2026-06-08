@@ -1,10 +1,10 @@
 # AI Trading Assistant
 
-AI Trading Assistant là công cụ phân tích và đưa gợi ý giao dịch thủ công. Hệ thống không đặt lệnh, không kết nối broker để giao dịch, không tự quyết định Buy/Sell thay người dùng.
+AI Trading Assistant là công cụ phân tích và đưa gợi ý giao dịch thủ công. Hệ thống không đặt lệnh, không kết nối broker để giao dịch, và không tự quyết định Buy/Sell thay người dùng.
 
-Project này không dùng mock/fake/demo market data hoặc news data. Nếu chưa cấu hình API dữ liệu thật, hệ thống sẽ báo lỗi rõ ràng và không fallback sang dữ liệu giả.
+Project này chỉ dùng dữ liệu thị trường thật và tin tức thật. Nếu chưa cấu hình API dữ liệu thật, hệ thống sẽ báo lỗi rõ ràng và không tự tạo dữ liệu thay thế.
 
-## Cấu hình ENV
+## Cấu Hình ENV
 
 Tạo `.env` từ `.env.example`:
 
@@ -12,7 +12,7 @@ Tạo `.env` từ `.env.example`:
 cp .env.example .env
 ```
 
-Các biến cần cấu hình:
+Các biến bắt buộc:
 
 ```bash
 EVOLINK_API_KEY=
@@ -34,27 +34,21 @@ SUPABASE_SERVICE_ROLE_KEY=
 
 Không expose `SUPABASE_SERVICE_ROLE_KEY`, `MARKET_DATA_API_KEY`, `NEWS_API_KEY`, hoặc `EVOLINK_API_KEY` ra frontend.
 
-## Dữ liệu thị trường thật
+## Dữ Liệu Thị Trường
 
 Provider hiện tại: `twelvedata`.
 
-Hệ thống gọi Twelve Data để lấy:
-
-- current price
-- bid/ask nếu provider hỗ trợ
-- spread nếu provider hỗ trợ
-- candles M5, M15, H1, H4
-- tối thiểu 100 candles cho M5, M15, H1
+Hệ thống gọi Twelve Data để lấy current price, bid/ask nếu provider hỗ trợ, spread nếu provider hỗ trợ, và candles M5/M15/H1/H4. M5, M15 và H1 cần tối thiểu 100 candles nếu provider hỗ trợ.
 
 Nếu symbol không được provider hỗ trợ hoặc candle không đủ, symbol đó bị bỏ qua và lý do được lưu trong `skipped_symbols`. Nếu không còn symbol hợp lệ, API analyze sẽ báo lỗi.
 
-## Tin tức thật
+## Tin Tức
 
 Provider hiện tại: `newsapi`.
 
 Hệ thống gọi NewsAPI-compatible `/v2/everything` để lấy tin liên quan đến USD, gold, crypto, forex, Fed, CPI, NFP, PPI, PMI, interest rate và geopolitical risk.
 
-Provider này không cung cấp lịch tin mạnh sắp tới theo cấu hình hiện tại, nên `upcomingEvents` có thể rỗng và hệ thống sẽ ghi warning. Nếu không lấy được news, hệ thống không bịa tin; AI sẽ nhận `newsDataStatus = UNAVAILABLE`.
+Nếu không lấy được tin tức, hệ thống không tự tạo tin. AI sẽ nhận `newsDataStatus = UNAVAILABLE` và validation có thể ép `NO_TRADE`.
 
 ## Supabase
 
@@ -65,13 +59,13 @@ Provider này không cung cấp lịch tin mạnh sắp tới theo cấu hình h
 3. Cấu hình `SUPABASE_URL`.
 4. Cấu hình `SUPABASE_SERVICE_ROLE_KEY`.
 
-Nếu migrate từ SQLite cũ, export dữ liệu cũ thủ công rồi insert vào `analysis_history`. Field `entry` cũ map sang `entry_from` và `entry_to`; ID cũ dạng number được thay bằng UUID.
+Nếu migrate từ bản lưu trữ cũ, export dữ liệu cũ thủ công rồi insert vào `analysis_history`. Field `entry` cũ map sang `entry_from` và `entry_to`; ID cũ dạng number được thay bằng UUID.
 
 ## Evolink
 
-`AiAnalysisService` gọi endpoint OpenAI-compatible chat completion. Nếu thiếu `EVOLINK_API_KEY`, hệ thống báo lỗi thay vì tạo AI response giả.
+`AiAnalysisService` gọi endpoint OpenAI-compatible chat completion. Nếu thiếu `EVOLINK_API_KEY`, hệ thống báo lỗi thay vì tạo AI response thay thế.
 
-## Chạy project
+## Chạy Project
 
 ```bash
 npm install
@@ -80,18 +74,19 @@ npm run dev
 
 Mở Nuxt URL local và bấm `Hiển thị lệnh gợi ý`. Khi bấm, hệ thống lấy dữ liệu thật tại thời điểm đó, tính indicator, gọi AI, validate kết quả, lưu Supabase và hiển thị UI tiếng Việt.
 
-## Kiểm tra flow
-
-1. `/`: bấm `Hiển thị lệnh gợi ý`.
-2. Kiểm tra card nguồn dữ liệu: market provider, news provider, timestamp, data quality, news status, warnings, skipped symbols.
-3. `/history`: cập nhật entry/exit/P/L/status/note.
-4. `/stats`: xem tổng phân tích, win rate, confidence stats và symbol performance.
-5. Chạy:
+## Kiểm Tra
 
 ```bash
 npm run typecheck
 npm run build
 ```
+
+Luồng kiểm tra:
+
+1. `/`: bấm `Hiển thị lệnh gợi ý`.
+2. Kiểm tra card nguồn dữ liệu: provider, timestamp, chất lượng dữ liệu, trạng thái tin tức, cảnh báo, symbol bị bỏ qua.
+3. `/history`: cập nhật entry/exit/P/L/status/note.
+4. `/stats`: xem tổng phân tích, tỷ lệ thắng, độ tin cậy và hiệu suất symbol.
 
 ## Validation
 
@@ -111,11 +106,11 @@ Kết quả bị ép `NO_TRADE` nếu:
 
 Rules nằm trong `server/config/tradingRules.ts`.
 
-## Nguyên tắc an toàn
+## Nguyên Tắc An Toàn
 
 - Không auto trade.
 - Không đặt lệnh.
 - Không kết nối broker để giao dịch.
 - Không cam kết thắng.
-- Không dùng winrate giả.
+- Không dùng winrate tự tạo.
 - Người dùng tự quyết định và tự thao tác bên ngoài hệ thống.
