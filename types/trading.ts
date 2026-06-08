@@ -1,16 +1,4 @@
-export const SYMBOLS = [
-  "XAUUSD",
-  "BTCUSD",
-  "ETHUSD",
-  "EURUSD",
-  "GBPUSD",
-  "USDJPY",
-  "USDCHF",
-  "USDCAD",
-  "AUDUSD",
-  "NAS100",
-  "US30",
-] as const;
+export const SYMBOLS = ["XAUUSD"] as const;
 
 export const TIMEFRAMES = ["M5", "M15", "H1", "H4"] as const;
 
@@ -73,7 +61,6 @@ export interface NewsItem {
   category:
     | "USD"
     | "GOLD"
-    | "CRYPTO"
     | "FED"
     | "CPI"
     | "NFP"
@@ -110,6 +97,7 @@ export interface NormalizedSymbolPayload {
 export interface AnalysisPayload {
   generatedAt: string;
   accountSizeUsd: number;
+  maxLossUsdPerTrade: number;
   marketDataProvider: string;
   newsProvider: string;
   dataQuality: DataQuality;

@@ -2,10 +2,10 @@
   <main class="page">
     <div class="toolbar">
       <div class="heading">
-        <h1>Thống kê hiệu quả</h1>
+        <h1>Thống kê hiệu quả XAUUSD</h1>
         <p>
-          Thống kê kết quả người dùng đã ghi nhận sau khi tự giao dịch bên ngoài
-          hệ thống.
+          Thống kê kết quả người dùng đã ghi nhận sau khi tự giao dịch XAUUSD
+          bên ngoài hệ thống.
         </p>
       </div>
       <button class="button" @click="loadStats">Tải lại</button>
@@ -17,11 +17,7 @@
     </div>
 
     <section class="stats-grid">
-      <div
-        v-for="card in summaryCards"
-        :key="card.label"
-        class="card stat-card"
-      >
+      <div v-for="card in summaryCards" :key="card.label" class="card stat-card">
         <span class="muted">{{ card.label }}</span>
         <strong>{{ card.value }}</strong>
       </div>
@@ -56,14 +52,10 @@
       </div>
     </section>
 
-    <section class="grid two stats-section">
+    <section class="stats-section">
       <div class="card">
-        <h2>Symbol thắng tốt nhất</h2>
+        <h2>Hiệu suất XAUUSD</h2>
         <SymbolPerformanceTable :items="stats.bestSymbols" />
-      </div>
-      <div class="card">
-        <h2>Symbol thua nhiều nhất</h2>
-        <SymbolPerformanceTable :items="stats.worstSymbols" />
       </div>
     </section>
   </main>
@@ -106,7 +98,7 @@ async function loadStats(): Promise<void> {
   try {
     stats.value = await $fetch<PerformanceStats>("/api/stats");
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : "Unknown error";
+    error.value = caught instanceof Error ? caught.message : "Lỗi không xác định";
   }
 }
 </script>

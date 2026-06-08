@@ -15,7 +15,7 @@ export default defineEventHandler(async () => {
     throw createError({
       statusCode: 500,
       statusMessage:
-        error instanceof Error ? error.message : "Could not load history",
+        error instanceof Error ? error.message : "Không tải được lịch sử",
     });
   }
 });

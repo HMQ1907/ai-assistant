@@ -6,20 +6,16 @@
         <span>Xu hướng</span><span>{{ result.technical_analysis.trend }}</span>
       </div>
       <div class="kv-row">
-        <span>Động lượng</span
-        ><span>{{ result.technical_analysis.momentum }}</span>
+        <span>Động lượng</span><span>{{ result.technical_analysis.momentum }}</span>
       </div>
       <div class="kv-row">
-        <span>S/R</span
-        ><span>{{ result.technical_analysis.support_resistance }}</span>
+        <span>S/R</span><span>{{ result.technical_analysis.support_resistance }}</span>
       </div>
       <div class="kv-row">
-        <span>Biến động</span
-        ><span>{{ result.technical_analysis.volatility }}</span>
+        <span>Biến động</span><span>{{ result.technical_analysis.volatility }}</span>
       </div>
       <div class="kv-row">
-        <span>Khung thời gian</span
-        ><span>{{ result.technical_analysis.timeframe_alignment }}</span>
+        <span>Khung thời gian</span><span>{{ result.technical_analysis.timeframe_alignment }}</span>
       </div>
     </div>
   </section>

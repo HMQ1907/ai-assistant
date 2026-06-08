@@ -19,8 +19,7 @@ interface NewsApiResponse {
 const query = [
   "USD",
   "gold",
-  "crypto",
-  "forex",
+  "XAUUSD",
   "Federal Reserve",
   "CPI",
   "NFP",
@@ -39,8 +38,11 @@ export class RealNewsProvider implements NewsProvider {
       baseUrl: string;
     },
   ) {
-    if (!options.apiKey || !options.baseUrl) {
-      throw new Error("Chưa cấu hình API dữ liệu thật.");
+    if (!options.apiKey) {
+      throw new Error("Chưa cấu hình NEWS_API_KEY cho tin tức thật.");
+    }
+    if (!options.baseUrl) {
+      throw new Error("Chưa cấu hình NEWS_BASE_URL cho tin tức thật.");
     }
   }
 
@@ -111,15 +113,9 @@ function categorize(title: string, description: string): NewsItem["category"] {
   if (text.includes("ppi")) return "PPI";
   if (text.includes("pmi")) return "PMI";
   if (text.includes("rate")) return "RATES";
-  if (text.includes("gold")) return "GOLD";
-  if (
-    text.includes("bitcoin") ||
-    text.includes("ethereum") ||
-    text.includes("crypto")
-  )
-    return "CRYPTO";
   if (text.includes("war") || text.includes("geopolitical"))
     return "GEOPOLITICAL";
+  if (text.includes("gold") || text.includes("xau")) return "GOLD";
   return "USD";
 }
 
@@ -127,28 +123,14 @@ function impact(title: string, description: string): NewsItem["impact"] {
   const text = `${title} ${description}`.toLowerCase();
   if (/(fed|federal reserve|cpi|nfp|payroll|rate|war|geopolitical)/.test(text))
     return "HIGH";
-  if (/(ppi|pmi|inflation|gold|crypto|bitcoin|ethereum)/.test(text))
-    return "MEDIUM";
+  if (/(ppi|pmi|inflation|gold|xau)/.test(text)) return "MEDIUM";
   return "LOW";
 }
 
 function symbolsFor(title: string, description: string): SymbolCode[] {
   const text = `${title} ${description}`.toLowerCase();
-  const symbols = new Set<SymbolCode>();
-  if (/(gold|xau)/.test(text)) symbols.add("XAUUSD");
-  if (/(bitcoin|btc|crypto)/.test(text)) symbols.add("BTCUSD");
-  if (/(ethereum|eth|crypto)/.test(text)) symbols.add("ETHUSD");
-  if (/(usd|fed|cpi|nfp|ppi|pmi|rate|forex)/.test(text)) {
-    for (const symbol of [
-      "EURUSD",
-      "GBPUSD",
-      "USDJPY",
-      "USDCHF",
-      "USDCAD",
-      "AUDUSD",
-      "XAUUSD",
-    ] as const)
-      symbols.add(symbol);
+  if (/(gold|xau|usd|fed|cpi|nfp|ppi|pmi|rate|geopolitical)/.test(text)) {
+    return ["XAUUSD"];
   }
-  return Array.from(symbols);
+  return [];
 }

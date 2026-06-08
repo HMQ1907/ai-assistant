@@ -1,10 +1,10 @@
 import { SYMBOLS } from "../../types/trading";
+import type { SymbolCode } from "../../types/trading";
 import { RealMarketDataProvider } from "../providers/market/RealMarketDataProvider";
 import type {
   MarketDataCollection,
   MarketDataProvider,
 } from "../providers/market/MarketDataProvider";
-import type { SymbolCode } from "../../types/trading";
 
 export class MarketDataService {
   private readonly provider: MarketDataProvider;

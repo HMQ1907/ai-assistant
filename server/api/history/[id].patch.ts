@@ -19,7 +19,7 @@ const bodySchema = z.object({
 export default defineEventHandler(async (event) => {
   try {
     const id = event.context.params?.id;
-    if (!id) throw new Error("Invalid history id");
+    if (!id) throw new Error("ID lịch sử không hợp lệ");
     const body = bodySchema.parse(await readBody(event));
     const update: HistoryUpdateInput = {};
     if (body.result_status !== undefined)
@@ -41,7 +41,7 @@ export default defineEventHandler(async (event) => {
     throw createError({
       statusCode: 400,
       statusMessage:
-        error instanceof Error ? error.message : "Could not update history",
+        error instanceof Error ? error.message : "Không cập nhật được lịch sử",
     });
   }
 });

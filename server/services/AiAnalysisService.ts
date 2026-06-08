@@ -1,33 +1,28 @@
 import { z } from "zod";
 import type { AiAnalysisResult, AiTradeRecommendation } from "../../types/ai";
 import type { AnalysisPayload } from "../../types/trading";
+import { tradingRules } from "../config/tradingRules";
 import { buildTradingAnalysisPrompt } from "../prompts/trading-analysis.prompt";
 import { extractJsonObject } from "../utils/jsonParser";
 import { TradeValidationService } from "./TradeValidationService";
 
 const recommendationSchema = z.object({
   decision: z.enum(["TRADE", "NO_TRADE"]),
-  symbol: z.string(),
+  symbol: z.literal("XAUUSD"),
   direction: z.enum(["BUY", "SELL", "NONE"]),
   confidence: z.number().min(0).max(100),
-  symbol_scores: z.array(
-    z.object({
-      symbol: z.string(),
-      score: z.number().min(0).max(100),
-      bias: z.enum(["BUY", "SELL", "NONE"]),
-      reason: z.string(),
-    }),
-  ),
   entry_zone: z.object({ from: z.number(), to: z.number() }),
   stop_loss: z.number(),
+  stop_loss_reason: z.string(),
   take_profit: z.number(),
+  take_profit_reason: z.string(),
   risk_reward: z.string(),
   expected_holding_time: z.string(),
   position_sizing: z.object({
     account_size_usd: z.number(),
-    risk_percent: z.number(),
     max_loss_usd: z.number(),
-    suggested_lot: z.string(),
+    estimated_loss_if_sl_hit: z.number(),
+    position_sizing_explanation: z.string(),
   }),
   summary: z.string(),
   technical_analysis: z.object({
@@ -43,8 +38,6 @@ const recommendationSchema = z.object({
     risk_news: z.array(z.string()),
     upcoming_high_impact_events: z.array(z.string()),
   }),
-  why_this_symbol: z.string(),
-  why_not_others: z.array(z.string()),
   main_reasons: z.array(z.string()),
   risk_factors: z.array(z.string()),
   invalid_conditions: z.array(z.string()),
@@ -75,7 +68,7 @@ export class AiAnalysisService {
 
     const prompt = buildTradingAnalysisPrompt(payload);
     const raw = await this.callWithRetry(prompt);
-    const parsed = this.parseAndValidate(raw);
+    const parsed = this.parseOrNoTrade(raw, payload);
     return { raw, parsed: this.validationService.validate(parsed, payload) };
   }
 
@@ -92,7 +85,7 @@ export class AiAnalysisService {
     }
     throw lastError instanceof Error
       ? lastError
-      : new Error("AI request failed");
+      : new Error("Không gửi được yêu cầu phân tích AI.");
   }
 
   private async callEvolink(prompt: string): Promise<string> {
@@ -114,7 +107,7 @@ export class AiAnalysisService {
             {
               role: "system",
               content:
-                "Return strict JSON only. You are conservative and safety-first.",
+                "Return strict JSON only. You analyze XAUUSD only. All user-facing content must be Vietnamese.",
             },
             { role: "user", content: prompt },
           ],
@@ -123,22 +116,87 @@ export class AiAnalysisService {
         }),
         signal: controller.signal,
       });
-      if (!response.ok)
-        throw new Error(`AI request failed with status ${response.status}`);
+      if (!response.ok) throw new Error(`AI trả HTTP ${response.status}.`);
       const json = (await response.json()) as {
         choices?: Array<{ message?: { content?: string } }>;
         output_text?: string;
       };
       const content = json.choices?.[0]?.message?.content ?? json.output_text;
-      if (!content) throw new Error("AI response did not include content");
+      if (!content) throw new Error("AI không trả nội dung phân tích.");
       return content;
     } finally {
       clearTimeout(timeout);
     }
   }
 
-  private parseAndValidate(raw: string): AiTradeRecommendation {
-    const extracted = extractJsonObject(raw);
-    return recommendationSchema.parse(extracted);
+  private parseOrNoTrade(
+    raw: string,
+    payload: AnalysisPayload,
+  ): AiTradeRecommendation {
+    try {
+      const extracted = extractJsonObject(raw);
+      return recommendationSchema.parse(extracted);
+    } catch (error) {
+      const reason =
+        error instanceof Error
+          ? `AI trả JSON không hợp lệ: ${error.message}`
+          : "AI trả JSON không hợp lệ.";
+      return buildNoTradeRecommendation(payload, reason);
+    }
   }
+}
+
+function buildNoTradeRecommendation(
+  payload: AnalysisPayload,
+  reason: string,
+): AiTradeRecommendation {
+  return {
+    decision: "NO_TRADE",
+    symbol: "XAUUSD",
+    direction: "NONE",
+    confidence: 0,
+    entry_zone: { from: 0, to: 0 },
+    stop_loss: 0,
+    stop_loss_reason: "Không có stop loss vì phản hồi AI không hợp lệ.",
+    take_profit: 0,
+    take_profit_reason: "Không có take profit vì phản hồi AI không hợp lệ.",
+    risk_reward: "1:0",
+    expected_holding_time: "Không áp dụng",
+    position_sizing: {
+      account_size_usd: payload.accountSizeUsd,
+      max_loss_usd: tradingRules.maxLossUsdPerTrade,
+      estimated_loss_if_sl_hit: 0,
+      position_sizing_explanation:
+        "Không vào lệnh vì hệ thống không xác thực được phản hồi AI.",
+    },
+    summary: "Không nên giao dịch vì hệ thống không xác thực được phản hồi AI.",
+    technical_analysis: {
+      trend: "Không xác thực được phản hồi AI.",
+      momentum: "Không xác thực được phản hồi AI.",
+      support_resistance: "Không xác thực được phản hồi AI.",
+      volatility: "Không xác thực được phản hồi AI.",
+      timeframe_alignment: "Không xác thực được phản hồi AI.",
+    },
+    news_analysis: {
+      sentiment: "Không xác thực được phản hồi AI.",
+      supporting_news: [],
+      risk_news: [reason],
+      upcoming_high_impact_events: [],
+    },
+    main_reasons: [reason],
+    risk_factors: ["Không thể kiểm chứng cấu trúc phân tích AI."],
+    invalid_conditions: [reason],
+    best_case_scenario: "Chờ phân tích mới với phản hồi AI hợp lệ.",
+    worst_case_scenario:
+      "Vào lệnh khi dữ liệu phân tích không hợp lệ có thể dẫn đến quyết định sai.",
+    pre_entry_checklist: [
+      "Không vào lệnh.",
+      "Chạy lại phân tích sau khi kiểm tra cấu hình AI.",
+    ],
+    no_trade_reason: reason,
+    next_check_suggestion:
+      "Kiểm tra Evolink model/base URL/API key và chạy lại phân tích.",
+    disclaimer:
+      "Đây là gợi ý phân tích từ AI, không phải lời khuyên tài chính. Người dùng tự chịu trách nhiệm với quyết định giao dịch.",
+  };
 }

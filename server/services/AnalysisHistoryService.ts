@@ -94,7 +94,7 @@ export class AnalysisHistoryService {
       .single();
 
     if (error)
-      throw new Error(`Could not create analysis history: ${error.message}`);
+      throw new Error(`Không lưu được lịch sử phân tích: ${error.message}`);
     return toRecord(data);
   }
 
@@ -105,7 +105,7 @@ export class AnalysisHistoryService {
       .order("created_at", { ascending: false })
       .limit(100);
     if (error)
-      throw new Error(`Could not list analysis history: ${error.message}`);
+      throw new Error(`Không tải được lịch sử phân tích: ${error.message}`);
     return (data ?? []).map(toRecord);
   }
 
@@ -130,14 +130,14 @@ export class AnalysisHistoryService {
       .select("*")
       .single();
     if (error)
-      throw new Error(`Could not update analysis history: ${error.message}`);
+      throw new Error(`Không cập nhật được lịch sử phân tích: ${error.message}`);
     return toRecord(data);
   }
 
   async stats(): Promise<PerformanceStats> {
     const { data, error } = await this.supabase.from(tableName).select("*");
     if (error)
-      throw new Error(`Could not load performance stats: ${error.message}`);
+      throw new Error(`Không tải được thống kê hiệu quả: ${error.message}`);
 
     const records = (data ?? []).map(toRecord);
     const wins = records.filter((record) => record.result_status === "WIN");

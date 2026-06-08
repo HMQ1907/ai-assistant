@@ -1,6 +1,6 @@
 <template>
   <button class="button" :disabled="loading" @click="$emit('analyze')">
-    {{ loading ? "Đang phân tích..." : "Hiển thị lệnh gợi ý" }}
+    {{ loading ? "Đang phân tích..." : "Hiển thị gợi ý XAUUSD" }}
   </button>
 </template>
 

@@ -21,16 +21,6 @@ const timeframeIntervals: Record<Timeframe, string> = {
 
 const twelveDataSymbols: Record<SymbolCode, string> = {
   XAUUSD: "XAU/USD",
-  BTCUSD: "BTC/USD",
-  ETHUSD: "ETH/USD",
-  EURUSD: "EUR/USD",
-  GBPUSD: "GBP/USD",
-  USDJPY: "USD/JPY",
-  USDCHF: "USD/CHF",
-  USDCAD: "USD/CAD",
-  AUDUSD: "AUD/USD",
-  NAS100: "NDX",
-  US30: "DJI",
 };
 
 interface TwelveDataTimeSeriesResponse {
@@ -65,8 +55,11 @@ export class RealMarketDataProvider implements MarketDataProvider {
       baseUrl: string;
     },
   ) {
-    if (!options.apiKey || !options.baseUrl) {
-      throw new Error("Chưa cấu hình API dữ liệu thật.");
+    if (!options.apiKey) {
+      throw new Error("Chưa cấu hình MARKET_DATA_API_KEY cho dữ liệu thị trường thật.");
+    }
+    if (!options.baseUrl) {
+      throw new Error("Chưa cấu hình MARKET_DATA_BASE_URL cho dữ liệu thị trường thật.");
     }
   }
 
@@ -109,12 +102,7 @@ export class RealMarketDataProvider implements MarketDataProvider {
     return {
       provider: this.name,
       timestamp,
-      dataQuality:
-        skippedSymbols.length === 0
-          ? "HIGH"
-          : snapshots.length >= 3
-            ? "MEDIUM"
-            : "LOW",
+      dataQuality: combineCollectionQuality(snapshots, skippedSymbols),
       warnings,
       skippedSymbols,
       snapshots,
@@ -226,6 +214,16 @@ export class RealMarketDataProvider implements MarketDataProvider {
     if (!response.ok) throw new Error(`Provider trả HTTP ${response.status}.`);
     return (await response.json()) as T;
   }
+}
+
+function combineCollectionQuality(
+  snapshots: MarketSnapshot[],
+  skippedSymbols: SkippedSymbol[],
+): DataQuality {
+  if (snapshots.some((snapshot) => snapshot.data_quality === "LOW"))
+    return "LOW";
+  if (skippedSymbols.length === 0) return "HIGH";
+  return snapshots.length >= 3 ? "MEDIUM" : "LOW";
 }
 
 function parseNumber(value: string | undefined): number | undefined {

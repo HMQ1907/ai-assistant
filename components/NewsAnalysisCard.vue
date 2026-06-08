@@ -4,28 +4,20 @@
     <p class="muted">{{ result.news_analysis.sentiment }}</p>
     <h3>Tin hỗ trợ</h3>
     <ul class="list">
-      <li
-        v-for="item in listOrDash(result.news_analysis.supporting_news)"
-        :key="item"
-      >
+      <li v-for="item in listOrDash(result.news_analysis.supporting_news)" :key="item">
         {{ item }}
       </li>
     </ul>
     <h3>Tin rủi ro</h3>
     <ul class="list">
-      <li
-        v-for="item in listOrDash(result.news_analysis.risk_news)"
-        :key="item"
-      >
+      <li v-for="item in listOrDash(result.news_analysis.risk_news)" :key="item">
         {{ item }}
       </li>
     </ul>
     <h3>Tin mạnh sắp tới</h3>
     <ul class="list">
       <li
-        v-for="item in listOrDash(
-          result.news_analysis.upcoming_high_impact_events,
-        )"
+        v-for="item in listOrDash(result.news_analysis.upcoming_high_impact_events)"
         :key="item"
       >
         {{ item }}

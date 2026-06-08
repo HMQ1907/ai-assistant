@@ -4,8 +4,8 @@
       <div class="heading">
         <h1>Lịch sử</h1>
         <p>
-          Cập nhật kết quả giao dịch người dùng đã tự thực hiện bên ngoài hệ
-          thống.
+          Cập nhật kết quả giao dịch XAUUSD người dùng đã tự thực hiện bên ngoài
+          hệ thống.
         </p>
       </div>
     </div>

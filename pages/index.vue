@@ -2,10 +2,10 @@
   <main class="page">
     <div class="toolbar">
       <div class="heading">
-        <h1>Manual trading assistant</h1>
+        <h1>AI XAUUSD Trading Assistant</h1>
         <p>
-          Quét XAUUSD, crypto, forex và indices bằng dữ liệu thật. Tool chỉ phân
-          tích, không đặt lệnh.
+          Phân tích XAUUSD bằng dữ liệu thị trường thật và tin tức thật. Công cụ
+          chỉ đưa gợi ý giao dịch thủ công, không đặt lệnh.
         </p>
       </div>
       <AnalyzeButton :loading="loading" @analyze="analyze" />
@@ -17,9 +17,9 @@
     </div>
 
     <div v-if="loading" class="card">
-      <strong
-        >Đang lấy dữ liệu thị trường thật, tin tức thật và gọi AI...</strong
-      >
+      <strong>
+        Đang lấy dữ liệu XAUUSD thật, tin tức thật và gửi AI phân tích...
+      </strong>
       <p class="muted">Quá trình này có thể mất 60-120 giây tùy provider.</p>
     </div>
 
@@ -67,7 +67,7 @@ async function analyze(): Promise<void> {
       ...history.value.filter((record) => record.id !== response.history.id),
     ];
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : "Unknown error";
+    error.value = caught instanceof Error ? caught.message : "Lỗi không xác định";
   } finally {
     loading.value = false;
   }

@@ -35,8 +35,12 @@ export class TradeValidationService {
     const entry = this.averageEntry(recommendation);
     const riskReward = parseRiskReward(recommendation.risk_reward);
     const selectedSymbol = payload?.symbols.find(
-      (item) => item.market.symbol === recommendation.symbol,
+      (item) => item.market.symbol === "XAUUSD",
     );
+
+    if (recommendation.symbol !== "XAUUSD") {
+      reasons.push("AI trả symbol khác XAUUSD");
+    }
 
     if (recommendation.confidence < tradingRules.minConfidence) {
       reasons.push(
@@ -50,23 +54,25 @@ export class TradeValidationService {
       );
     }
 
+    if (
+      recommendation.position_sizing.estimated_loss_if_sl_hit >
+      tradingRules.maxLossUsdPerTrade
+    ) {
+      reasons.push(
+        `estimated_loss_if_sl_hit ${recommendation.position_sizing.estimated_loss_if_sl_hit} USD cao hơn giới hạn ${tradingRules.maxLossUsdPerTrade} USD`,
+      );
+    }
+
     if (payload?.dataQuality === "LOW") {
       reasons.push("data_quality tổng thể là LOW");
     }
 
-    if (
-      payload?.newsDataStatus === "UNAVAILABLE" &&
-      recommendation.decision === "TRADE"
-    ) {
-      reasons.push("news_data_status là UNAVAILABLE");
-    }
-
-    if (payload && !selectedSymbol && recommendation.decision === "TRADE") {
-      reasons.push("symbol được chọn không có dữ liệu realtime hợp lệ");
+    if (payload && !selectedSymbol) {
+      reasons.push("không có dữ liệu realtime hợp lệ cho XAUUSD");
     }
 
     if (selectedSymbol?.market.data_quality === "LOW") {
-      reasons.push(`${recommendation.symbol} có data_quality LOW`);
+      reasons.push("XAUUSD có data_quality LOW");
     }
 
     if (selectedSymbol && selectedSymbol.market.spread > 0) {
@@ -76,13 +82,13 @@ export class TradeValidationService {
         100;
       if (spreadPercent > tradingRules.maxSpreadPercent) {
         reasons.push(
-          `${recommendation.symbol} có spread ${spreadPercent.toFixed(4)}% cao hơn ngưỡng ${tradingRules.maxSpreadPercent}%`,
+          `XAUUSD có spread ${spreadPercent.toFixed(4)}% cao hơn ngưỡng ${tradingRules.maxSpreadPercent}%`,
         );
       }
     }
 
     if (selectedSymbol && selectedSymbol.market.price <= 0) {
-      reasons.push(`${recommendation.symbol} không có giá realtime hợp lệ`);
+      reasons.push("XAUUSD không có giá realtime hợp lệ");
     }
 
     if (
@@ -92,16 +98,24 @@ export class TradeValidationService {
       reasons.push("decision là TRADE nhưng direction là NONE");
     }
 
-    if (
-      recommendation.entry_zone.from === 0 ||
-      recommendation.entry_zone.to === 0 ||
-      entry === 0
-    ) {
-      reasons.push("entry bằng 0");
+    if (!isFinitePositive(recommendation.entry_zone.from)) {
+      reasons.push("entry_zone.from không hợp lệ");
     }
-
-    if (recommendation.stop_loss === 0) reasons.push("stop_loss bằng 0");
-    if (recommendation.take_profit === 0) reasons.push("take_profit bằng 0");
+    if (!isFinitePositive(recommendation.entry_zone.to)) {
+      reasons.push("entry_zone.to không hợp lệ");
+    }
+    if (!isFinitePositive(entry)) {
+      reasons.push("entry trung bình không hợp lệ");
+    }
+    if (recommendation.entry_zone.from > recommendation.entry_zone.to) {
+      reasons.push("entry_zone.from lớn hơn entry_zone.to");
+    }
+    if (!isFinitePositive(recommendation.stop_loss)) {
+      reasons.push("stop_loss không hợp lệ");
+    }
+    if (!isFinitePositive(recommendation.take_profit)) {
+      reasons.push("take_profit không hợp lệ");
+    }
 
     if (recommendation.direction === "BUY") {
       if (recommendation.stop_loss >= entry)
@@ -128,4 +142,8 @@ export class TradeValidationService {
       ).toFixed(6),
     );
   }
+}
+
+function isFinitePositive(value: number): boolean {
+  return Number.isFinite(value) && value > 0;
 }

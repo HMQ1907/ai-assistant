@@ -22,13 +22,9 @@
         <tr v-for="record in records" :key="record.id">
           <td>{{ formatTime(record.created_at) }}</td>
           <td>
-            <span
-              :class="[
-                'badge',
-                record.decision === 'TRADE' ? 'trade' : 'no-trade',
-              ]"
-              >{{ decisionLabel(record.decision) }}</span
-            >
+            <span :class="['badge', record.decision === 'TRADE' ? 'trade' : 'no-trade']">
+              {{ decisionLabel(record.decision) }}
+            </span>
           </td>
           <td>{{ record.symbol }}</td>
           <td>{{ directionLabel(record.direction) }}</td>
@@ -46,9 +42,7 @@
           </td>
           <td>
             <input
-              :value="
-                numberDraft(record.id, 'actual_entry', record.actual_entry)
-              "
+              :value="numberDraft(record.id, 'actual_entry', record.actual_entry)"
               class="input compact"
               type="number"
               step="0.00001"
@@ -66,13 +60,7 @@
           </td>
           <td>
             <input
-              :value="
-                numberDraft(
-                  record.id,
-                  'actual_profit_loss',
-                  record.actual_profit_loss,
-                )
-              "
+              :value="numberDraft(record.id, 'actual_profit_loss', record.actual_profit_loss)"
               class="input compact"
               type="number"
               step="0.01"

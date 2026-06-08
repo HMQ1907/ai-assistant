@@ -2,17 +2,14 @@
   <section class="grid">
     <div class="card">
       <div class="summary-head">
-        <span
-          :class="['badge', result.decision === 'TRADE' ? 'trade' : 'no-trade']"
-          >{{ decisionLabel(result.decision) }}</span
-        >
-        <strong
-          >{{ result.symbol }} / {{ directionLabel(result.direction) }}</strong
-        >
+        <span :class="['badge', result.decision === 'TRADE' ? 'trade' : 'no-trade']">
+          {{ decisionLabel(result.decision) }}
+        </span>
+        <strong>XAUUSD / {{ directionLabel(result.direction) }}</strong>
       </div>
       <p>{{ result.summary }}</p>
       <ConfidenceBar :value="result.confidence" />
-      <p class="muted">Đây là gợi ý từ AI, không đảm bảo thắng.</p>
+      <p class="muted">Đây là gợi ý phân tích từ AI, không đảm bảo thắng.</p>
       <p class="muted">{{ result.disclaimer }}</p>
       <p v-if="result.no_trade_reason" class="muted">
         <strong>Lý do không giao dịch:</strong> {{ result.no_trade_reason }}
@@ -26,30 +23,24 @@
       <h3>Nguồn dữ liệu</h3>
       <div class="kv">
         <div class="kv-row">
-          <span>Provider thị trường</span
-          ><strong>{{ history.market_data_provider }}</strong>
+          <span>Provider thị trường</span><strong>{{ history.market_data_provider }}</strong>
         </div>
         <div class="kv-row">
-          <span>Provider tin tức</span
-          ><strong>{{ history.news_provider }}</strong>
+          <span>Provider tin tức</span><strong>{{ history.news_provider }}</strong>
         </div>
         <div class="kv-row">
-          <span>Cập nhật dữ liệu thị trường</span
-          ><strong>{{ formatTime(history.market_data_timestamp) }}</strong>
+          <span>Cập nhật dữ liệu thị trường</span>
+          <strong>{{ formatTime(history.market_data_timestamp) }}</strong>
         </div>
         <div class="kv-row">
-          <span>Cập nhật tin tức</span
-          ><strong>{{ formatTime(history.news_data_timestamp) }}</strong>
+          <span>Cập nhật tin tức</span><strong>{{ formatTime(history.news_data_timestamp) }}</strong>
         </div>
         <div class="kv-row">
-          <span>Trạng thái tin tức</span
-          ><strong>{{
-            newsStatusLabel(history.request_payload.newsDataStatus)
-          }}</strong>
+          <span>Trạng thái tin tức</span>
+          <strong>{{ newsStatusLabel(history.request_payload.newsDataStatus) }}</strong>
         </div>
         <div class="kv-row">
-          <span>Chất lượng dữ liệu</span
-          ><strong>{{ dataQualityLabel(history.data_quality) }}</strong>
+          <span>Chất lượng dữ liệu</span><strong>{{ dataQualityLabel(history.data_quality) }}</strong>
         </div>
       </div>
       <h3>Cảnh báo dữ liệu</h3>
@@ -57,13 +48,6 @@
         <li v-for="item in listOrDash(history.data_warnings)" :key="item">
           {{ item }}
         </li>
-      </ul>
-      <h3>Symbol bị bỏ qua</h3>
-      <ul class="list">
-        <li v-for="item in history.skipped_symbols" :key="item.symbol">
-          {{ item.symbol }}: {{ item.reason }}
-        </li>
-        <li v-if="history.skipped_symbols.length === 0">Không có.</li>
       </ul>
     </div>
 
@@ -74,15 +58,6 @@
     </div>
 
     <div class="grid two">
-      <section class="card">
-        <h3>Vì sao chọn symbol này</h3>
-        <p class="muted">{{ result.why_this_symbol }}</p>
-        <h3>Vì sao không chọn symbol khác</h3>
-        <ul class="list">
-          <li v-for="item in result.why_not_others" :key="item">{{ item }}</li>
-        </ul>
-      </section>
-
       <section class="card">
         <h3>Lý do chính</h3>
         <ul class="list">
@@ -96,34 +71,11 @@
           <strong>Xấu nhất:</strong> {{ result.worst_case_scenario }}
         </p>
       </section>
-    </div>
-
-    <div class="grid two">
-      <section class="card">
-        <h3>Điểm từng symbol</h3>
-        <table class="history-table">
-          <thead>
-            <tr>
-              <th>Symbol</th>
-              <th>Điểm</th>
-              <th>Bias</th>
-              <th>Lý do</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in result.symbol_scores" :key="item.symbol">
-              <td>{{ item.symbol }}</td>
-              <td>{{ item.score }}</td>
-              <td>{{ directionLabel(item.bias) }}</td>
-              <td class="muted">{{ item.reason }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
 
       <RiskFactorsCard :result="result" />
-      <PreEntryChecklist :result="result" />
     </div>
+
+    <PreEntryChecklist :result="result" />
   </section>
 </template>
 

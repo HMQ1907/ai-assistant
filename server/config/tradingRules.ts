@@ -1,8 +1,8 @@
 export const tradingRules = {
+  accountSizeUsd: 70,
+  maxLossUsdPerTrade: 5,
   minConfidence: 70,
   minRiskReward: 1.5,
-  accountSizeUsd: 100,
-  riskPercent: 1,
   maxHoldingMinutes: 60,
   maxSpreadPercent: 0.08,
 } as const;

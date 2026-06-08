@@ -1,31 +1,25 @@
 import type { TradeDecision, TradeDirection } from "./trading";
 
-export interface SymbolScore {
-  symbol: string;
-  score: number;
-  bias: TradeDirection;
-  reason: string;
-}
-
 export interface AiTradeRecommendation {
   decision: TradeDecision;
-  symbol: string;
+  symbol: "XAUUSD";
   direction: TradeDirection;
   confidence: number;
-  symbol_scores: SymbolScore[];
   entry_zone: {
     from: number;
     to: number;
   };
   stop_loss: number;
+  stop_loss_reason: string;
   take_profit: number;
+  take_profit_reason: string;
   risk_reward: string;
   expected_holding_time: string;
   position_sizing: {
     account_size_usd: number;
-    risk_percent: number;
     max_loss_usd: number;
-    suggested_lot: string;
+    estimated_loss_if_sl_hit: number;
+    position_sizing_explanation: string;
   };
   summary: string;
   technical_analysis: {
@@ -41,8 +35,6 @@ export interface AiTradeRecommendation {
     risk_news: string[];
     upcoming_high_impact_events: string[];
   };
-  why_this_symbol: string;
-  why_not_others: string[];
   main_reasons: string[];
   risk_factors: string[];
   invalid_conditions: string[];
