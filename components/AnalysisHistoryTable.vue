@@ -16,6 +16,7 @@
           <th>P/L</th>
           <th>Ghi chú</th>
           <th></th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -76,6 +77,11 @@
             />
           </td>
           <td>
+            <button class="button small secondary" @click="emit('detail', record)">
+              Chi tiết
+            </button>
+          </td>
+          <td>
             <button class="button small" @click="save(record.id)">Lưu</button>
           </td>
         </tr>
@@ -89,7 +95,10 @@ import type { AnalysisHistoryRecord, ResultStatus } from "~/types/trading";
 import { decisionLabel, directionLabel, statusLabel } from "~/utils/display";
 
 const props = defineProps<{ records: AnalysisHistoryRecord[] }>();
-const emit = defineEmits<{ updated: [record: AnalysisHistoryRecord] }>();
+const emit = defineEmits<{
+  updated: [record: AnalysisHistoryRecord];
+  detail: [record: AnalysisHistoryRecord];
+}>();
 const statuses: ResultStatus[] = [
   "PENDING",
   "WIN",
@@ -196,6 +205,10 @@ function formatTime(value: string): string {
 .small {
   min-height: 34px;
   padding: 0 10px;
+}
+
+.secondary {
+  background: #263344;
 }
 
 .compact {
