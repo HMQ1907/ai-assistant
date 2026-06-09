@@ -26,12 +26,15 @@ export default defineEventHandler(async (event) => {
       providerName: config.marketDataProvider,
       apiKey: config.marketDataApiKey,
       baseUrl: config.marketDataBaseUrl,
+      maxQuoteAgeSeconds: config.maxQuoteAgeSeconds,
+      debug: config.marketDataDebug,
     });
     const indicatorService = new IndicatorService();
     const newsService = new NewsService({
       providerName: config.newsProvider,
       apiKey: config.newsApiKey,
       baseUrl: config.newsBaseUrl,
+      maxAgeHours: config.newsMaxAgeHours,
     });
     const payloadBuilder = new OpportunityPayloadBuilder();
     const aiService = new AiAnalysisService({

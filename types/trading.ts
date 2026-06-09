@@ -8,7 +8,27 @@ export type TradeDecision = "TRADE" | "NO_TRADE";
 export type TradeDirection = "BUY" | "SELL" | "NONE";
 export type ResultStatus = "PENDING" | "WIN" | "LOSS" | "BREAKEVEN" | "SKIPPED";
 export type DataQuality = "HIGH" | "MEDIUM" | "LOW";
-export type NewsDataStatus = "AVAILABLE" | "UNAVAILABLE";
+export type NewsDataStatus =
+  | "AVAILABLE"
+  | "NO_RELEVANT_DATA"
+  | "STALE"
+  | "UNAVAILABLE";
+export type BidAskStatus = "AVAILABLE" | "UNAVAILABLE" | "INVALID";
+export type IndicatorTrend =
+  | "UPTREND"
+  | "DOWNTREND"
+  | "SIDEWAY_OR_MIXED"
+  | "INSUFFICIENT_DATA";
+export type CandleFilterReason =
+  | "INVALID_SHAPE"
+  | "INVALID_NUMBER"
+  | "INVALID_TIMESTAMP"
+  | "DUPLICATE_TIMESTAMP"
+  | "REPEATED_OHLC"
+  | "ZERO_RANGE"
+  | "LOW_RANGE"
+  | "FROZEN_SEQUENCE"
+  | "EXPECTED_MARKET_CLOSED";
 
 export interface Candle {
   time: string;
@@ -22,15 +42,56 @@ export interface Candle {
 export interface MarketSnapshot {
   symbol: SymbolCode;
   price: number;
-  bid?: number;
-  ask?: number;
-  spread: number;
+  bid: number | null;
+  ask: number | null;
+  spread: number | null;
+  bidAskStatus: BidAskStatus;
   data_quality: DataQuality;
   data_warnings: string[];
+  informational_diagnostics: string[];
+  critical_errors: string[];
   updated_at: string;
   provider: string;
+  providerFetchedAt: string;
+  providerQuoteTime: string | null;
+  quoteAgeSeconds: number | null;
+  quoteTimestampReliable: boolean;
   candles: Record<Timeframe, Candle[]>;
   filtered_candles?: Partial<Record<Timeframe, number>>;
+  candle_diagnostics: Record<Timeframe, CandleDiagnostics>;
+  timeframe_quality: Record<Timeframe, TimeframeQuality>;
+}
+
+export interface CandleDiagnostics {
+  requestedCount: number;
+  receivedCount: number;
+  validCount: number;
+  filteredCount: number;
+  reasons: Partial<Record<CandleFilterReason, number>>;
+  firstRawCandleTime: string | null;
+  lastRawCandleTime: string | null;
+  firstValidCandleTime: string | null;
+  lastValidCandleTime: string | null;
+  indicatorDataSufficient: boolean;
+}
+
+export interface IndicatorReadiness {
+  ema20: boolean;
+  ema50: boolean;
+  ema200: boolean;
+  rsi14: boolean;
+  atr14: boolean;
+  macd: boolean;
+}
+
+export interface TimeframeQuality {
+  timeframe: Timeframe;
+  quality: DataQuality;
+  validCandleCount: number;
+  requiredCandleCount: number;
+  invalidRatio: number;
+  indicatorReadiness: IndicatorReadiness;
+  reasons: string[];
 }
 
 export interface TimeframeCandleSummary {
@@ -50,15 +111,24 @@ export interface TimeframeCandleSummary {
 export interface MarketPayloadSnapshot {
   symbol: SymbolCode;
   price: number;
-  bid?: number;
-  ask?: number;
-  spread: number;
+  bid: number | null;
+  ask: number | null;
+  spread: number | null;
+  bidAskStatus: BidAskStatus;
   data_quality: DataQuality;
   data_warnings: string[];
+  informational_diagnostics: string[];
+  critical_errors: string[];
   updated_at: string;
   provider: string;
+  providerFetchedAt: string;
+  providerQuoteTime: string | null;
+  quoteAgeSeconds: number | null;
+  quoteTimestampReliable: boolean;
   candle_summary: Record<Timeframe, TimeframeCandleSummary>;
   recent_candles: Record<Timeframe, Candle[]>;
+  candle_diagnostics: Record<Timeframe, CandleDiagnostics>;
+  timeframe_quality: Record<Timeframe, TimeframeQuality>;
 }
 
 export interface SupportResistanceLevel {
@@ -68,8 +138,8 @@ export interface SupportResistanceLevel {
 }
 
 export interface SupportResistanceSnapshot {
-  nearestSupport: number;
-  nearestResistance: number;
+  nearestSupport: number | null;
+  nearestResistance: number | null;
   swingHigh: number;
   swingLow: number;
   supportLevels: SupportResistanceLevel[];
@@ -78,17 +148,18 @@ export interface SupportResistanceSnapshot {
 
 export interface TimeframeIndicatorSnapshot {
   timeframe: Timeframe;
-  ema20: number;
-  ema50: number;
-  ema200: number;
-  rsi14: number;
+  ema20: number | null;
+  ema50: number | null;
+  ema200: number | null;
+  rsi14: number | null;
   macd: {
-    macd: number;
-    signal: number;
-    histogram: number;
+    macd: number | null;
+    signal: number | null;
+    histogram: number | null;
   };
-  atr14: number;
-  trend: string;
+  atr14: number | null;
+  readiness: IndicatorReadiness;
+  trend: IndicatorTrend;
   momentumScore: number;
   volatilityScore: number;
   marketStructure: SupportResistanceSnapshot;
@@ -96,22 +167,22 @@ export interface TimeframeIndicatorSnapshot {
 
 export interface IndicatorSnapshot {
   symbol: SymbolCode;
-  ema20: number;
-  ema50: number;
-  ema200: number;
-  rsi14: number;
+  ema20: number | null;
+  ema50: number | null;
+  ema200: number | null;
+  rsi14: number | null;
   macd: {
-    macd: number;
-    signal: number;
-    histogram: number;
+    macd: number | null;
+    signal: number | null;
+    histogram: number | null;
   };
-  atr14: number;
-  nearestSupport: number;
-  nearestResistance: number;
+  atr14: number | null;
+  nearestSupport: number | null;
+  nearestResistance: number | null;
   swingHigh: number;
   swingLow: number;
-  trendM15: string;
-  trendH1: string;
+  trendM15: IndicatorTrend;
+  trendH1: IndicatorTrend;
   momentumScore: number;
   volatilityScore: number;
   timeframes: Record<Timeframe, TimeframeIndicatorSnapshot>;

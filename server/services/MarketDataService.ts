@@ -14,6 +14,8 @@ export class MarketDataService {
       providerName: string;
       apiKey: string;
       baseUrl: string;
+      maxQuoteAgeSeconds?: number;
+      debug?: boolean;
     },
   ) {
     this.provider = this.createProvider(options.providerName);
@@ -35,6 +37,12 @@ export class MarketDataService {
         return new RealMarketDataProvider({
           apiKey: this.options.apiKey,
           baseUrl: this.options.baseUrl,
+          ...(this.options.maxQuoteAgeSeconds !== undefined
+            ? { maxQuoteAgeSeconds: this.options.maxQuoteAgeSeconds }
+            : {}),
+          ...(this.options.debug !== undefined
+            ? { debug: this.options.debug }
+            : {}),
         });
       default:
         throw new Error(

@@ -9,6 +9,9 @@ export class TradeValidationService {
     payload?: AnalysisPayload,
   ): AiTradeRecommendation {
     this.normalizeSizing(recommendation, payload);
+    if (recommendation.decision === "NO_TRADE") {
+      return this.normalizeNoTrade(recommendation, payload);
+    }
     const reasons = this.findInvalidReasons(recommendation, payload);
 
     if (payload) {
@@ -23,7 +26,7 @@ export class TradeValidationService {
     if (reasons.length === 0) return recommendation;
 
     const invalidConditions = Array.from(
-      new Set([...recommendation.invalid_conditions, ...reasons]),
+      new Set(recommendation.invalid_conditions),
     );
     const reason = `Validation nội bộ đã ép NO_TRADE: ${reasons.join("; ")}.`;
 
@@ -31,6 +34,17 @@ export class TradeValidationService {
       ...recommendation,
       decision: "NO_TRADE",
       direction: "NONE",
+      entry_zone: null,
+      stop_loss: null,
+      take_profit: null,
+      risk_reward: null,
+      expected_holding_time: null,
+      position_sizing: {
+        ...recommendation.position_sizing,
+        suggested_lot: null,
+        estimated_loss_if_sl_hit: null,
+      },
+      trade_validation_failures: Array.from(new Set(reasons)),
       invalid_conditions: invalidConditions,
       no_trade_reason: recommendation.no_trade_reason
         ? `${recommendation.no_trade_reason} ${reason}`
@@ -49,22 +63,23 @@ export class TradeValidationService {
       payload.maxLossPercentPerTrade;
 
     if (recommendation.decision !== "TRADE") {
-      recommendation.position_sizing.suggested_lot = 0;
-      recommendation.position_sizing.estimated_loss_if_sl_hit = 0;
+      recommendation.position_sizing.suggested_lot = null;
+      recommendation.position_sizing.estimated_loss_if_sl_hit = null;
       return;
     }
 
     const entry = this.averageEntry(recommendation);
-    if (!isFinitePositive(entry) || !isFinitePositive(recommendation.stop_loss)) {
-      recommendation.position_sizing.suggested_lot = 0;
-      recommendation.position_sizing.estimated_loss_if_sl_hit = 0;
+    const stopLoss = recommendation.stop_loss;
+    if (!isFinitePositive(entry) || !isFinitePositive(stopLoss)) {
+      recommendation.position_sizing.suggested_lot = null;
+      recommendation.position_sizing.estimated_loss_if_sl_hit = null;
       return;
     }
 
-    const distance = Math.abs(entry - recommendation.stop_loss);
+    const distance = Math.abs(entry - stopLoss);
     if (distance <= 0) {
-      recommendation.position_sizing.suggested_lot = 0;
-      recommendation.position_sizing.estimated_loss_if_sl_hit = 0;
+      recommendation.position_sizing.suggested_lot = null;
+      recommendation.position_sizing.estimated_loss_if_sl_hit = null;
       return;
     }
 
@@ -74,21 +89,57 @@ export class TradeValidationService {
     const rawLot =
       targetLossUsd / (distance * tradingRules.xauUsdOuncesPerLot);
     const lot = floorToStep(rawLot, tradingRules.lotStep);
-    const suggestedLot = lot >= tradingRules.minLot ? lot : 0;
-    const estimatedLoss = Number(
-      (
-        suggestedLot *
-        distance *
-        tradingRules.xauUsdOuncesPerLot
-      ).toFixed(2),
-    );
+    const suggestedLot = lot >= tradingRules.minLot ? lot : null;
+    const estimatedLoss =
+      suggestedLot === null
+        ? null
+        : Number(
+            (
+              suggestedLot *
+              distance *
+              tradingRules.xauUsdOuncesPerLot
+            ).toFixed(2),
+          );
 
     recommendation.position_sizing.suggested_lot = suggestedLot;
     recommendation.position_sizing.estimated_loss_if_sl_hit = estimatedLoss;
     recommendation.position_sizing.position_sizing_explanation =
-      suggestedLot > 0
+      suggestedLot !== null && suggestedLot > 0
         ? `Lot gợi ý: ${suggestedLot.toFixed(2)} lot. Công thức XAUUSD: lot * khoảng cách Entry-SL (${distance.toFixed(2)} USD) * 100 oz = khoảng $${estimatedLoss} nếu chạm SL. Giới hạn lỗ hiện tại là ${payload.maxLossPercentPerTrade}% vốn ($${maxLossUsd}).`
         : `Không gợi ý lot vì với khoảng cách Entry-SL ${distance.toFixed(2)} USD, lot tối thiểu ${tradingRules.minLot.toFixed(2)} có thể không phù hợp với giới hạn lỗ hoặc setup chưa đủ điều kiện.`;
+  }
+
+  private normalizeNoTrade(
+    recommendation: AiTradeRecommendation,
+    payload?: AnalysisPayload,
+  ): AiTradeRecommendation {
+    if (payload) {
+      recommendation.current_price =
+        payload.symbols.find((item) => item.market.symbol === "XAUUSD")?.market
+          .price ?? recommendation.current_price;
+    }
+    return {
+      ...recommendation,
+      decision: "NO_TRADE",
+      direction: "NONE",
+      entry_zone: null,
+      stop_loss: null,
+      take_profit: null,
+      risk_reward: null,
+      expected_holding_time: null,
+      invalid_conditions: Array.from(new Set(recommendation.invalid_conditions)),
+      no_trade_reasons:
+        recommendation.no_trade_reasons?.length
+          ? recommendation.no_trade_reasons
+          : recommendation.no_trade_reason
+            ? [recommendation.no_trade_reason]
+            : ["Không có setup giao dịch hợp lệ."],
+      conditions_to_recheck:
+        recommendation.conditions_to_recheck?.length
+          ? recommendation.conditions_to_recheck
+          : ["Phân tích lại khi dữ liệu thị trường, quote và indicator đã đạt yêu cầu."],
+      trade_validation_failures: recommendation.trade_validation_failures ?? [],
+    };
   }
 
   private findInvalidReasons(
@@ -97,7 +148,7 @@ export class TradeValidationService {
   ): string[] {
     const reasons: string[] = [];
     const entry = this.averageEntry(recommendation);
-    const riskReward = parseRiskReward(recommendation.risk_reward);
+    const riskReward = parseRiskReward(recommendation.risk_reward ?? "");
     const selectedSymbol = payload?.symbols.find(
       (item) => item.market.symbol === "XAUUSD",
     );
@@ -120,7 +171,10 @@ export class TradeValidationService {
       );
     }
 
-    if (recommendation.position_sizing.estimated_loss_if_sl_hit > maxLossUsd) {
+    if (
+      (recommendation.position_sizing.estimated_loss_if_sl_hit ?? Infinity) >
+      maxLossUsd
+    ) {
       reasons.push(
         `estimated_loss_if_sl_hit ${recommendation.position_sizing.estimated_loss_if_sl_hit} USD vượt giới hạn ${maxLossUsd} USD`,
       );
@@ -128,15 +182,16 @@ export class TradeValidationService {
 
     if (
       recommendation.decision === "TRADE" &&
-      recommendation.position_sizing.suggested_lot < tradingRules.minLot
+      (recommendation.position_sizing.suggested_lot ?? 0) < tradingRules.minLot
     ) {
       reasons.push(
         `TRADE nhưng suggested_lot thấp hơn lot tối thiểu ${tradingRules.minLot.toFixed(2)}`,
       );
     }
 
-    if (isFinitePositive(entry) && isFinitePositive(recommendation.stop_loss)) {
-      const distance = Math.abs(entry - recommendation.stop_loss);
+    const stopLoss = recommendation.stop_loss;
+    if (isFinitePositive(entry) && isFinitePositive(stopLoss)) {
+      const distance = Math.abs(entry - stopLoss);
       const minLotLoss =
         tradingRules.minLot * distance * tradingRules.xauUsdOuncesPerLot;
       if (recommendation.decision === "TRADE" && minLotLoss > maxLossUsd) {
@@ -183,7 +238,11 @@ export class TradeValidationService {
       reasons.push("XAUUSD có data_quality LOW");
     }
 
-    if (selectedSymbol && selectedSymbol.market.spread > 0) {
+    if (selectedSymbol && selectedSymbol.market.bidAskStatus !== "AVAILABLE") {
+      reasons.push("XAUUSD không có bid/ask thật từ provider");
+    }
+
+    if (selectedSymbol && selectedSymbol.market.spread !== null) {
       const spreadPercent =
         (selectedSymbol.market.spread /
           Math.max(selectedSymbol.market.price, 0.00001)) *
@@ -206,16 +265,21 @@ export class TradeValidationService {
       reasons.push("decision là TRADE nhưng direction là NONE");
     }
 
-    if (!isFinitePositive(recommendation.entry_zone.from)) {
+    if (!recommendation.entry_zone) {
+      reasons.push("entry_zone không hợp lệ");
+    } else if (!isFinitePositive(recommendation.entry_zone.from)) {
       reasons.push("entry_zone.from không hợp lệ");
     }
-    if (!isFinitePositive(recommendation.entry_zone.to)) {
+    if (recommendation.entry_zone && !isFinitePositive(recommendation.entry_zone.to)) {
       reasons.push("entry_zone.to không hợp lệ");
     }
     if (!isFinitePositive(entry)) {
       reasons.push("entry trung bình không hợp lệ");
     }
-    if (recommendation.entry_zone.from > recommendation.entry_zone.to) {
+    if (
+      recommendation.entry_zone &&
+      recommendation.entry_zone.from > recommendation.entry_zone.to
+    ) {
       reasons.push("entry_zone.from lớn hơn entry_zone.to");
     }
     if (!isFinitePositive(recommendation.stop_loss)) {
@@ -226,19 +290,31 @@ export class TradeValidationService {
     }
 
     if (recommendation.direction === "BUY") {
-      if (recommendation.stop_loss >= entry) {
+      if (
+        recommendation.stop_loss !== null &&
+        recommendation.stop_loss >= entry
+      ) {
         reasons.push("BUY có stop_loss lớn hơn hoặc bằng entry");
       }
-      if (recommendation.take_profit <= entry) {
+      if (
+        recommendation.take_profit !== null &&
+        recommendation.take_profit <= entry
+      ) {
         reasons.push("BUY có take_profit nhỏ hơn hoặc bằng entry");
       }
     }
 
     if (recommendation.direction === "SELL") {
-      if (recommendation.stop_loss <= entry) {
+      if (
+        recommendation.stop_loss !== null &&
+        recommendation.stop_loss <= entry
+      ) {
         reasons.push("SELL có stop_loss nhỏ hơn hoặc bằng entry");
       }
-      if (recommendation.take_profit >= entry) {
+      if (
+        recommendation.take_profit !== null &&
+        recommendation.take_profit >= entry
+      ) {
         reasons.push("SELL có take_profit lớn hơn hoặc bằng entry");
       }
     }
@@ -247,6 +323,7 @@ export class TradeValidationService {
   }
 
   private averageEntry(recommendation: AiTradeRecommendation): number {
+    if (!recommendation.entry_zone) return 0;
     return Number(
       (
         (recommendation.entry_zone.from + recommendation.entry_zone.to) /
@@ -266,6 +343,6 @@ function floorToStep(value: number, step: number): number {
   return Number((Math.floor(value / step) * step).toFixed(2));
 }
 
-function isFinitePositive(value: number): boolean {
-  return Number.isFinite(value) && value > 0;
+function isFinitePositive(value: number | null | undefined): value is number {
+  return value !== null && value !== undefined && Number.isFinite(value) && value > 0;
 }

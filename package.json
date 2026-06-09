@@ -5,7 +5,12 @@
   "scripts": {
     "dev": "nuxt dev",
     "build": "npm run typecheck && set NUXT_IGNORE_LOCK=1&& nuxt build",
+    "lint": "nuxt typecheck",
     "preview": "nuxt preview",
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:watch": "vitest",
+    "test:live": "cross-env RUN_LIVE_API_TESTS=true vitest run tests/live",
     "typecheck": "nuxt typecheck"
   },
   "dependencies": {
@@ -18,7 +23,9 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "cross-env": "^7.0.3",
     "typescript": "^5.8.3",
+    "vitest": "^3.2.4",
     "vue-tsc": "^2.2.10"
   }
 }

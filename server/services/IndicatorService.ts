@@ -13,6 +13,7 @@ import {
   rsi,
   supportResistance,
   trend,
+  indicatorReadiness,
 } from "../utils/indicators";
 
 export class IndicatorService {
@@ -63,6 +64,7 @@ export class IndicatorService {
     const closes = candles.map((candle) => candle.close);
     const atr14 = atr(candles);
     const current = closes.at(-1) ?? fallbackPrice;
+    const readiness = indicatorReadiness(closes, candles);
 
     return {
       timeframe,
@@ -72,17 +74,18 @@ export class IndicatorService {
       rsi14: rsi(closes),
       macd: macd(closes),
       atr14,
+      readiness,
       trend: trend(closes),
       momentumScore: this.scoreMomentum(candles, atr14),
       volatilityScore: Math.min(
         100,
-        Math.round((atr14 / Math.max(current, 0.00001)) * 10000),
+        Math.round(((atr14 ?? 0) / Math.max(current, 0.00001)) * 10000),
       ),
       marketStructure: supportResistance(candles),
     };
   }
 
-  private scoreMomentum(candles: Candle[], atr14: number): number {
+  private scoreMomentum(candles: Candle[], atr14: number | null): number {
     const recent = candles.slice(-12);
     if (recent.length < 2) return 50;
     const first = recent[0];
@@ -93,7 +96,7 @@ export class IndicatorService {
     const averageRange =
       recent.reduce((sum, candle) => sum + (candle.high - candle.low), 0) /
       recent.length;
-    const normalizer = Math.max(atr14, averageRange, 0.00001);
+    const normalizer = Math.max(atr14 ?? 0, averageRange, 0.00001);
     const normalizedMove = priceMove / normalizer;
     return Math.max(0, Math.min(100, Math.round(50 + normalizedMove * 12)));
   }
@@ -107,6 +110,9 @@ export class IndicatorService {
 
     if (up >= 3) return "BULLISH_ALIGNMENT";
     if (down >= 3) return "BEARISH_ALIGNMENT";
+    if (trends.some((item) => item === "INSUFFICIENT_DATA")) {
+      return "INSUFFICIENT_DATA";
+    }
     return "MIXED_ALIGNMENT";
   }
 }

@@ -10,6 +10,7 @@ export class NewsService {
       providerName: string;
       apiKey: string;
       baseUrl: string;
+      maxAgeHours?: number;
     },
   ) {
     this.provider = this.createProvider(options.providerName);
@@ -25,6 +26,9 @@ export class NewsService {
         return new RealNewsProvider({
           apiKey: this.options.apiKey,
           baseUrl: this.options.baseUrl,
+          ...(this.options.maxAgeHours !== undefined
+            ? { maxAgeHours: this.options.maxAgeHours }
+            : {}),
         });
       default:
         throw new Error(

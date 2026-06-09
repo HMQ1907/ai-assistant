@@ -8,19 +8,19 @@ export interface AiTradeRecommendation {
   entry_zone: {
     from: number;
     to: number;
-  };
-  stop_loss: number;
+  } | null;
+  stop_loss: number | null;
   stop_loss_reason: string;
-  take_profit: number;
+  take_profit: number | null;
   take_profit_reason: string;
-  risk_reward: string;
-  expected_holding_time: string;
+  risk_reward: string | null;
+  expected_holding_time: string | null;
   position_sizing: {
     account_size_usd: number;
     max_loss_usd: number;
     max_loss_percent: number;
-    suggested_lot: number;
-    estimated_loss_if_sl_hit: number;
+    suggested_lot: number | null;
+    estimated_loss_if_sl_hit: number | null;
     position_sizing_explanation: string;
   };
   current_price: number;
@@ -44,6 +44,9 @@ export interface AiTradeRecommendation {
   main_reasons: string[];
   risk_factors: string[];
   invalid_conditions: string[];
+  no_trade_reasons?: string[] | undefined;
+  conditions_to_recheck?: string[] | undefined;
+  trade_validation_failures?: string[] | undefined;
   best_case_scenario: string;
   worst_case_scenario: string;
   pre_entry_checklist: string[];

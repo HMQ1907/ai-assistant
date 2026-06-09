@@ -36,10 +36,17 @@ AI_TIMEOUT_MS=90000
 MARKET_DATA_PROVIDER=twelvedata
 MARKET_DATA_API_KEY=
 MARKET_DATA_BASE_URL=https://api.twelvedata.com
+MAX_QUOTE_AGE_SECONDS=180
+MARKET_DATA_DEBUG=false
 
 NEWS_PROVIDER=gnews
 NEWS_API_KEY=
 NEWS_BASE_URL=https://gnews.io
+NEWS_MAX_AGE_HOURS=48
+
+ACCOUNT_SIZE_USD=70
+MAX_LOSS_PERCENT_PER_TRADE=15
+MAX_DAILY_LOSS_PERCENT=15
 
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
@@ -103,7 +110,7 @@ Hệ thống tính:
 
 ## Tin Tức
 
-Provider hiện tại: `newsapi`.
+Provider hiện tại: `gnews`.
 
 Tin tức tập trung vào:
 
@@ -139,15 +146,19 @@ Rules nằm trong `server/config/tradingRules.ts`:
 ```ts
 export const tradingRules = {
   accountSizeUsd: 70,
-  maxLossUsdPerTrade: 5,
+  maxLossPercentPerTrade: 15,
+  maxDailyLossPercent: 15,
   minConfidence: 70,
   minRiskReward: 1.5,
   maxHoldingMinutes: 60,
   maxSpreadPercent: 0.08,
+  minLot: 0.01,
+  lotStep: 0.01,
+  xauUsdOuncesPerLot: 100,
 } as const;
 ```
 
-Không hard-code các giá trị này trong service.
+Giới hạn lỗ mỗi lệnh được tính theo vốn hiện tại người dùng nhập. Ví dụ vốn `70 USD` và `MAX_LOSS_PERCENT_PER_TRADE=15` thì mức lỗ tối đa mỗi lệnh là `10.5 USD`. Đây là hard cap, không phải mục tiêu phải dùng hết.
 
 ## Validation Và NO_TRADE
 
@@ -184,6 +195,8 @@ Mở Nuxt URL local và bấm `Hiển thị gợi ý XAUUSD`.
 
 ```bash
 npm run typecheck
+npm run lint
+npm run test
 npm run build
 ```
 
@@ -197,6 +210,6 @@ Luồng cần kiểm tra thủ công:
 ## Rủi Ro
 
 - Dữ liệu phụ thuộc chất lượng và giới hạn của provider.
-- NewsAPI không thay thế lịch kinh tế chuyên dụng.
+- GNews không thay thế lịch kinh tế chuyên dụng như CPI, NFP hoặc FOMC calendar.
 - AI có thể phân tích sai hoặc trả JSON lỗi; hệ thống đã có validation nhưng người dùng vẫn phải tự kiểm tra.
 - Đây là AI Trading Assistant, không phải Trading Bot và không phải lời khuyên tài chính.

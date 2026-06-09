@@ -118,6 +118,20 @@
           <strong>{{ candleSummary }}</strong>
         </div>
         <div class="kv-row">
+          <span>Trạng thái Bid/Ask</span><strong>{{ bidAskStatusLabel }}</strong>
+        </div>
+        <div class="kv-row">
+          <span>Tuổi quote</span><strong>{{ quoteAgeLabel }}</strong>
+        </div>
+        <div class="kv-row">
+          <span>Chất lượng timeframe</span>
+          <strong>{{ timeframeQualitySummary }}</strong>
+        </div>
+        <div class="kv-row">
+          <span>Nến bị lọc</span>
+          <strong>{{ candleDiagnosticsSummary }}</strong>
+        </div>
+        <div class="kv-row">
           <span>Số tin tức gửi AI</span>
           <strong>{{ history.request_payload.news.items.length }}</strong>
         </div>
@@ -173,6 +187,20 @@ const currentSymbol = computed(() =>
 );
 const currentMarket = computed(() => currentSymbol.value?.market);
 const currentIndicators = computed(() => currentSymbol.value?.indicators);
+const bidAskStatusLabel = computed(() => {
+  const status = currentMarket.value?.bidAskStatus;
+  if (status === "AVAILABLE") return "Có bid/ask thật";
+  if (status === "INVALID") return "Bid/ask không hợp lệ";
+  if (status === "UNAVAILABLE") return "Không có bid/ask";
+  return "Không rõ";
+});
+const quoteAgeLabel = computed(() => {
+  const market = currentMarket.value;
+  if (!market) return "Không rõ";
+  if (!market.quoteTimestampReliable) return "Timestamp quote không đáng tin";
+  if (market.quoteAgeSeconds === null) return "Không rõ";
+  return `${market.quoteAgeSeconds}s`;
+});
 const candleSummary = computed(() => {
   const market = currentMarket.value;
   if (!market) return "Không rõ";
@@ -194,6 +222,28 @@ const candleSummary = computed(() => {
     .map(([timeframe, items]) => `${timeframe}: ${items.length}`)
     .join(", ");
 });
+const timeframeQualitySummary = computed(() => {
+  const quality = currentMarket.value?.timeframe_quality;
+  if (!quality) return "Không rõ";
+  return Object.entries(quality)
+    .map(
+      ([timeframe, item]) =>
+        `${timeframe}: ${dataQualityLabel(item.quality)} (${item.validCandleCount}/${item.requiredCandleCount})`,
+    )
+    .join(", ");
+});
+const candleDiagnosticsSummary = computed(() => {
+  const diagnostics = currentMarket.value?.candle_diagnostics;
+  if (!diagnostics) return "Không rõ";
+  return Object.entries(diagnostics)
+    .map(([timeframe, item]) => {
+      const reasons = Object.entries(item.reasons)
+        .map(([reason, count]) => `${reason}: ${count}`)
+        .join(", ");
+      return `${timeframe}: ${item.filteredCount}${reasons ? ` (${reasons})` : ""}`;
+    })
+    .join("; ");
+});
 
 const listOrDash = (items: string[]) => (items.length ? items : ["Không có."]);
 
@@ -209,13 +259,17 @@ function newsStatusLabel(value: string): string {
   return value === "AVAILABLE" ? "CÓ DỮ LIỆU" : "KHÔNG CÓ DỮ LIỆU";
 }
 
-function formatPrice(value: number | undefined): string {
-  if (value === undefined || !Number.isFinite(value)) return "Không rõ";
+function formatPrice(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "Không rõ";
+  }
   return value.toFixed(2);
 }
 
-function formatNumber(value: number | undefined): string {
-  if (value === undefined || !Number.isFinite(value)) return "Không rõ";
+function formatNumber(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "Không rõ";
+  }
   return String(Number(value.toFixed(4)));
 }
 </script>

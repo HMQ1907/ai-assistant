@@ -23,7 +23,7 @@ export class OpportunityPayloadBuilder {
     const dataWarnings = [...market.warnings, ...news.warnings];
     const dataQuality = combineQuality(
       market.dataQuality,
-      news.status === "UNAVAILABLE" ? "MEDIUM" : "HIGH",
+      news.status === "AVAILABLE" ? "HIGH" : "MEDIUM",
     );
     const maxLossUsdPerTrade = calculateMaxLossUsd(accountSizeUsd);
 
@@ -77,17 +77,25 @@ function toMarketPayloadSnapshot(
   const payload: MarketPayloadSnapshot = {
     symbol: snapshot.symbol,
     price: snapshot.price,
+    bid: snapshot.bid,
+    ask: snapshot.ask,
     spread: snapshot.spread,
+    bidAskStatus: snapshot.bidAskStatus,
     data_quality: snapshot.data_quality,
     data_warnings: snapshot.data_warnings,
+    informational_diagnostics: snapshot.informational_diagnostics,
+    critical_errors: snapshot.critical_errors,
     updated_at: snapshot.updated_at,
     provider: snapshot.provider,
+    providerFetchedAt: snapshot.providerFetchedAt,
+    providerQuoteTime: snapshot.providerQuoteTime,
+    quoteAgeSeconds: snapshot.quoteAgeSeconds,
+    quoteTimestampReliable: snapshot.quoteTimestampReliable,
     candle_summary: {} as Record<Timeframe, TimeframeCandleSummary>,
     recent_candles: {} as Record<Timeframe, Candle[]>,
+    candle_diagnostics: snapshot.candle_diagnostics,
+    timeframe_quality: snapshot.timeframe_quality,
   };
-
-  if (snapshot.bid !== undefined) payload.bid = snapshot.bid;
-  if (snapshot.ask !== undefined) payload.ask = snapshot.ask;
 
   for (const timeframe of TIMEFRAMES) {
     const candles = snapshot.candles[timeframe] ?? [];

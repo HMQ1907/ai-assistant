@@ -1,17 +1,20 @@
 import type {
   Candle,
+  IndicatorReadiness,
+  IndicatorTrend,
   SupportResistanceLevel,
   SupportResistanceSnapshot,
 } from "../../types/trading";
 
-export function ema(values: number[], period: number): number {
-  return round(lastOrZero(emaSeries(values, period)));
+export function ema(values: number[], period: number): number | null {
+  const series = emaSeries(values, period);
+  return series.length ? round(series.at(-1) ?? 0) : null;
 }
 
 export function emaSeries(values: number[], period: number): number[] {
   const clean = values.filter(Number.isFinite);
   if (clean.length === 0) return [];
-  if (clean.length < period) return [clean.at(-1) ?? 0];
+  if (clean.length < period) return [];
 
   const seed = average(clean.slice(0, period));
   const series: number[] = [seed];
@@ -25,8 +28,8 @@ export function emaSeries(values: number[], period: number): number[] {
   return series;
 }
 
-export function rsi(values: number[], period = 14): number {
-  if (values.length <= period) return 50;
+export function rsi(values: number[], period = 14): number | null {
+  if (values.length <= period) return null;
 
   const changes: number[] = [];
   for (let i = 1; i < values.length; i += 1) {
@@ -66,12 +69,12 @@ export function rsi(values: number[], period = 14): number {
 }
 
 export function macd(values: number[]): {
-  macd: number;
-  signal: number;
-  histogram: number;
+  macd: number | null;
+  signal: number | null;
+  histogram: number | null;
 } {
   const clean = values.filter(Number.isFinite);
-  if (clean.length < 35) return { macd: 0, signal: 0, histogram: 0 };
+  if (clean.length < 35) return { macd: null, signal: null, histogram: null };
 
   const ema12 = emaSeries(clean, 12);
   const ema26 = emaSeries(clean, 26);
@@ -90,9 +93,9 @@ export function macd(values: number[]): {
   };
 }
 
-export function atr(candles: Candle[], period = 14): number {
+export function atr(candles: Candle[], period = 14): number | null {
   const recent = candles.slice(-period - 1);
-  if (recent.length < 2) return 0;
+  if (recent.length < period + 1) return null;
   const trs: number[] = [];
   for (let i = 1; i < recent.length; i += 1) {
     const current = recent[i];
@@ -113,8 +116,8 @@ export function supportResistance(candles: Candle[]): SupportResistanceSnapshot 
   const recent = candles.slice(-80);
   if (recent.length === 0) {
     return {
-      nearestSupport: 0,
-      nearestResistance: 0,
+      nearestSupport: null,
+      nearestResistance: null,
       swingHigh: 0,
       swingLow: 0,
       supportLevels: [],
@@ -124,7 +127,9 @@ export function supportResistance(candles: Candle[]): SupportResistanceSnapshot 
 
   const current = recent.at(-1)?.close ?? 0;
   const atrValue = atr(recent, 14);
-  const clusterSize = Math.max(atrValue * 0.25, current * 0.00035, 0.5);
+  const baseClusterSize =
+    atrValue === null ? current * 0.00035 : atrValue * 0.25;
+  const clusterSize = Math.min(Math.max(baseClusterSize, 0.5), 12);
   const swingWindow = recent.slice(-12);
   const swingHigh = Math.max(...swingWindow.map((candle) => candle.high));
   const swingLow = Math.min(...swingWindow.map((candle) => candle.low));
@@ -132,20 +137,18 @@ export function supportResistance(candles: Candle[]): SupportResistanceSnapshot 
     recent.map((candle) => candle.low),
     clusterSize,
     "support",
+    current,
   );
   const resistanceLevels = clusterLevels(
     recent.map((candle) => candle.high),
     clusterSize,
     "resistance",
+    current,
   );
 
   return {
-    nearestSupport:
-      supportLevels.find((level) => level.price <= current)?.price ??
-      round(Math.min(...recent.map((candle) => candle.low))),
-    nearestResistance:
-      resistanceLevels.find((level) => level.price >= current)?.price ??
-      round(Math.max(...recent.map((candle) => candle.high))),
+    nearestSupport: supportLevels[0]?.price ?? null,
+    nearestResistance: resistanceLevels[0]?.price ?? null,
     swingHigh: round(swingHigh),
     swingLow: round(swingLow),
     supportLevels,
@@ -153,13 +156,28 @@ export function supportResistance(candles: Candle[]): SupportResistanceSnapshot 
   };
 }
 
-export function trend(values: number[]): string {
+export function trend(values: number[]): IndicatorTrend {
   const short = ema(values, 20);
   const medium = ema(values, 50);
   const long = ema(values, 200);
+  if (short === null || medium === null || long === null) {
+    return "INSUFFICIENT_DATA";
+  }
   if (short > medium && medium > long) return "UPTREND";
   if (short < medium && medium < long) return "DOWNTREND";
   return "SIDEWAY_OR_MIXED";
+}
+
+export function indicatorReadiness(values: number[], candles: Candle[]): IndicatorReadiness {
+  const clean = values.filter(Number.isFinite);
+  return {
+    ema20: clean.length >= 20,
+    ema50: clean.length >= 50,
+    ema200: clean.length >= 200,
+    rsi14: clean.length > 14,
+    atr14: candles.length >= 15,
+    macd: clean.length >= 35,
+  };
 }
 
 export function round(value: number, digits = 4): number {
@@ -171,6 +189,7 @@ function clusterLevels(
   prices: number[],
   clusterSize: number,
   mode: "support" | "resistance",
+  current: number,
 ): SupportResistanceLevel[] {
   const sorted = prices.filter(Number.isFinite).sort((a, b) => a - b);
   const clusters: number[][] = [];
@@ -192,6 +211,9 @@ function clusterLevels(
       strength: strengthLabel(cluster.length),
     }))
     .filter((level) => level.touches >= 2)
+    .filter((level) =>
+      mode === "support" ? level.price <= current : level.price >= current,
+    )
     .sort((left, right) =>
       mode === "support" ? right.price - left.price : left.price - right.price,
     )
@@ -207,8 +229,4 @@ function strengthLabel(touches: number): SupportResistanceLevel["strength"] {
 function average(values: number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
-}
-
-function lastOrZero(values: number[]): number {
-  return values.at(-1) ?? 0;
 }

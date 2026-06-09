@@ -5,18 +5,22 @@
     <div class="kv">
       <div class="kv-row">
         <span>Vùng entry đề xuất</span>
-        <strong>{{ formatLevel(result.entry_zone.from) }} - {{ formatLevel(result.entry_zone.to) }}</strong>
+        <strong>{{ formatEntryZone }}</strong>
       </div>
       <div class="kv-row">
         <span>Stop loss</span><strong>{{ formatLevel(result.stop_loss) }}</strong>
       </div>
-      <p class="muted">{{ result.stop_loss_reason || "Không có SL vì chưa có setup giao dịch hợp lệ." }}</p>
+      <p class="muted">
+        {{ result.stop_loss_reason || "Không có SL vì chưa có setup giao dịch hợp lệ." }}
+      </p>
       <div class="kv-row">
         <span>Take profit</span><strong>{{ formatLevel(result.take_profit) }}</strong>
       </div>
-      <p class="muted">{{ result.take_profit_reason || "Không có TP vì chưa có setup giao dịch hợp lệ." }}</p>
+      <p class="muted">
+        {{ result.take_profit_reason || "Không có TP vì chưa có setup giao dịch hợp lệ." }}
+      </p>
       <div class="kv-row">
-        <span>Risk reward</span><strong>{{ result.risk_reward }}</strong>
+        <span>Risk reward</span><strong>{{ result.risk_reward ?? "Không áp dụng" }}</strong>
       </div>
       <div class="kv-row">
         <span>Lot gợi ý</span>
@@ -24,7 +28,7 @@
       </div>
       <div class="kv-row">
         <span>Thời gian giữ dự kiến</span>
-        <strong>{{ result.expected_holding_time }}</strong>
+        <strong>{{ result.expected_holding_time ?? "Không áp dụng" }}</strong>
       </div>
       <div class="kv-row">
         <span>Vốn hiện tại</span>
@@ -39,7 +43,7 @@
       </div>
       <div class="kv-row">
         <span>Lỗ ước tính nếu chạm SL</span>
-        <strong>${{ result.position_sizing.estimated_loss_if_sl_hit }}</strong>
+        <strong>{{ formatUsd(result.position_sizing.estimated_loss_if_sl_hit) }}</strong>
       </div>
       <p class="muted">{{ result.position_sizing.position_sizing_explanation }}</p>
     </div>
@@ -49,15 +53,29 @@
 <script setup lang="ts">
 import type { AiTradeRecommendation } from "~/types/ai";
 
-defineProps<{ result: AiTradeRecommendation }>();
+const props = defineProps<{ result: AiTradeRecommendation }>();
 
-function formatLevel(value: number): string {
-  return Number.isFinite(value) && value > 0 ? value.toFixed(2) : "Không áp dụng";
+const formatEntryZone = computed(() =>
+  props.result.entry_zone
+    ? `${formatLevel(props.result.entry_zone.from)} - ${formatLevel(props.result.entry_zone.to)}`
+    : "Không áp dụng",
+);
+
+function formatLevel(value: number | null): string {
+  return value !== null && Number.isFinite(value) && value > 0
+    ? value.toFixed(2)
+    : "Không áp dụng";
 }
 
-function formatLot(value: number): string {
-  return Number.isFinite(value) && value > 0
+function formatLot(value: number | null): string {
+  return value !== null && Number.isFinite(value) && value > 0
     ? `${value.toFixed(2)} lot`
     : "Không vào lệnh";
+}
+
+function formatUsd(value: number | null): string {
+  return value !== null && Number.isFinite(value)
+    ? `$${value.toFixed(2)}`
+    : "Không áp dụng";
 }
 </script>

@@ -1,6 +1,7 @@
 export const tradingRules = {
   defaultAccountSizeUsd: 70,
-  maxLossPercentPerTrade: 30,
+  maxLossPercentPerTrade: 15,
+  maxDailyLossPercent: 15,
   minConfidence: 70,
   minRiskReward: 1.5,
   maxHoldingMinutes: 60,

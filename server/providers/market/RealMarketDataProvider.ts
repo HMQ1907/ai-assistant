@@ -1,19 +1,26 @@
 import type {
   Candle,
   DataQuality,
+  IndicatorReadiness,
   MarketSnapshot,
   SymbolCode,
   Timeframe,
 } from "../../../types/trading";
 import { TIMEFRAMES } from "../../../types/trading";
+import {
+  buildTimeframeQuality,
+  marketCandleRequestCount,
+  parseProviderCandles,
+  parseProviderTimestamp,
+} from "../../utils/marketDiagnostics";
 import type {
   MarketDataCollection,
   MarketDataProvider,
 } from "./MarketDataProvider";
 
-const candleOutputSize = "250";
+const candleOutputSize = String(marketCandleRequestCount);
 const minimumCandlesForHighQuality = 200;
-const duplicatePriceTolerance = 0.0001;
+const maxQuoteAgeSeconds = 180;
 
 const timeframeIntervals: Record<Timeframe, string> = {
   M5: "5min",
@@ -26,17 +33,9 @@ const twelveDataSymbols: Record<SymbolCode, string> = {
   XAUUSD: "XAU/USD",
 };
 
-const minimumRangeByTimeframe: Record<Timeframe, number> = {
-  M5: 0.1,
-  M15: 0.2,
-  H1: 0.5,
-  H4: 0.5,
-};
-
 interface TimeSeriesResult {
   candles: Candle[];
-  filteredOut: number;
-  warnings: string[];
+  diagnostics: ReturnType<typeof parseProviderCandles>["diagnostics"];
 }
 
 interface TwelveDataTimeSeriesResponse {
@@ -69,6 +68,8 @@ export class RealMarketDataProvider implements MarketDataProvider {
     private readonly options: {
       apiKey: string;
       baseUrl: string;
+      maxQuoteAgeSeconds?: number;
+      debug?: boolean;
     },
   ) {
     if (!options.apiKey) {
@@ -124,14 +125,18 @@ export class RealMarketDataProvider implements MarketDataProvider {
   private async getSnapshot(symbol: SymbolCode): Promise<MarketSnapshot> {
     const providerSymbol = twelveDataSymbols[symbol];
     const warnings: string[] = [];
+    const informationalDiagnostics: string[] = [];
+    const criticalErrors: string[] = [];
     const candles = {} as Record<Timeframe, Candle[]>;
     const filteredCandles: Partial<Record<Timeframe, number>> = {};
+    const candleDiagnostics = {} as MarketSnapshot["candle_diagnostics"];
+    const timeframeQuality = {} as MarketSnapshot["timeframe_quality"];
 
     for (const timeframe of TIMEFRAMES) {
       const series = await this.getTimeSeries(providerSymbol, timeframe);
       candles[timeframe] = series.candles;
-      filteredCandles[timeframe] = series.filteredOut;
-      warnings.push(...series.warnings);
+      filteredCandles[timeframe] = series.diagnostics.filteredCount;
+      candleDiagnostics[timeframe] = series.diagnostics;
 
       if (series.candles.length === 0) {
         throw new Error(`${timeframe} không có candles thật từ provider.`);
@@ -139,6 +144,11 @@ export class RealMarketDataProvider implements MarketDataProvider {
       if (series.candles.length < minimumCandlesForHighQuality) {
         warnings.push(
           `${timeframe} chỉ có ${series.candles.length} candles, cần tối thiểu ${minimumCandlesForHighQuality}.`,
+        );
+      }
+      if (series.diagnostics.filteredCount > 0) {
+        informationalDiagnostics.push(
+          `${timeframe}: đã loại ${series.diagnostics.filteredCount}/${series.diagnostics.receivedCount} candle. Lý do: ${formatReasons(series.diagnostics.reasons)}.`,
         );
       }
     }
@@ -149,29 +159,82 @@ export class RealMarketDataProvider implements MarketDataProvider {
 
     let bid = parseNumber(quote.bid);
     let ask = parseNumber(quote.ask);
-    let spread = 0.3;
-    if (bid === undefined || ask === undefined || ask <= bid) {
-      bid = price;
-      ask = price + spread;
+    let spread: number | null = null;
+    let bidAskStatus: MarketSnapshot["bidAskStatus"] = "UNAVAILABLE";
+    if (bid !== undefined && ask !== undefined && ask > bid) {
+      spread = Number((ask - bid).toFixed(6));
+      bidAskStatus = "AVAILABLE";
+    } else if (bid !== undefined || ask !== undefined) {
+      bidAskStatus = "INVALID";
+      warnings.push("Bid/ask provider không hợp lệ, không tự dựng spread.");
     } else {
-      spread = ask - bid;
+      warnings.push("Provider không trả bid/ask thật, không tự dựng spread.");
+    }
+
+    const providerFetchedAt = new Date().toISOString();
+    const quoteTime = parseProviderTimestamp(quote.datetime);
+    const quoteAgeSeconds = quoteTime
+      ? Math.max(0, Math.round((Date.now() - new Date(quoteTime).getTime()) / 1000))
+      : null;
+    const quoteTimestampReliable = quoteTime !== null;
+    if (!quoteTimestampReliable) {
+      warnings.push("Quote timestamp không đáng tin cậy hoặc chỉ là date-only.");
+    } else if (quoteAgeSeconds !== null && quoteAgeSeconds > this.maxQuoteAgeSeconds()) {
+      warnings.push(`Quote stale ${quoteAgeSeconds}s, vượt ngưỡng ${this.maxQuoteAgeSeconds()}s.`);
+    }
+
+    const indicatorReadiness = buildBasicReadiness(candles);
+    for (const timeframe of TIMEFRAMES) {
+      timeframeQuality[timeframe] = buildTimeframeQuality(
+        timeframe,
+        candleDiagnostics[timeframe],
+        indicatorReadiness[timeframe],
+      );
+    }
+    const dataQuality = aggregateMarketQuality({
+      timeframeQuality,
+      bidAskStatus,
+      quoteTimestampReliable,
+      quoteAgeSeconds,
+      maxQuoteAgeSeconds: this.maxQuoteAgeSeconds(),
+      criticalErrors,
+    });
+
+    if (this.options.debug) {
+      console.info("[market:twelvedata]", {
+        symbol,
+        bidAskStatus,
+        quoteAgeSeconds,
+        quoteTimestampReliable,
+        timeframeQuality,
+        candleDiagnostics,
+      });
     }
 
     const snapshot: MarketSnapshot = {
       symbol,
       price,
+      bid: bidAskStatus === "AVAILABLE" ? (bid ?? null) : null,
+      ask: bidAskStatus === "AVAILABLE" ? (ask ?? null) : null,
       spread,
-      data_quality: warnings.length > 0 ? "LOW" : "HIGH",
+      bidAskStatus,
+      data_quality: dataQuality,
       data_warnings: warnings,
+      informational_diagnostics: informationalDiagnostics,
+      critical_errors: criticalErrors,
       updated_at: quote.datetime
-        ? new Date(quote.datetime).toISOString()
-        : new Date().toISOString(),
+        ? (quoteTime ?? providerFetchedAt)
+        : providerFetchedAt,
       provider: this.name,
+      providerFetchedAt,
+      providerQuoteTime: quoteTime,
+      quoteAgeSeconds,
+      quoteTimestampReliable,
       candles,
       filtered_candles: filteredCandles,
+      candle_diagnostics: candleDiagnostics,
+      timeframe_quality: timeframeQuality,
     };
-    if (bid !== undefined) snapshot.bid = bid;
-    if (ask !== undefined) snapshot.ask = ask;
     return snapshot;
   }
 
@@ -193,23 +256,17 @@ export class RealMarketDataProvider implements MarketDataProvider {
     }
     const values = json.values ?? [];
 
-    const candles = values
-      .map((item) => ({
-        time: item.datetime ? new Date(item.datetime).toISOString() : "",
-        open: Number(item.open),
-        high: Number(item.high),
-        low: Number(item.low),
-        close: Number(item.close),
-        volume: Number(item.volume ?? 0),
-      }))
-      .filter(
-        (item) =>
-          item.time &&
-          [item.open, item.high, item.low, item.close].every(Number.isFinite),
-      )
-      .reverse();
-
-    return filterProviderCandles(candles, timeframe);
+    return parseProviderCandles(
+      values.map((item) => ({
+        time: item.datetime,
+        open: item.open,
+        high: item.high,
+        low: item.low,
+        close: item.close,
+        volume: item.volume,
+      })),
+      timeframe,
+    );
   }
 
   private async getQuote(symbol: string): Promise<TwelveDataQuoteResponse> {
@@ -238,6 +295,12 @@ export class RealMarketDataProvider implements MarketDataProvider {
     if (!response.ok) throw new Error(`Provider trả HTTP ${response.status}.`);
     return (await response.json()) as T;
   }
+
+  private maxQuoteAgeSeconds(): number {
+    return Number.isFinite(this.options.maxQuoteAgeSeconds)
+      ? Math.max(1, Number(this.options.maxQuoteAgeSeconds))
+      : maxQuoteAgeSeconds;
+  }
 }
 
 function combineCollectionQuality(snapshots: MarketSnapshot[]): DataQuality {
@@ -250,70 +313,55 @@ function combineCollectionQuality(snapshots: MarketSnapshot[]): DataQuality {
 function parseNumber(value: string | undefined): number | undefined {
   if (value === undefined || value === "") return undefined;
   const number = Number(value);
-  return Number.isFinite(number) ? number : undefined;
+  return Number.isFinite(number) && number > 0 ? number : undefined;
 }
 
-function filterProviderCandles(
-  candles: Candle[],
-  timeframe: Timeframe,
-): TimeSeriesResult {
-  const minimumRange = minimumRangeByTimeframe[timeframe];
-  const filtered: Candle[] = [];
-  let filteredOut = 0;
+function formatReasons(
+  reasons: Partial<Record<string, number>>,
+): string {
+  const entries = Object.entries(reasons);
+  return entries.length
+    ? entries.map(([reason, count]) => `${reason}=${count}`).join(", ")
+    : "không có";
+}
 
-  for (const candle of candles) {
-    if (!hasValidShape(candle)) {
-      filteredOut += 1;
-      continue;
-    }
-
-    const previous = filtered.at(-1);
-    const range = candle.high - candle.low;
-    const hasFrozenRange = range < minimumRange;
-    const isRepeated = previous ? hasSameOhlc(previous, candle) : false;
-
-    if (hasFrozenRange || isRepeated) {
-      filteredOut += 1;
-      continue;
-    }
-
-    filtered.push(candle);
+function buildBasicReadiness(
+  candles: Record<Timeframe, Candle[]>,
+): Record<Timeframe, IndicatorReadiness> {
+  const result = {} as Record<Timeframe, IndicatorReadiness>;
+  for (const timeframe of TIMEFRAMES) {
+    const length = candles[timeframe].length;
+    result[timeframe] = {
+      ema20: length >= 20,
+      ema50: length >= 50,
+      ema200: length >= 200,
+      rsi14: length > 14,
+      atr14: length >= 15,
+      macd: length >= 35,
+    };
   }
-
-  const warnings =
-    filteredOut > 0
-      ? [
-          `${timeframe}: đã loại ${filteredOut}/${candles.length} candles có range bất thường hoặc bị lặp từ provider.`,
-        ]
-      : [];
-
-  return {
-    candles: filtered,
-    filteredOut,
-    warnings,
-  };
+  return result;
 }
 
-function hasValidShape(candle: Candle): boolean {
-  const tolerance = 0.0001;
-  return (
-    candle.high >= candle.low &&
-    candle.open <= candle.high + tolerance &&
-    candle.open >= candle.low - tolerance &&
-    candle.close <= candle.high + tolerance &&
-    candle.close >= candle.low - tolerance
-  );
-}
-
-function hasSameOhlc(left: Candle, right: Candle): boolean {
-  return (
-    isClose(left.open, right.open) &&
-    isClose(left.high, right.high) &&
-    isClose(left.low, right.low) &&
-    isClose(left.close, right.close)
-  );
-}
-
-function isClose(left: number, right: number): boolean {
-  return Math.abs(left - right) <= duplicatePriceTolerance;
+function aggregateMarketQuality(input: {
+  timeframeQuality: Record<Timeframe, MarketSnapshot["timeframe_quality"][Timeframe]>;
+  bidAskStatus: MarketSnapshot["bidAskStatus"];
+  quoteTimestampReliable: boolean;
+  quoteAgeSeconds: number | null;
+  maxQuoteAgeSeconds: number;
+  criticalErrors: string[];
+}): DataQuality {
+  if (
+    input.criticalErrors.length > 0 ||
+    input.bidAskStatus !== "AVAILABLE" ||
+    !input.quoteTimestampReliable ||
+    (input.quoteAgeSeconds !== null && input.quoteAgeSeconds > input.maxQuoteAgeSeconds) ||
+    Object.values(input.timeframeQuality).some((item) => item.quality === "LOW")
+  ) {
+    return "LOW";
+  }
+  if (Object.values(input.timeframeQuality).some((item) => item.quality === "MEDIUM")) {
+    return "MEDIUM";
+  }
+  return "HIGH";
 }
