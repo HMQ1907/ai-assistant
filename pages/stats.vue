@@ -131,4 +131,15 @@ async function loadStats(): Promise<void> {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+@media (max-width: 520px) {
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .stat-card strong,
+  .win-rate {
+    font-size: 26px;
+  }
+}
 </style>

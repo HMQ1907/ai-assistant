@@ -21,8 +21,8 @@
       </thead>
       <tbody>
         <tr v-for="record in records" :key="record.id">
-          <td>{{ formatTime(record.created_at) }}</td>
-          <td>
+          <td data-label="Thời gian">{{ formatTime(record.created_at) }}</td>
+          <td data-label="Khuyến nghị">
             <span
               :class="[
                 'badge',
@@ -32,14 +32,14 @@
               {{ decisionLabel(record.decision) }}
             </span>
           </td>
-          <td>{{ record.symbol }}</td>
-          <td>
+          <td data-label="Symbol">{{ record.symbol }}</td>
+          <td data-label="Hướng">
             <span :class="['direction-pill', directionClass(record.direction)]">
               {{ directionPillLabel(record.direction) }}
             </span>
           </td>
-          <td>{{ record.confidence }}%</td>
-          <td>
+          <td data-label="Độ tin cậy">{{ record.confidence }}%</td>
+          <td data-label="Kết quả">
             <select
               :value="drafts[record.id]?.result_status ?? record.result_status"
               class="select result-select"
@@ -50,7 +50,7 @@
               </option>
             </select>
           </td>
-          <td>
+          <td data-label="Entry thực tế">
             <input
               :value="numberDraft(record.id, 'actual_entry', record.actual_entry)"
               class="input compact"
@@ -59,7 +59,7 @@
               @input="setNumber(record.id, 'actual_entry', $event)"
             >
           </td>
-          <td>
+          <td data-label="Exit thực tế">
             <input
               :value="numberDraft(record.id, 'actual_exit', record.actual_exit)"
               class="input compact"
@@ -68,7 +68,7 @@
               @input="setNumber(record.id, 'actual_exit', $event)"
             >
           </td>
-          <td>
+          <td data-label="P/L">
             <input
               :value="
                 numberDraft(
@@ -83,7 +83,7 @@
               @input="setNumber(record.id, 'actual_profit_loss', $event)"
             >
           </td>
-          <td>
+          <td data-label="Ghi chú">
             <input
               :value="drafts[record.id]?.user_note ?? record.user_note"
               class="input note-input"
@@ -91,12 +91,12 @@
               @input="setNote(record.id, $event)"
             >
           </td>
-          <td>
+          <td data-label="Chi tiết">
             <button class="button small secondary" @click="emit('detail', record)">
               Chi tiết
             </button>
           </td>
-          <td>
+          <td data-label="Lưu">
             <button class="button small" @click="save(record.id)">Lưu</button>
           </td>
         </tr>
@@ -297,5 +297,69 @@ function formatTime(value: string): string {
 .direction-pill.none {
   border-color: #66717c;
   color: var(--muted);
+}
+
+@media (max-width: 820px) {
+  .history-table,
+  .history-table tbody,
+  .history-table tr,
+  .history-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .history-table {
+    border-collapse: separate;
+    border-spacing: 0 12px;
+  }
+
+  .history-table thead {
+    display: none;
+  }
+
+  .history-table tr {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.015);
+  }
+
+  .history-table td {
+    align-items: center;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    display: grid;
+    gap: 10px;
+    grid-template-columns: minmax(104px, 0.42fr) minmax(0, 1fr);
+    min-height: 48px;
+    padding: 10px 12px;
+  }
+
+  .history-table td::before {
+    color: var(--muted);
+    content: attr(data-label);
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .history-table td:last-child {
+    border-bottom: 0;
+  }
+
+  .compact,
+  .note-input,
+  .result-select {
+    min-width: 0;
+  }
+
+  .small {
+    width: 100%;
+  }
+}
+
+@media (max-width: 420px) {
+  .history-table td {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
 }
 </style>

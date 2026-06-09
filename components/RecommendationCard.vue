@@ -250,8 +250,19 @@ function formatNumber(value: number | undefined): string {
 }
 
 @media (max-width: 800px) {
+  .summary-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .price-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 460px) {
+  .price-strip {
+    grid-template-columns: 1fr;
   }
 }
 </style>

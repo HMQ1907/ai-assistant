@@ -125,4 +125,12 @@ function replaceHistoryRecord(record: AnalysisHistoryRecord): void {
 .capital-input {
   width: 100%;
 }
+
+@media (max-width: 760px) {
+  .action-panel {
+    justify-items: stretch;
+    min-width: 0;
+    width: 100%;
+  }
+}
 </style>
