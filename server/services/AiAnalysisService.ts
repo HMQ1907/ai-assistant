@@ -74,6 +74,7 @@ export class AiAnalysisService {
       throw new Error("Chưa cấu hình Evolink API key.");
     }
 
+    console.info("[ai:payload]", JSON.stringify(payload, null, 2));
     const prompt = buildTradingAnalysisPrompt(payload);
     const raw = await this.callWithRetry(prompt);
     const parsed = this.parseOrNoTrade(raw, payload);

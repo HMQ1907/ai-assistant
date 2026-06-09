@@ -191,7 +191,7 @@ const bidAskStatusLabel = computed(() => {
   const status = currentMarket.value?.bidAskStatus;
   if (status === "AVAILABLE") return "Có bid/ask thật";
   if (status === "INVALID") return "Bid/ask không hợp lệ";
-  if (status === "UNAVAILABLE") return "Không có bid/ask";
+  if (status === "UNAVAILABLE") return "Bid/Ask không khả dụng";
   return "Không rõ";
 });
 const quoteAgeLabel = computed(() => {

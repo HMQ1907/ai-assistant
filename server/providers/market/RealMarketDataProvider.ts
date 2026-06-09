@@ -94,7 +94,7 @@ export class RealMarketDataProvider implements MarketDataProvider {
         const snapshot = await this.getSnapshot(symbol);
         if (snapshot.data_quality === "LOW") {
           warnings.push(
-            `${symbol}: dữ liệu candle không đủ (${snapshot.data_warnings.join("; ")}), AI sẽ trả NO_TRADE.`,
+            `${symbol}: dữ liệu thị trường bị đánh dấu LOW (${snapshot.data_warnings.join("; ")}).`,
           );
         }
         snapshots.push(snapshot);
@@ -356,14 +356,16 @@ function aggregateMarketQuality(input: {
 }): DataQuality {
   if (
     input.criticalErrors.length > 0 ||
-    input.bidAskStatus !== "AVAILABLE" ||
-    !input.quoteTimestampReliable ||
-    (input.quoteAgeSeconds !== null && input.quoteAgeSeconds > input.maxQuoteAgeSeconds) ||
     Object.values(input.timeframeQuality).some((item) => item.quality === "LOW")
   ) {
     return "LOW";
   }
-  if (Object.values(input.timeframeQuality).some((item) => item.quality === "MEDIUM")) {
+  if (
+    input.bidAskStatus !== "AVAILABLE" ||
+    !input.quoteTimestampReliable ||
+    (input.quoteAgeSeconds !== null && input.quoteAgeSeconds > input.maxQuoteAgeSeconds) ||
+    Object.values(input.timeframeQuality).some((item) => item.quality === "MEDIUM")
+  ) {
     return "MEDIUM";
   }
   return "HIGH";

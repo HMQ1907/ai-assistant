@@ -12,6 +12,7 @@ export class TradeValidationService {
     if (recommendation.decision === "NO_TRADE") {
       return this.normalizeNoTrade(recommendation, payload);
     }
+    this.applyQuoteQualityAdjustment(recommendation, payload);
     const reasons = this.findInvalidReasons(recommendation, payload);
 
     if (payload) {
@@ -238,10 +239,6 @@ export class TradeValidationService {
       reasons.push("XAUUSD có data_quality LOW");
     }
 
-    if (selectedSymbol && selectedSymbol.market.bidAskStatus !== "AVAILABLE") {
-      reasons.push("XAUUSD không có bid/ask thật từ provider");
-    }
-
     if (selectedSymbol && selectedSymbol.market.spread !== null) {
       const spreadPercent =
         (selectedSymbol.market.spread /
@@ -331,6 +328,36 @@ export class TradeValidationService {
       ).toFixed(6),
     );
   }
+
+  private applyQuoteQualityAdjustment(
+    recommendation: AiTradeRecommendation,
+    payload?: AnalysisPayload,
+  ): void {
+    const selectedSymbol = payload?.symbols.find(
+      (item) => item.market.symbol === "XAUUSD",
+    );
+    if (
+      !selectedSymbol ||
+      selectedSymbol.market.bidAskStatus === "AVAILABLE" ||
+      !canAnalyzeWithoutBidAsk(selectedSymbol)
+    ) {
+      return;
+    }
+
+    recommendation.confidence = Math.max(0, recommendation.confidence - 10);
+    const warning =
+      "Lưu ý: provider không trả bid/ask/spread thật, phân tích dựa trên giá quote và dữ liệu nến sạch; độ tin cậy đã giảm 10 điểm.";
+    recommendation.market_context = appendSentence(
+      recommendation.market_context,
+      warning,
+    );
+    recommendation.risk_factors = Array.from(
+      new Set([
+        ...recommendation.risk_factors,
+        "Quote quality: thiếu bid/ask/spread thật từ provider, cần kiểm tra spread trên sàn trước khi tự vào lệnh.",
+      ]),
+    );
+  }
 }
 
 function confidenceRiskMultiplier(confidence: number): number {
@@ -345,4 +372,23 @@ function floorToStep(value: number, step: number): number {
 
 function isFinitePositive(value: number | null | undefined): value is number {
   return value !== null && value !== undefined && Number.isFinite(value) && value > 0;
+}
+
+type PayloadSymbol = AnalysisPayload["symbols"][number];
+
+function canAnalyzeWithoutBidAsk(symbol: PayloadSymbol): boolean {
+  if (symbol.market.bidAskStatus === "AVAILABLE") return false;
+  if (symbol.market.data_quality === "LOW") return false;
+  if (symbol.market.price <= 0) return false;
+
+  return Object.values(symbol.market.timeframe_quality).every(
+    (item) =>
+      item.quality !== "LOW" &&
+      item.validCandleCount >= item.requiredCandleCount &&
+      Object.values(item.indicatorReadiness).every(Boolean),
+  );
+}
+
+function appendSentence(text: string, sentence: string): string {
+  return text.includes(sentence) ? text : `${text} ${sentence}`.trim();
 }
