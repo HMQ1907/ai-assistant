@@ -175,6 +175,7 @@ function sanitizeErrorBody(value: string): string {
 
 function normalizeModel(value: string): string {
   if (value === "gemini-3-5-flash") return "gemini-3.5-flash";
+  if (value === "claude-opus-4.8") return "claude-opus-4-8";
   return value;
 }
 

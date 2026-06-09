@@ -11,6 +11,9 @@ import type {
   MarketDataProvider,
 } from "./MarketDataProvider";
 
+const candleOutputSize = "250";
+const minimumCandlesForHighQuality = 200;
+
 const timeframeIntervals: Record<Timeframe, string> = {
   M5: "5min",
   M15: "15min",
@@ -112,18 +115,12 @@ export class RealMarketDataProvider implements MarketDataProvider {
     for (const timeframe of TIMEFRAMES) {
       const series = await this.getTimeSeries(providerSymbol, timeframe);
       candles[timeframe] = series;
-      if (
-        (timeframe === "M5" || timeframe === "M15" || timeframe === "H1") &&
-        series.length === 0
-      ) {
+      if (series.length === 0) {
         throw new Error(`${timeframe} không có candles thật từ provider.`);
       }
-      if (
-        (timeframe === "M5" || timeframe === "M15" || timeframe === "H1") &&
-        series.length < 100
-      ) {
+      if (series.length < minimumCandlesForHighQuality) {
         warnings.push(
-          `${timeframe} chỉ có ${series.length} candles, cần tối thiểu 100.`,
+          `${timeframe} chỉ có ${series.length} candles, cần tối thiểu ${minimumCandlesForHighQuality}.`,
         );
       }
     }
@@ -166,7 +163,7 @@ export class RealMarketDataProvider implements MarketDataProvider {
     const url = this.url("/time_series", {
       symbol,
       interval: timeframeIntervals[timeframe],
-      outputsize: "120",
+      outputsize: candleOutputSize,
       apikey: this.options.apiKey,
     });
     const json = await this.fetchJson<TwelveDataTimeSeriesResponse>(url);

@@ -29,7 +29,7 @@ Các biến cần cấu hình:
 
 ```bash
 EVOLINK_API_KEY=
-EVOLINK_MODEL=claude-opus-4.8
+EVOLINK_MODEL=claude-opus-4-8
 EVOLINK_BASE_URL=https://api.evolink.ai/v1/chat/completions
 AI_TIMEOUT_MS=90000
 
