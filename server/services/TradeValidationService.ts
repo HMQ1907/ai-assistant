@@ -8,7 +8,18 @@ export class TradeValidationService {
     recommendation: AiTradeRecommendation,
     payload?: AnalysisPayload,
   ): AiTradeRecommendation {
+    this.normalizeSizing(recommendation, payload);
     const reasons = this.findInvalidReasons(recommendation, payload);
+
+    if (payload) {
+      const selectedSymbol = payload.symbols.find(
+        (item) => item.market.symbol === "XAUUSD",
+      );
+      if (selectedSymbol) {
+        recommendation.current_price = selectedSymbol.market.price;
+      }
+    }
+
     if (reasons.length === 0) return recommendation;
 
     const invalidConditions = Array.from(
@@ -27,6 +38,59 @@ export class TradeValidationService {
     };
   }
 
+  private normalizeSizing(
+    recommendation: AiTradeRecommendation,
+    payload?: AnalysisPayload,
+  ): void {
+    if (!payload) return;
+    recommendation.position_sizing.account_size_usd = payload.accountSizeUsd;
+    recommendation.position_sizing.max_loss_usd = payload.maxLossUsdPerTrade;
+    recommendation.position_sizing.max_loss_percent =
+      payload.maxLossPercentPerTrade;
+
+    if (recommendation.decision !== "TRADE") {
+      recommendation.position_sizing.suggested_lot = 0;
+      recommendation.position_sizing.estimated_loss_if_sl_hit = 0;
+      return;
+    }
+
+    const entry = this.averageEntry(recommendation);
+    if (!isFinitePositive(entry) || !isFinitePositive(recommendation.stop_loss)) {
+      recommendation.position_sizing.suggested_lot = 0;
+      recommendation.position_sizing.estimated_loss_if_sl_hit = 0;
+      return;
+    }
+
+    const distance = Math.abs(entry - recommendation.stop_loss);
+    if (distance <= 0) {
+      recommendation.position_sizing.suggested_lot = 0;
+      recommendation.position_sizing.estimated_loss_if_sl_hit = 0;
+      return;
+    }
+
+    const maxLossUsd = payload.maxLossUsdPerTrade;
+    const riskMultiplier = confidenceRiskMultiplier(recommendation.confidence);
+    const targetLossUsd = maxLossUsd * riskMultiplier;
+    const rawLot =
+      targetLossUsd / (distance * tradingRules.xauUsdOuncesPerLot);
+    const lot = floorToStep(rawLot, tradingRules.lotStep);
+    const suggestedLot = lot >= tradingRules.minLot ? lot : 0;
+    const estimatedLoss = Number(
+      (
+        suggestedLot *
+        distance *
+        tradingRules.xauUsdOuncesPerLot
+      ).toFixed(2),
+    );
+
+    recommendation.position_sizing.suggested_lot = suggestedLot;
+    recommendation.position_sizing.estimated_loss_if_sl_hit = estimatedLoss;
+    recommendation.position_sizing.position_sizing_explanation =
+      suggestedLot > 0
+        ? `Lot gợi ý: ${suggestedLot.toFixed(2)} lot. Công thức XAUUSD: lot * khoảng cách Entry-SL (${distance.toFixed(2)} USD) * 100 oz = khoảng $${estimatedLoss} nếu chạm SL. Giới hạn lỗ hiện tại là ${payload.maxLossPercentPerTrade}% vốn ($${maxLossUsd}).`
+        : `Không gợi ý lot vì với khoảng cách Entry-SL ${distance.toFixed(2)} USD, lot tối thiểu ${tradingRules.minLot.toFixed(2)} có thể không phù hợp với giới hạn lỗ hoặc setup chưa đủ điều kiện.`;
+  }
+
   private findInvalidReasons(
     recommendation: AiTradeRecommendation,
     payload?: AnalysisPayload,
@@ -37,6 +101,8 @@ export class TradeValidationService {
     const selectedSymbol = payload?.symbols.find(
       (item) => item.market.symbol === "XAUUSD",
     );
+    const maxLossUsd =
+      payload?.maxLossUsdPerTrade ?? recommendation.position_sizing.max_loss_usd;
 
     if (recommendation.symbol !== "XAUUSD") {
       reasons.push("AI trả symbol khác XAUUSD");
@@ -54,48 +120,55 @@ export class TradeValidationService {
       );
     }
 
+    if (recommendation.position_sizing.estimated_loss_if_sl_hit > maxLossUsd) {
+      reasons.push(
+        `estimated_loss_if_sl_hit ${recommendation.position_sizing.estimated_loss_if_sl_hit} USD vượt giới hạn ${maxLossUsd} USD`,
+      );
+    }
+
+    if (
+      recommendation.decision === "TRADE" &&
+      recommendation.position_sizing.suggested_lot < tradingRules.minLot
+    ) {
+      reasons.push(
+        `TRADE nhưng suggested_lot thấp hơn lot tối thiểu ${tradingRules.minLot.toFixed(2)}`,
+      );
+    }
+
     if (isFinitePositive(entry) && isFinitePositive(recommendation.stop_loss)) {
       const distance = Math.abs(entry - recommendation.stop_loss);
-      if (distance > 0) {
-        // 1 lot XAUUSD = 100 ounces
-        const minLotLoss = 0.01 * distance * 100;
-        if (minLotLoss > tradingRules.maxLossUsdPerTrade) {
-          reasons.push(
-            `Khoảng cách SL (${distance.toFixed(2)} USD) quá xa. Kể cả với volume nhỏ nhất (0.01 lot), mức lỗ dự kiến sẽ là $${minLotLoss.toFixed(2)} USD, vượt quá giới hạn $${tradingRules.maxLossUsdPerTrade} USD.`
-          );
-        } else {
-          const calculatedLot = tradingRules.maxLossUsdPerTrade / (distance * 100);
-          let lotSize = Number(calculatedLot.toFixed(2));
-          let realLoss = Number((lotSize * distance * 100).toFixed(2));
-          if (realLoss > tradingRules.maxLossUsdPerTrade) {
-            lotSize = Number((Math.floor(calculatedLot * 100) / 100).toFixed(2));
-            realLoss = Number((lotSize * distance * 100).toFixed(2));
-          }
-
-          // Ghi đè thông tin chính xác toán học
-          recommendation.position_sizing.estimated_loss_if_sl_hit = realLoss;
-          recommendation.position_sizing.position_sizing_explanation = 
-            `Volume khuyến nghị: ${lotSize} lot (1 lot = 100 oz). Mức lỗ thực tế khi chạm SL (${recommendation.stop_loss}) tại Entry TB (${entry.toFixed(2)}) là $${realLoss} USD (tối đa cho phép: $${tradingRules.maxLossUsdPerTrade} USD).`;
-        }
+      const minLotLoss =
+        tradingRules.minLot * distance * tradingRules.xauUsdOuncesPerLot;
+      if (recommendation.decision === "TRADE" && minLotLoss > maxLossUsd) {
+        reasons.push(
+          `Khoảng cách SL (${distance.toFixed(2)} USD) quá xa. Với lot tối thiểu ${tradingRules.minLot.toFixed(2)}, mức lỗ dự kiến là $${minLotLoss.toFixed(2)}, vượt giới hạn $${maxLossUsd}.`,
+        );
       }
     } else {
-      reasons.push("Giá trị entry hoặc stop_loss không hợp lệ để tính toán volume");
-    }
-    if (
-      recommendation.position_sizing.account_size_usd !==
-      tradingRules.accountSizeUsd
-    ) {
       reasons.push(
-        `account_size_usd ${recommendation.position_sizing.account_size_usd} khác cấu hình ${tradingRules.accountSizeUsd}`,
+        "Giá trị entry hoặc stop_loss không hợp lệ để tính toán volume",
       );
     }
-    if (
-      recommendation.position_sizing.max_loss_usd !==
-      tradingRules.maxLossUsdPerTrade
-    ) {
-      reasons.push(
-        `max_loss_usd ${recommendation.position_sizing.max_loss_usd} khác cấu hình ${tradingRules.maxLossUsdPerTrade}`,
-      );
+
+    if (payload) {
+      if (recommendation.position_sizing.account_size_usd !== payload.accountSizeUsd) {
+        reasons.push(
+          `account_size_usd ${recommendation.position_sizing.account_size_usd} khác vốn hiện tại ${payload.accountSizeUsd}`,
+        );
+      }
+      if (recommendation.position_sizing.max_loss_usd !== payload.maxLossUsdPerTrade) {
+        reasons.push(
+          `max_loss_usd ${recommendation.position_sizing.max_loss_usd} khác giới hạn ${payload.maxLossUsdPerTrade}`,
+        );
+      }
+      if (
+        recommendation.position_sizing.max_loss_percent !==
+        payload.maxLossPercentPerTrade
+      ) {
+        reasons.push(
+          `max_loss_percent ${recommendation.position_sizing.max_loss_percent} khác giới hạn ${payload.maxLossPercentPerTrade}`,
+        );
+      }
     }
 
     if (payload?.dataQuality === "LOW") {
@@ -153,17 +226,21 @@ export class TradeValidationService {
     }
 
     if (recommendation.direction === "BUY") {
-      if (recommendation.stop_loss >= entry)
+      if (recommendation.stop_loss >= entry) {
         reasons.push("BUY có stop_loss lớn hơn hoặc bằng entry");
-      if (recommendation.take_profit <= entry)
+      }
+      if (recommendation.take_profit <= entry) {
         reasons.push("BUY có take_profit nhỏ hơn hoặc bằng entry");
+      }
     }
 
     if (recommendation.direction === "SELL") {
-      if (recommendation.stop_loss <= entry)
+      if (recommendation.stop_loss <= entry) {
         reasons.push("SELL có stop_loss nhỏ hơn hoặc bằng entry");
-      if (recommendation.take_profit >= entry)
+      }
+      if (recommendation.take_profit >= entry) {
         reasons.push("SELL có take_profit lớn hơn hoặc bằng entry");
+      }
     }
 
     return reasons;
@@ -177,6 +254,16 @@ export class TradeValidationService {
       ).toFixed(6),
     );
   }
+}
+
+function confidenceRiskMultiplier(confidence: number): number {
+  if (confidence >= 90) return 1;
+  if (confidence >= 80) return 0.75;
+  return 0.5;
+}
+
+function floorToStep(value: number, step: number): number {
+  return Number((Math.floor(value / step) * step).toFixed(2));
 }
 
 function isFinitePositive(value: number): boolean {

@@ -55,10 +55,14 @@ export class RealMarketDataProvider implements MarketDataProvider {
     },
   ) {
     if (!options.apiKey) {
-      throw new Error("Chưa cấu hình MARKET_DATA_API_KEY cho dữ liệu thị trường thật.");
+      throw new Error(
+        "Chưa cấu hình MARKET_DATA_API_KEY cho dữ liệu thị trường thật.",
+      );
     }
     if (!options.baseUrl) {
-      throw new Error("Chưa cấu hình MARKET_DATA_BASE_URL cho dữ liệu thị trường thật.");
+      throw new Error(
+        "Chưa cấu hình MARKET_DATA_BASE_URL cho dữ liệu thị trường thật.",
+      );
     }
   }
 
@@ -70,8 +74,6 @@ export class RealMarketDataProvider implements MarketDataProvider {
     for (const symbol of symbols) {
       try {
         const snapshot = await this.getSnapshot(symbol);
-        // Vẫn đưa vào snapshots dù LOW quality; TradeValidationService sẽ
-        // tự force NO_TRADE. Provider chỉ throw khi thiếu dữ liệu thật bắt buộc.
         if (snapshot.data_quality === "LOW") {
           warnings.push(
             `${symbol}: dữ liệu candle không đủ (${snapshot.data_warnings.join("; ")}), AI sẽ trả NO_TRADE.`,
@@ -130,12 +132,15 @@ export class RealMarketDataProvider implements MarketDataProvider {
     const price = parseNumber(quote.close);
     if (!price) throw new Error("Không có giá realtime hợp lệ từ quote.");
 
-    const bid = parseNumber(quote.bid);
-    const ask = parseNumber(quote.ask);
+    let bid = parseNumber(quote.bid);
+    let ask = parseNumber(quote.ask);
+    let spread = 0.3;
     if (bid === undefined || ask === undefined || ask <= bid) {
-      throw new Error("Provider không trả bid/ask/spread hợp lệ.");
+      bid = price;
+      ask = price + spread;
+    } else {
+      spread = ask - bid;
     }
-    const spread = ask - bid;
 
     const snapshot: MarketSnapshot = {
       symbol,
@@ -165,10 +170,11 @@ export class RealMarketDataProvider implements MarketDataProvider {
       apikey: this.options.apiKey,
     });
     const json = await this.fetchJson<TwelveDataTimeSeriesResponse>(url);
-    if (json.status === "error")
+    if (json.status === "error") {
       throw new Error(
         json.message || `Twelve Data không hỗ trợ ${symbol} ${timeframe}.`,
       );
+    }
     const values = json.values ?? [];
 
     return values
@@ -195,15 +201,17 @@ export class RealMarketDataProvider implements MarketDataProvider {
         apikey: this.options.apiKey,
       }),
     );
-    if (json.status === "error")
+    if (json.status === "error") {
       throw new Error(json.message || `Không lấy được quote cho ${symbol}.`);
+    }
     return json;
   }
 
   private url(path: string, params: Record<string, string>): string {
     const url = new URL(path, this.options.baseUrl);
-    for (const [key, value] of Object.entries(params))
+    for (const [key, value] of Object.entries(params)) {
       url.searchParams.set(key, value);
+    }
     return url.toString();
   }
 
@@ -215,8 +223,9 @@ export class RealMarketDataProvider implements MarketDataProvider {
 }
 
 function combineCollectionQuality(snapshots: MarketSnapshot[]): DataQuality {
-  if (snapshots.some((snapshot) => snapshot.data_quality === "LOW"))
+  if (snapshots.some((snapshot) => snapshot.data_quality === "LOW")) {
     return "LOW";
+  }
   return "HIGH";
 }
 

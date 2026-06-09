@@ -18,9 +18,15 @@ export interface AiTradeRecommendation {
   position_sizing: {
     account_size_usd: number;
     max_loss_usd: number;
+    max_loss_percent: number;
+    suggested_lot: number;
     estimated_loss_if_sl_hit: number;
     position_sizing_explanation: string;
   };
+  current_price: number;
+  market_context: string;
+  trade_reason: string;
+  entry_plan: string;
   summary: string;
   technical_analysis: {
     trend: string;

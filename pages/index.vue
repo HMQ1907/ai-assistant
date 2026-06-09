@@ -8,7 +8,19 @@
           chỉ đưa gợi ý giao dịch thủ công, không đặt lệnh.
         </p>
       </div>
-      <AnalyzeButton :loading="loading" @analyze="analyze" />
+      <div class="action-panel">
+        <label>
+          <span>Vốn hiện tại (USD)</span>
+          <input
+            v-model.number="accountSizeUsd"
+            class="input capital-input"
+            min="1"
+            step="1"
+            type="number"
+          />
+        </label>
+        <AnalyzeButton :loading="loading" @analyze="analyze" />
+      </div>
     </div>
 
     <div v-if="error" class="card">
@@ -18,9 +30,9 @@
 
     <div v-if="loading" class="card">
       <strong>
-        Đang lấy dữ liệu XAUUSD thật, tin tức thật và gửi AI phân tích...
+        Đang lấy dữ liệu XAUUSD, tin tức và gửi AI phân tích...
       </strong>
-      <p class="muted">Quá trình này có thể mất 60-120 giây tùy provider.</p>
+      <p class="muted">Quá trình này có thể mất 60-120 giây.</p>
     </div>
 
     <RecommendationCard
@@ -30,6 +42,7 @@
     />
 
     <AnalysisHistoryTable
+      v-if="hasAnalyzed"
       :records="history"
       class="history-block"
       @updated="replaceHistoryRecord"
@@ -45,21 +58,25 @@ const loading = ref(false);
 const error = ref("");
 const result = ref<AiTradeRecommendation | null>(null);
 const history = ref<AnalysisHistoryRecord[]>([]);
+const hasAnalyzed = ref(false);
+const accountSizeUsd = ref(70);
 const latestHistory = computed(() =>
   result.value ? (history.value[0] ?? null) : null,
 );
 
-onMounted(loadHistory);
-
 async function analyze(): Promise<void> {
   loading.value = true;
   error.value = "";
+  hasAnalyzed.value = true;
   try {
     const response = await $fetch<{
       result: AiTradeRecommendation;
       history: AnalysisHistoryRecord;
     }>("/api/analyze", {
       method: "POST",
+      body: {
+        accountSizeUsd: normalizeAccountSize(accountSizeUsd.value),
+      },
     });
     result.value = response.result;
     history.value = [
@@ -67,14 +84,15 @@ async function analyze(): Promise<void> {
       ...history.value.filter((record) => record.id !== response.history.id),
     ];
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : "Lỗi không xác định";
+    error.value =
+      caught instanceof Error ? caught.message : "Lỗi không xác định";
   } finally {
     loading.value = false;
   }
 }
 
-async function loadHistory(): Promise<void> {
-  history.value = await $fetch<AnalysisHistoryRecord[]>("/api/history");
+function normalizeAccountSize(value: number): number {
+  return Number.isFinite(value) && value > 0 ? Number(value) : 70;
 }
 
 function replaceHistoryRecord(record: AnalysisHistoryRecord): void {
@@ -87,5 +105,24 @@ function replaceHistoryRecord(record: AnalysisHistoryRecord): void {
 <style scoped>
 .history-block {
   margin-top: 16px;
+}
+
+.action-panel {
+  display: grid;
+  gap: 10px;
+  justify-items: end;
+  min-width: 220px;
+}
+
+.action-panel label {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  color: #9fb4cc;
+  font-size: 13px;
+}
+
+.capital-input {
+  width: 100%;
 }
 </style>

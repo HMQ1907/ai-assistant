@@ -98,6 +98,7 @@ export interface AnalysisPayload {
   generatedAt: string;
   accountSizeUsd: number;
   maxLossUsdPerTrade: number;
+  maxLossPercentPerTrade: number;
   marketDataProvider: string;
   newsProvider: string;
   dataQuality: DataQuality;

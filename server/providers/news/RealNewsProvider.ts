@@ -5,8 +5,6 @@ import type {
 } from "../../../types/trading";
 import type { NewsProvider } from "./NewsProvider";
 
-// GNews API: https://gnews.io/docs/v4
-// Free plan: 100 req/day, works on production servers (no domain restriction)
 interface GNewsResponse {
   totalArticles?: number;
   articles?: Array<{
@@ -50,7 +48,7 @@ export class RealNewsProvider implements NewsProvider {
   async getLatestNews(): Promise<NewsSnapshot> {
     const updatedAt = new Date().toISOString();
     try {
-      const url = new URL("/v4/search", this.options.baseUrl);
+      const url = new URL("/api/v4/search", this.options.baseUrl);
       url.searchParams.set("q", query);
       url.searchParams.set("lang", "en");
       url.searchParams.set("sortby", "publishedAt");
@@ -58,11 +56,13 @@ export class RealNewsProvider implements NewsProvider {
       url.searchParams.set("apikey", this.options.apiKey);
 
       const response = await fetch(url);
-      if (!response.ok)
+      if (!response.ok) {
         throw new Error(`Provider tin tức trả HTTP ${response.status}.`);
+      }
       const json = (await response.json()) as GNewsResponse;
-      if (json.errors?.length)
+      if (json.errors?.length) {
         throw new Error(json.errors[0] ?? "Provider tin tức trả lỗi.");
+      }
 
       const items = (json.articles ?? []).flatMap((article): NewsItem[] => {
         if (!article.title || !article.publishedAt) return [];
@@ -92,7 +92,9 @@ export class RealNewsProvider implements NewsProvider {
       };
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "Không lấy được tin tức thật.";
+        error instanceof Error
+          ? error.message
+          : "Không lấy được tin tức thật.";
       console.warn(`[news:${this.name}] ${message}`);
       return {
         items: [],

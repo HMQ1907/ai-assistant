@@ -9,7 +9,7 @@
         <span>Động lượng</span><span>{{ result.technical_analysis.momentum }}</span>
       </div>
       <div class="kv-row">
-        <span>S/R</span><span>{{ result.technical_analysis.support_resistance }}</span>
+        <span>Hỗ trợ / Kháng cự</span><span>{{ result.technical_analysis.support_resistance }}</span>
       </div>
       <div class="kv-row">
         <span>Biến động</span><span>{{ result.technical_analysis.volatility }}</span>

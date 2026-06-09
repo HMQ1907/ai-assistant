@@ -1,7 +1,6 @@
 import { z } from "zod";
 import type { AiAnalysisResult, AiTradeRecommendation } from "../../types/ai";
 import type { AnalysisPayload } from "../../types/trading";
-import { tradingRules } from "../config/tradingRules";
 import { buildTradingAnalysisPrompt } from "../prompts/trading-analysis.prompt";
 import { extractJsonObject } from "../utils/jsonParser";
 import { TradeValidationService } from "./TradeValidationService";
@@ -21,9 +20,15 @@ const recommendationSchema = z.object({
   position_sizing: z.object({
     account_size_usd: z.number(),
     max_loss_usd: z.number(),
+    max_loss_percent: z.number(),
+    suggested_lot: z.number(),
     estimated_loss_if_sl_hit: z.number(),
     position_sizing_explanation: z.string(),
   }),
+  current_price: z.number().default(0),
+  market_context: z.string().default("Chưa có bối cảnh thị trường chi tiết."),
+  trade_reason: z.string().default("Chưa có lý do vào lệnh hợp lệ."),
+  entry_plan: z.string().default("Chưa có kế hoạch entry hợp lệ."),
   summary: z.string(),
   technical_analysis: z.object({
     trend: z.string(),
@@ -79,10 +84,12 @@ export class AiAnalysisService {
         return await this.callEvolink(prompt);
       } catch (error) {
         lastError = error;
-        if (attempt < 2)
+        if (attempt < 2) {
           await new Promise((resolve) => setTimeout(resolve, 800));
+        }
       }
     }
+
     throw lastError instanceof Error
       ? lastError
       : new Error("Không gửi được yêu cầu phân tích AI.");
@@ -94,6 +101,7 @@ export class AiAnalysisService {
       () => controller.abort(),
       this.options.timeoutMs,
     );
+
     try {
       const response = await fetch(this.options.baseUrl, {
         method: "POST",
@@ -102,12 +110,12 @@ export class AiAnalysisService {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: this.options.model,
+          model: normalizeModel(this.options.model),
           messages: [
             {
               role: "system",
               content:
-                "Return strict JSON only. You analyze XAUUSD only. All user-facing content must be Vietnamese.",
+                "Return strict JSON only. You analyze XAUUSD only. All user-facing content must be written in Vietnamese. Only enum values and symbols may remain in English.",
             },
             { role: "user", content: prompt },
           ],
@@ -116,13 +124,28 @@ export class AiAnalysisService {
         }),
         signal: controller.signal,
       });
-      if (!response.ok) throw new Error(`AI trả HTTP ${response.status}.`);
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        const message = sanitizeErrorBody(errorBody);
+        console.warn(
+          `[ai:evolink] HTTP ${response.status}${message ? `: ${message}` : ""}`,
+        );
+        throw new Error(
+          message
+            ? `AI trả HTTP ${response.status}: ${message}`
+            : `AI trả HTTP ${response.status}.`,
+        );
+      }
+
       const json = (await response.json()) as {
         choices?: Array<{ message?: { content?: string } }>;
         output_text?: string;
       };
       const content = json.choices?.[0]?.message?.content ?? json.output_text;
-      if (!content) throw new Error("AI không trả nội dung phân tích.");
+      if (!content) {
+        throw new Error("AI không trả nội dung phân tích.");
+      }
       return content;
     } finally {
       clearTimeout(timeout);
@@ -146,6 +169,15 @@ export class AiAnalysisService {
   }
 }
 
+function sanitizeErrorBody(value: string): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, 500);
+}
+
+function normalizeModel(value: string): string {
+  if (value === "gemini-3-5-flash") return "gemini-3.5-flash";
+  return value;
+}
+
 function buildNoTradeRecommendation(
   payload: AnalysisPayload,
   reason: string,
@@ -164,12 +196,21 @@ function buildNoTradeRecommendation(
     expected_holding_time: "Không áp dụng",
     position_sizing: {
       account_size_usd: payload.accountSizeUsd,
-      max_loss_usd: tradingRules.maxLossUsdPerTrade,
+      max_loss_usd: payload.maxLossUsdPerTrade,
+      max_loss_percent: payload.maxLossPercentPerTrade,
+      suggested_lot: 0,
       estimated_loss_if_sl_hit: 0,
       position_sizing_explanation:
         "Không vào lệnh vì hệ thống không xác thực được phản hồi AI.",
     },
-    summary: "Không nên giao dịch vì hệ thống không xác thực được phản hồi AI.",
+    current_price: payload.symbols[0]?.market.price ?? 0,
+    market_context:
+      "Không xác thực được phản hồi AI nên không thể kết luận bối cảnh thị trường.",
+    trade_reason: "Không có lý do vào lệnh hợp lệ.",
+    entry_plan:
+      "Không đặt entry. Chỉ chạy lại phân tích sau khi kiểm tra cấu hình AI và dữ liệu provider.",
+    summary:
+      "Không nên giao dịch vì hệ thống không xác thực được phản hồi AI.",
     technical_analysis: {
       trend: "Không xác thực được phản hồi AI.",
       momentum: "Không xác thực được phản hồi AI.",

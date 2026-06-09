@@ -1,4 +1,6 @@
-import { createError } from "h3";
+import { createError, readBody } from "h3";
+import { z } from "zod";
+import { tradingRules } from "../config/tradingRules";
 import { AiAnalysisService } from "../services/AiAnalysisService";
 import { AnalysisHistoryService } from "../services/AnalysisHistoryService";
 import { IndicatorService } from "../services/IndicatorService";
@@ -7,8 +9,18 @@ import { NewsService } from "../services/NewsService";
 import { OpportunityPayloadBuilder } from "../services/OpportunityPayloadBuilder";
 import { SupabaseService } from "../services/SupabaseService";
 
-export default defineEventHandler(async () => {
+const analyzeRequestSchema = z.object({
+  accountSizeUsd: z
+    .number()
+    .positive()
+    .max(1_000_000)
+    .default(tradingRules.defaultAccountSizeUsd),
+});
+
+export default defineEventHandler(async (event) => {
   try {
+    const body = await readBody<unknown>(event);
+    const input = analyzeRequestSchema.parse(body ?? {});
     const config = useRuntimeConfig();
     const marketService = new MarketDataService({
       providerName: config.marketDataProvider,
@@ -38,7 +50,12 @@ export default defineEventHandler(async () => {
     const market = await marketService.collectAll();
     const indicators = indicatorService.calculateMany(market.snapshots);
     const news = await newsService.collect();
-    const payload = payloadBuilder.build(market, indicators, news);
+    const payload = payloadBuilder.build(
+      market,
+      indicators,
+      news,
+      input.accountSizeUsd,
+    );
     const aiResult = await aiService.analyze(payload);
     const history = await historyService.create({
       requestPayload: payload,
@@ -50,8 +67,7 @@ export default defineEventHandler(async () => {
   } catch (error) {
     throw createError({
       statusCode: 500,
-      statusMessage:
-        error instanceof Error ? error.message : "Phân tích thất bại",
+      message: error instanceof Error ? error.message : "Phân tích thất bại",
     });
   }
 });
