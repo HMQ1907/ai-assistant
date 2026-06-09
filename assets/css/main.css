@@ -32,49 +32,6 @@ a {
   min-height: 100vh;
 }
 
-.access-page {
-  display: grid;
-  min-height: 100vh;
-  place-items: center;
-  padding: 20px;
-}
-
-.access-card {
-  display: grid;
-  width: min(100%, 420px);
-  gap: 18px;
-  border: 1px solid var(--border);
-  background: var(--panel);
-  border-radius: 8px;
-  padding: 24px;
-}
-
-.access-card h1 {
-  margin: 0 0 8px;
-  font-size: 24px;
-  letter-spacing: 0;
-}
-
-.access-card p {
-  margin: 0;
-  color: var(--muted);
-}
-
-.access-field {
-  display: grid;
-  gap: 8px;
-  font-weight: 700;
-}
-
-.access-error {
-  color: var(--red);
-  font-weight: 700;
-}
-
-.access-button {
-  width: 100%;
-}
-
 .topbar {
   border-bottom: 1px solid var(--border);
   background: #121820;

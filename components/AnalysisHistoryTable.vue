@@ -10,7 +10,7 @@
           <th>Symbol</th>
           <th>Hướng</th>
           <th>Độ tin cậy</th>
-          <th>Trạng thái</th>
+          <th>Kết quả</th>
           <th>Entry thực tế</th>
           <th>Exit thực tế</th>
           <th>P/L</th>
@@ -23,17 +23,26 @@
         <tr v-for="record in records" :key="record.id">
           <td>{{ formatTime(record.created_at) }}</td>
           <td>
-            <span :class="['badge', record.decision === 'TRADE' ? 'trade' : 'no-trade']">
+            <span
+              :class="[
+                'badge',
+                record.decision === 'TRADE' ? 'trade' : 'no-trade',
+              ]"
+            >
               {{ decisionLabel(record.decision) }}
             </span>
           </td>
           <td>{{ record.symbol }}</td>
-          <td>{{ directionLabel(record.direction) }}</td>
+          <td>
+            <span :class="['direction-pill', directionClass(record.direction)]">
+              {{ directionPillLabel(record.direction) }}
+            </span>
+          </td>
           <td>{{ record.confidence }}%</td>
           <td>
             <select
               :value="drafts[record.id]?.result_status ?? record.result_status"
-              class="select"
+              class="select result-select"
               @change="setStatus(record.id, $event)"
             >
               <option v-for="status in statuses" :key="status" :value="status">
@@ -48,7 +57,7 @@
               type="number"
               step="0.00001"
               @input="setNumber(record.id, 'actual_entry', $event)"
-            />
+            >
           </td>
           <td>
             <input
@@ -57,24 +66,30 @@
               type="number"
               step="0.00001"
               @input="setNumber(record.id, 'actual_exit', $event)"
-            />
+            >
           </td>
           <td>
             <input
-              :value="numberDraft(record.id, 'actual_profit_loss', record.actual_profit_loss)"
+              :value="
+                numberDraft(
+                  record.id,
+                  'actual_profit_loss',
+                  record.actual_profit_loss,
+                )
+              "
               class="input compact"
               type="number"
               step="0.01"
               @input="setNumber(record.id, 'actual_profit_loss', $event)"
-            />
+            >
           </td>
           <td>
             <input
               :value="drafts[record.id]?.user_note ?? record.user_note"
-              class="input"
-              placeholder="Ghi chú cá nhân"
+              class="input note-input"
+              placeholder="Ghi chú"
               @input="setNote(record.id, $event)"
-            />
+            >
           </td>
           <td>
             <button class="button small secondary" @click="emit('detail', record)">
@@ -91,14 +106,19 @@
 </template>
 
 <script setup lang="ts">
-import type { AnalysisHistoryRecord, ResultStatus } from "~/types/trading";
-import { decisionLabel, directionLabel, statusLabel } from "~/utils/display";
+import type {
+  AnalysisHistoryRecord,
+  ResultStatus,
+  TradeDirection,
+} from "~/types/trading";
+import { decisionLabel, statusLabel } from "~/utils/display";
 
 const props = defineProps<{ records: AnalysisHistoryRecord[] }>();
 const emit = defineEmits<{
   updated: [record: AnalysisHistoryRecord];
   detail: [record: AnalysisHistoryRecord];
 }>();
+
 const statuses: ResultStatus[] = [
   "PENDING",
   "WIN",
@@ -146,14 +166,7 @@ async function save(id: string): Promise<void> {
 function setStatus(id: string, event: Event): void {
   const target = event.target as HTMLSelectElement | null;
   const value = target?.value;
-  if (
-    value !== "PENDING" &&
-    value !== "WIN" &&
-    value !== "LOSS" &&
-    value !== "BREAKEVEN" &&
-    value !== "SKIPPED"
-  )
-    return;
+  if (!isResultStatus(value)) return;
   drafts[id] ??= emptyDraft(value);
   drafts[id].result_status = value;
 }
@@ -171,7 +184,16 @@ function setNumber(
 ): void {
   const target = event.target as HTMLInputElement | null;
   drafts[id] ??= emptyDraft("PENDING");
-  drafts[id][key] = target?.value ? Number(target.value) : null;
+  const value = target?.value ? Number(target.value) : null;
+  drafts[id][key] = value;
+
+  if (
+    key === "actual_profit_loss" &&
+    value !== null &&
+    drafts[id].result_status === "PENDING"
+  ) {
+    drafts[id].result_status = inferStatusFromProfitLoss(value);
+  }
 }
 
 function numberDraft(
@@ -191,6 +213,34 @@ function emptyDraft(status: ResultStatus): Draft {
     actual_profit_loss: null,
     user_note: "",
   };
+}
+
+function isResultStatus(value: string | undefined): value is ResultStatus {
+  return (
+    value === "PENDING" ||
+    value === "WIN" ||
+    value === "LOSS" ||
+    value === "BREAKEVEN" ||
+    value === "SKIPPED"
+  );
+}
+
+function inferStatusFromProfitLoss(value: number): ResultStatus {
+  if (value > 0) return "WIN";
+  if (value < 0) return "LOSS";
+  return "BREAKEVEN";
+}
+
+function directionPillLabel(value: TradeDirection): string {
+  if (value === "BUY") return "Buy";
+  if (value === "SELL") return "Sell";
+  return "Không vào";
+}
+
+function directionClass(value: TradeDirection): string {
+  if (value === "BUY") return "buy";
+  if (value === "SELL") return "sell";
+  return "none";
 }
 
 function formatTime(value: string): string {
@@ -213,5 +263,39 @@ function formatTime(value: string): string {
 
 .compact {
   min-width: 92px;
+}
+
+.note-input {
+  min-width: 82px;
+}
+
+.result-select {
+  min-width: 106px;
+}
+
+.direction-pill {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  min-height: 30px;
+  padding: 4px 10px;
+}
+
+.direction-pill.buy {
+  border-color: rgba(54, 197, 138, 0.72);
+  color: var(--green);
+}
+
+.direction-pill.sell {
+  border-color: rgba(239, 107, 115, 0.72);
+  color: var(--red);
+}
+
+.direction-pill.none {
+  border-color: #66717c;
+  color: var(--muted);
 }
 </style>

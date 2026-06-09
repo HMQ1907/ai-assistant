@@ -120,6 +120,13 @@ export class AnalysisHistoryService {
     if (input.actual_profit_loss !== undefined)
       patch.actual_profit_loss = input.actual_profit_loss;
     if (input.user_note !== undefined) patch.user_note = input.user_note;
+    if (
+      patch.result_status === "PENDING" &&
+      patch.actual_profit_loss !== undefined &&
+      patch.actual_profit_loss !== null
+    ) {
+      patch.result_status = statusFromProfitLoss(patch.actual_profit_loss);
+    }
 
     const { data, error } = await this.supabase
       .from(tableName)
@@ -138,16 +145,27 @@ export class AnalysisHistoryService {
       throw new Error(`Không tải được thống kê hiệu quả: ${error.message}`);
 
     const records = (data ?? []).map(toRecord);
-    const wins = records.filter((record) => record.result_status === "WIN");
-    const losses = records.filter((record) => record.result_status === "LOSS");
+    const recordsWithEffectiveStatus = records.map((record) => ({
+      record,
+      resultStatus: effectiveResultStatus(record),
+    }));
+    const directionalRecords = records.filter(
+      (record) => record.direction === "BUY" || record.direction === "SELL",
+    );
+    const wins = recordsWithEffectiveStatus
+      .filter((item) => item.resultStatus === "WIN")
+      .map((item) => item.record);
+    const losses = recordsWithEffectiveStatus
+      .filter((item) => item.resultStatus === "LOSS")
+      .map((item) => item.record);
     const breakevens = records.filter(
-      (record) => record.result_status === "BREAKEVEN",
+      (record) => effectiveResultStatus(record) === "BREAKEVEN",
     );
     const skipped = records.filter(
-      (record) => record.result_status === "SKIPPED",
+      (record) => effectiveResultStatus(record) === "SKIPPED",
     );
-    const recordedTrades = records.filter(
-      (record) => record.result_status !== "PENDING",
+    const recordedTrades = recordsWithEffectiveStatus.filter(
+      (item) => item.resultStatus !== "PENDING",
     );
 
     return {
@@ -158,7 +176,9 @@ export class AnalysisHistoryService {
       breakevens: breakevens.length,
       skipped: skipped.length,
       winRate: percentage(wins.length, wins.length + losses.length),
-      avgConfidence: average(records.map((record) => record.confidence)),
+      avgConfidence: average(
+        directionalRecords.map((record) => record.confidence),
+      ),
       avgConfidenceOfWinners: average(wins.map((record) => record.confidence)),
       avgConfidenceOfLosers: average(losses.map((record) => record.confidence)),
       bestSymbols: symbolPerformance(records, "best"),
@@ -222,6 +242,18 @@ function stringArray(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string");
 }
 
+function effectiveResultStatus(record: AnalysisHistoryRecord): ResultStatus {
+  if (record.result_status !== "PENDING") return record.result_status;
+  if (record.actual_profit_loss === null) return "PENDING";
+  return statusFromProfitLoss(record.actual_profit_loss);
+}
+
+function statusFromProfitLoss(value: number): ResultStatus {
+  if (value > 0) return "WIN";
+  if (value < 0) return "LOSS";
+  return "BREAKEVEN";
+}
+
 function average(values: number[]): number {
   if (values.length === 0) return 0;
   return Number(
@@ -241,7 +273,8 @@ function symbolPerformance(
   const grouped = new Map<string, SymbolPerformance>();
 
   for (const record of records) {
-    if (record.result_status !== "WIN" && record.result_status !== "LOSS")
+    const resultStatus = effectiveResultStatus(record);
+    if (resultStatus !== "WIN" && resultStatus !== "LOSS")
       continue;
     const existing = grouped.get(record.symbol) ?? {
       symbol: record.symbol,
@@ -252,8 +285,8 @@ function symbolPerformance(
     };
 
     existing.trades += 1;
-    if (record.result_status === "WIN") existing.wins += 1;
-    if (record.result_status === "LOSS") existing.losses += 1;
+    if (resultStatus === "WIN") existing.wins += 1;
+    if (resultStatus === "LOSS") existing.losses += 1;
     existing.totalProfitLoss += record.actual_profit_loss ?? 0;
     grouped.set(record.symbol, existing);
   }

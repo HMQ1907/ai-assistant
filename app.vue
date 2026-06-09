@@ -2,11 +2,13 @@
 const accessPassword = "Nhung2803@";
 
 const isUnlocked = ref(false);
+const isCheckingAccess = ref(true);
 const password = ref("");
 const errorMessage = ref("");
 
 onMounted(() => {
   isUnlocked.value = sessionStorage.getItem("xauusd-assistant-unlocked") === "1";
+  isCheckingAccess.value = false;
 });
 
 function unlock() {
@@ -23,14 +25,38 @@ function unlock() {
 </script>
 
 <template>
-  <div v-if="!isUnlocked" class="access-page">
-    <form class="access-card" @submit.prevent="unlock">
+  <div
+    v-if="isCheckingAccess"
+    class="grid min-h-screen place-items-center bg-[var(--bg)] px-5 text-[var(--text)]"
+  >
+    <div class="grid justify-items-center gap-4">
+      <div
+        class="h-10 w-10 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--blue)]"
+      />
+      <p class="text-sm font-semibold text-[var(--muted)]">
+        Đang tải hệ thống...
+      </p>
+    </div>
+  </div>
+
+  <div
+    v-else-if="!isUnlocked"
+    class="grid min-h-screen place-items-center bg-[var(--bg)] px-5 text-[var(--text)]"
+  >
+    <form
+      class="grid w-full max-w-[420px] gap-[18px] rounded-lg border border-[var(--border)] bg-[var(--panel)] p-6"
+      @submit.prevent="unlock"
+    >
       <div>
-        <h1>AI XAUUSD Trading Assistant</h1>
-        <p>Nhập mật khẩu để truy cập hệ thống.</p>
+        <h1 class="mb-2 text-2xl font-bold tracking-normal">
+          AI XAUUSD Trading Assistant
+        </h1>
+        <p class="m-0 text-[var(--muted)]">
+          Nhập mật khẩu để truy cập hệ thống.
+        </p>
       </div>
 
-      <label class="access-field">
+      <label class="grid gap-2 font-bold">
         <span>Mật khẩu</span>
         <input
           v-model="password"
@@ -41,9 +67,11 @@ function unlock() {
         >
       </label>
 
-      <p v-if="errorMessage" class="access-error">{{ errorMessage }}</p>
+      <p v-if="errorMessage" class="m-0 font-bold text-[var(--red)]">
+        {{ errorMessage }}
+      </p>
 
-      <button class="button access-button" type="submit">Vào hệ thống</button>
+      <button class="button w-full" type="submit">Vào hệ thống</button>
     </form>
   </div>
 

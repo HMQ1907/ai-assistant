@@ -28,7 +28,7 @@
         <h2>Thống kê confidence</h2>
         <div class="kv">
           <div class="kv-row">
-            <span class="muted">Độ tin cậy trung bình</span>
+            <span class="muted">Độ tin cậy trung bình của lệnh Buy/Sell</span>
             <strong>{{ stats.avgConfidence }}%</strong>
           </div>
           <div class="kv-row">
@@ -47,7 +47,8 @@
         <div class="win-rate">{{ stats.winRate }}%</div>
         <p class="muted">
           Tỷ lệ thắng = THẮNG / (THẮNG + THUA), không tính CHƯA CẬP NHẬT, HÒA
-          VỐN và BỎ QUA.
+          VỐN và BỎ QUA. Nếu P/L đã nhập nhưng kết quả chưa chọn, hệ thống sẽ
+          tự suy ra thắng/thua/hòa vốn từ P/L.
         </p>
       </div>
     </section>
