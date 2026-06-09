@@ -305,7 +305,10 @@ export class RealMarketDataProvider implements MarketDataProvider {
 
 function combineCollectionQuality(snapshots: MarketSnapshot[]): DataQuality {
   if (snapshots.some((snapshot) => snapshot.data_quality === "LOW")) {
-    return "LOW";
+    return "MEDIUM";
+  }
+  if (snapshots.some((snapshot) => snapshot.data_quality === "MEDIUM")) {
+    return "MEDIUM";
   }
   return "HIGH";
 }

@@ -68,29 +68,40 @@ export class RealNewsProvider implements NewsProvider {
 
       const maxAgeHours = this.maxAgeHours();
       const articles = json.articles ?? [];
-      const items = articles.flatMap((article): NewsItem[] => {
+      const relevantArticles = articles.flatMap((article) => {
         if (!article.title || !article.publishedAt) return [];
         const text = `${article.title} ${article.description ?? ""}`;
-        if (!isRelevant(text) || isStale(article.publishedAt, maxAgeHours)) {
-          return [];
-        }
+        return isRelevant(text)
+          ? [
+              {
+                article: {
+                  title: article.title,
+                  source: article.source,
+                  publishedAt: article.publishedAt,
+                },
+                text,
+              },
+            ]
+          : [];
+      });
+      const freshRelevantArticles = relevantArticles.filter(
+        (item) => !isStale(item.article.publishedAt, maxAgeHours),
+      );
+      const staleRelevantCount =
+        relevantArticles.length - freshRelevantArticles.length;
+      const items = freshRelevantArticles.flatMap((item): NewsItem[] => {
         return [
           {
-            title: article.title,
-            source: article.source?.name ?? "GNews",
-            publishedAt: article.publishedAt,
-            category: categorize(text),
-            impact: impact(text),
-            sentiment: sentiment(text),
-            symbols: symbolsFor(text),
+            title: item.article.title,
+            source: item.article.source?.name ?? "GNews",
+            publishedAt: item.article.publishedAt,
+            category: categorize(item.text),
+            impact: impact(item.text),
+            sentiment: sentiment(item.text),
+            symbols: symbolsFor(item.text),
           },
         ];
       });
-      const staleRelevantCount = articles.filter((article) => {
-        if (!article.title || !article.publishedAt) return false;
-        const text = `${article.title} ${article.description ?? ""}`;
-        return isRelevant(text) && isStale(article.publishedAt, maxAgeHours);
-      }).length;
       const status =
         items.length > 0
           ? "AVAILABLE"
