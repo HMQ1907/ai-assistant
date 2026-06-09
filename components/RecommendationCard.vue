@@ -174,9 +174,23 @@ const currentSymbol = computed(() =>
 const currentMarket = computed(() => currentSymbol.value?.market);
 const currentIndicators = computed(() => currentSymbol.value?.indicators);
 const candleSummary = computed(() => {
-  const candles = currentMarket.value?.candles;
-  if (!candles) return "Không rõ";
-  return Object.entries(candles)
+  const market = currentMarket.value;
+  if (!market) return "Không rõ";
+
+  if (market.candle_summary) {
+    return Object.entries(market.candle_summary)
+      .map(([timeframe, summary]) => {
+        const sent = market.recent_candles[summary.timeframe]?.length ?? 0;
+        return `${timeframe}: ${sent}/${summary.candleCount}`;
+      })
+      .join(", ");
+  }
+
+  const legacyMarket = market as unknown as {
+    candles?: Record<string, unknown[]>;
+  };
+  if (!legacyMarket.candles) return "Không rõ";
+  return Object.entries(legacyMarket.candles)
     .map(([timeframe, items]) => `${timeframe}: ${items.length}`)
     .join(", ");
 });

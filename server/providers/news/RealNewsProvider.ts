@@ -73,7 +73,7 @@ export class RealNewsProvider implements NewsProvider {
             publishedAt: article.publishedAt,
             category: categorize(article.title, article.description ?? ""),
             impact: impact(article.title, article.description ?? ""),
-            sentiment: "NEUTRAL",
+            sentiment: sentiment(article.title, article.description ?? ""),
             symbols: symbolsFor(article.title, article.description ?? ""),
           },
         ];
@@ -128,6 +128,18 @@ function impact(title: string, description: string): NewsItem["impact"] {
     return "HIGH";
   if (/(ppi|pmi|inflation|gold|xau)/.test(text)) return "MEDIUM";
   return "LOW";
+}
+
+function sentiment(title: string, description: string): NewsItem["sentiment"] {
+  const text = `${title} ${description}`.toLowerCase();
+  const bullishGold =
+    /(rate cut|cuts rates|dovish|weaker dollar|dollar falls|usd falls|yields fall|recession|safe haven|geopolitical|war|conflict|gold rises|gold gains|inflation cools|soft landing risk)/;
+  const bearishGold =
+    /(rate hike|higher rates|hawkish|stronger dollar|dollar rises|usd rises|yields rise|hot inflation|sticky inflation|gold falls|gold drops|risk-on|payrolls beat|jobs beat)/;
+
+  if (bullishGold.test(text) && !bearishGold.test(text)) return "BULLISH";
+  if (bearishGold.test(text) && !bullishGold.test(text)) return "BEARISH";
+  return "NEUTRAL";
 }
 
 function symbolsFor(title: string, description: string): SymbolCode[] {

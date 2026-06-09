@@ -30,6 +30,68 @@ export interface MarketSnapshot {
   updated_at: string;
   provider: string;
   candles: Record<Timeframe, Candle[]>;
+  filtered_candles?: Partial<Record<Timeframe, number>>;
+}
+
+export interface TimeframeCandleSummary {
+  timeframe: Timeframe;
+  candleCount: number;
+  firstCandleTime: string;
+  lastCandleTime: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  averageRange: number;
+  averageBody: number;
+  filteredOutCandles: number;
+}
+
+export interface MarketPayloadSnapshot {
+  symbol: SymbolCode;
+  price: number;
+  bid?: number;
+  ask?: number;
+  spread: number;
+  data_quality: DataQuality;
+  data_warnings: string[];
+  updated_at: string;
+  provider: string;
+  candle_summary: Record<Timeframe, TimeframeCandleSummary>;
+  recent_candles: Record<Timeframe, Candle[]>;
+}
+
+export interface SupportResistanceLevel {
+  price: number;
+  touches: number;
+  strength: "WEAK" | "MEDIUM" | "STRONG";
+}
+
+export interface SupportResistanceSnapshot {
+  nearestSupport: number;
+  nearestResistance: number;
+  swingHigh: number;
+  swingLow: number;
+  supportLevels: SupportResistanceLevel[];
+  resistanceLevels: SupportResistanceLevel[];
+}
+
+export interface TimeframeIndicatorSnapshot {
+  timeframe: Timeframe;
+  ema20: number;
+  ema50: number;
+  ema200: number;
+  rsi14: number;
+  macd: {
+    macd: number;
+    signal: number;
+    histogram: number;
+  };
+  atr14: number;
+  trend: string;
+  momentumScore: number;
+  volatilityScore: number;
+  marketStructure: SupportResistanceSnapshot;
 }
 
 export interface IndicatorSnapshot {
@@ -52,6 +114,8 @@ export interface IndicatorSnapshot {
   trendH1: string;
   momentumScore: number;
   volatilityScore: number;
+  timeframes: Record<Timeframe, TimeframeIndicatorSnapshot>;
+  timeframeAlignment: string;
 }
 
 export interface NewsItem {
@@ -90,7 +154,7 @@ export interface NewsSnapshot {
 }
 
 export interface NormalizedSymbolPayload {
-  market: MarketSnapshot;
+  market: MarketPayloadSnapshot;
   indicators: IndicatorSnapshot;
 }
 

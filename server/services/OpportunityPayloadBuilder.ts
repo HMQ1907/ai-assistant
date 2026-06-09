@@ -1,9 +1,15 @@
 import type {
   AnalysisPayload,
+  Candle,
   DataQuality,
   IndicatorSnapshot,
+  MarketPayloadSnapshot,
+  MarketSnapshot,
   NewsSnapshot,
+  Timeframe,
+  TimeframeCandleSummary,
 } from "../../types/trading";
+import { TIMEFRAMES } from "../../types/trading";
 import { tradingRules } from "../config/tradingRules";
 import type { MarketDataCollection } from "../providers/market/MarketDataProvider";
 
@@ -40,7 +46,10 @@ export class OpportunityPayloadBuilder {
         if (!indicator) {
           throw new Error(`Thiếu chỉ báo kỹ thuật cho ${snapshot.symbol}`);
         }
-        return { market: snapshot, indicators: indicator };
+        return {
+          market: toMarketPayloadSnapshot(snapshot),
+          indicators: indicator,
+        };
       }),
       news,
       rules: [
@@ -60,6 +69,76 @@ export class OpportunityPayloadBuilder {
       ],
     };
   }
+}
+
+function toMarketPayloadSnapshot(
+  snapshot: MarketSnapshot,
+): MarketPayloadSnapshot {
+  const payload: MarketPayloadSnapshot = {
+    symbol: snapshot.symbol,
+    price: snapshot.price,
+    spread: snapshot.spread,
+    data_quality: snapshot.data_quality,
+    data_warnings: snapshot.data_warnings,
+    updated_at: snapshot.updated_at,
+    provider: snapshot.provider,
+    candle_summary: {} as Record<Timeframe, TimeframeCandleSummary>,
+    recent_candles: {} as Record<Timeframe, Candle[]>,
+  };
+
+  if (snapshot.bid !== undefined) payload.bid = snapshot.bid;
+  if (snapshot.ask !== undefined) payload.ask = snapshot.ask;
+
+  for (const timeframe of TIMEFRAMES) {
+    const candles = snapshot.candles[timeframe] ?? [];
+    payload.candle_summary[timeframe] = summarizeCandles(
+      timeframe,
+      candles,
+      snapshot.filtered_candles?.[timeframe] ?? 0,
+    );
+    payload.recent_candles[timeframe] = candles.slice(-40);
+  }
+
+  return payload;
+}
+
+function summarizeCandles(
+  timeframe: Timeframe,
+  candles: Candle[],
+  filteredOutCandles: number,
+): TimeframeCandleSummary {
+  const first = candles[0];
+  const last = candles.at(-1);
+  const ranges = candles.map((candle) => candle.high - candle.low);
+  const bodies = candles.map((candle) => Math.abs(candle.close - candle.open));
+
+  return {
+    timeframe,
+    candleCount: candles.length,
+    firstCandleTime: first?.time ?? "",
+    lastCandleTime: last?.time ?? "",
+    open: round(first?.open ?? 0),
+    high: round(
+      candles.length ? Math.max(...candles.map((candle) => candle.high)) : 0,
+    ),
+    low: round(
+      candles.length ? Math.min(...candles.map((candle) => candle.low)) : 0,
+    ),
+    close: round(last?.close ?? 0),
+    averageRange: average(ranges),
+    averageBody: average(bodies),
+    filteredOutCandles,
+  };
+}
+
+function average(values: number[]): number {
+  if (values.length === 0) return 0;
+  return round(values.reduce((sum, value) => sum + value, 0) / values.length);
+}
+
+function round(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Number(value.toFixed(4));
 }
 
 function calculateMaxLossUsd(accountSizeUsd: number): number {

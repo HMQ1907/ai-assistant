@@ -13,6 +13,7 @@ import type {
 
 const candleOutputSize = "250";
 const minimumCandlesForHighQuality = 200;
+const duplicatePriceTolerance = 0.0001;
 
 const timeframeIntervals: Record<Timeframe, string> = {
   M5: "5min",
@@ -24,6 +25,19 @@ const timeframeIntervals: Record<Timeframe, string> = {
 const twelveDataSymbols: Record<SymbolCode, string> = {
   XAUUSD: "XAU/USD",
 };
+
+const minimumRangeByTimeframe: Record<Timeframe, number> = {
+  M5: 0.1,
+  M15: 0.2,
+  H1: 0.5,
+  H4: 0.5,
+};
+
+interface TimeSeriesResult {
+  candles: Candle[];
+  filteredOut: number;
+  warnings: string[];
+}
 
 interface TwelveDataTimeSeriesResponse {
   status?: string;
@@ -111,16 +125,20 @@ export class RealMarketDataProvider implements MarketDataProvider {
     const providerSymbol = twelveDataSymbols[symbol];
     const warnings: string[] = [];
     const candles = {} as Record<Timeframe, Candle[]>;
+    const filteredCandles: Partial<Record<Timeframe, number>> = {};
 
     for (const timeframe of TIMEFRAMES) {
       const series = await this.getTimeSeries(providerSymbol, timeframe);
-      candles[timeframe] = series;
-      if (series.length === 0) {
+      candles[timeframe] = series.candles;
+      filteredCandles[timeframe] = series.filteredOut;
+      warnings.push(...series.warnings);
+
+      if (series.candles.length === 0) {
         throw new Error(`${timeframe} không có candles thật từ provider.`);
       }
-      if (series.length < minimumCandlesForHighQuality) {
+      if (series.candles.length < minimumCandlesForHighQuality) {
         warnings.push(
-          `${timeframe} chỉ có ${series.length} candles, cần tối thiểu ${minimumCandlesForHighQuality}.`,
+          `${timeframe} chỉ có ${series.candles.length} candles, cần tối thiểu ${minimumCandlesForHighQuality}.`,
         );
       }
     }
@@ -150,6 +168,7 @@ export class RealMarketDataProvider implements MarketDataProvider {
         : new Date().toISOString(),
       provider: this.name,
       candles,
+      filtered_candles: filteredCandles,
     };
     if (bid !== undefined) snapshot.bid = bid;
     if (ask !== undefined) snapshot.ask = ask;
@@ -159,7 +178,7 @@ export class RealMarketDataProvider implements MarketDataProvider {
   private async getTimeSeries(
     symbol: string,
     timeframe: Timeframe,
-  ): Promise<Candle[]> {
+  ): Promise<TimeSeriesResult> {
     const url = this.url("/time_series", {
       symbol,
       interval: timeframeIntervals[timeframe],
@@ -174,7 +193,7 @@ export class RealMarketDataProvider implements MarketDataProvider {
     }
     const values = json.values ?? [];
 
-    return values
+    const candles = values
       .map((item) => ({
         time: item.datetime ? new Date(item.datetime).toISOString() : "",
         open: Number(item.open),
@@ -189,6 +208,8 @@ export class RealMarketDataProvider implements MarketDataProvider {
           [item.open, item.high, item.low, item.close].every(Number.isFinite),
       )
       .reverse();
+
+    return filterProviderCandles(candles, timeframe);
   }
 
   private async getQuote(symbol: string): Promise<TwelveDataQuoteResponse> {
@@ -230,4 +251,69 @@ function parseNumber(value: string | undefined): number | undefined {
   if (value === undefined || value === "") return undefined;
   const number = Number(value);
   return Number.isFinite(number) ? number : undefined;
+}
+
+function filterProviderCandles(
+  candles: Candle[],
+  timeframe: Timeframe,
+): TimeSeriesResult {
+  const minimumRange = minimumRangeByTimeframe[timeframe];
+  const filtered: Candle[] = [];
+  let filteredOut = 0;
+
+  for (const candle of candles) {
+    if (!hasValidShape(candle)) {
+      filteredOut += 1;
+      continue;
+    }
+
+    const previous = filtered.at(-1);
+    const range = candle.high - candle.low;
+    const hasFrozenRange = range < minimumRange;
+    const isRepeated = previous ? hasSameOhlc(previous, candle) : false;
+
+    if (hasFrozenRange || isRepeated) {
+      filteredOut += 1;
+      continue;
+    }
+
+    filtered.push(candle);
+  }
+
+  const warnings =
+    filteredOut > 0
+      ? [
+          `${timeframe}: đã loại ${filteredOut}/${candles.length} candles có range bất thường hoặc bị lặp từ provider.`,
+        ]
+      : [];
+
+  return {
+    candles: filtered,
+    filteredOut,
+    warnings,
+  };
+}
+
+function hasValidShape(candle: Candle): boolean {
+  const tolerance = 0.0001;
+  return (
+    candle.high >= candle.low &&
+    candle.open <= candle.high + tolerance &&
+    candle.open >= candle.low - tolerance &&
+    candle.close <= candle.high + tolerance &&
+    candle.close >= candle.low - tolerance
+  );
+}
+
+function hasSameOhlc(left: Candle, right: Candle): boolean {
+  return (
+    isClose(left.open, right.open) &&
+    isClose(left.high, right.high) &&
+    isClose(left.low, right.low) &&
+    isClose(left.close, right.close)
+  );
+}
+
+function isClose(left: number, right: number): boolean {
+  return Math.abs(left - right) <= duplicatePriceTolerance;
 }
