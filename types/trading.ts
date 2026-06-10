@@ -108,6 +108,26 @@ export interface TimeframeCandleSummary {
   filteredOutCandles: number;
 }
 
+export type CandlePatternName =
+  | "DOJI"
+  | "HAMMER"
+  | "SHOOTING_STAR"
+  | "BULLISH_ENGULFING"
+  | "BEARISH_ENGULFING"
+  | "STRONG_BULLISH_BODY"
+  | "STRONG_BEARISH_BODY"
+  | "BULLISH_REJECTION"
+  | "BEARISH_REJECTION";
+
+export interface CandlePatternSignal {
+  timeframe: Timeframe;
+  pattern: CandlePatternName;
+  candleTime: string;
+  direction: "BULLISH" | "BEARISH" | "NEUTRAL";
+  strength: "WEAK" | "MEDIUM" | "STRONG";
+  explanation: string;
+}
+
 export interface MarketPayloadSnapshot {
   symbol: SymbolCode;
   price: number;
@@ -127,6 +147,7 @@ export interface MarketPayloadSnapshot {
   quoteTimestampReliable: boolean;
   candle_summary: Record<Timeframe, TimeframeCandleSummary>;
   recent_candles: Record<Timeframe, Candle[]>;
+  candle_patterns: Record<Timeframe, CandlePatternSignal[]>;
   candle_diagnostics: Record<Timeframe, CandleDiagnostics>;
   timeframe_quality: Record<Timeframe, TimeframeQuality>;
 }

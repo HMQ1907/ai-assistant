@@ -29,7 +29,7 @@ Các biến cần cấu hình:
 
 ```bash
 EVOLINK_API_KEY=
-EVOLINK_MODEL=gemini-3.5-flash
+EVOLINK_MODEL=claude-opus-4-8
 EVOLINK_BASE_URL=https://api.evolink.ai/v1/chat/completions
 AI_TIMEOUT_MS=90000
 
@@ -44,7 +44,7 @@ NEWS_API_KEY=
 NEWS_BASE_URL=https://gnews.io
 NEWS_MAX_AGE_HOURS=48
 
-ACCOUNT_SIZE_USD=70
+ACCOUNT_SIZE_USD=200
 MAX_LOSS_PERCENT_PER_TRADE=15
 MAX_DAILY_LOSS_PERCENT=15
 
@@ -145,10 +145,10 @@ Rules nằm trong `server/config/tradingRules.ts`:
 
 ```ts
 export const tradingRules = {
-  accountSizeUsd: 70,
+  accountSizeUsd: 200,
   maxLossPercentPerTrade: 15,
   maxDailyLossPercent: 15,
-  minConfidence: 70,
+  minConfidence: 65,
   minRiskReward: 1.5,
   maxHoldingMinutes: 60,
   maxSpreadPercent: 0.08,

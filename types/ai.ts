@@ -52,10 +52,32 @@ export interface AiTradeRecommendation {
   pre_entry_checklist: string[];
   no_trade_reason: string;
   next_check_suggestion: string;
+  risky_trade: RiskyTradeScenario | null;
   disclaimer: string;
 }
 
 export interface AiAnalysisResult {
   raw: string;
   parsed: AiTradeRecommendation;
+}
+
+export interface RiskyTradeScenario {
+  enabled: boolean;
+  title: string;
+  direction: Exclude<TradeDirection, "NONE">;
+  order_type: "BUY_LIMIT" | "SELL_LIMIT" | "BUY_STOP" | "SELL_STOP";
+  estimated_win_probability: number;
+  entry_zone: {
+    from: number;
+    to: number;
+  };
+  stop_loss: number;
+  take_profit: number;
+  risk_reward: string;
+  suggested_lot: number | null;
+  estimated_loss_if_sl_hit: number | null;
+  reason: string;
+  entry_conditions: string[];
+  cancel_conditions: string[];
+  warning: string;
 }

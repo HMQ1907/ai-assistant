@@ -59,7 +59,7 @@ const error = ref("");
 const result = ref<AiTradeRecommendation | null>(null);
 const history = ref<AnalysisHistoryRecord[]>([]);
 const hasAnalyzed = ref(false);
-const accountSizeUsd = ref(70);
+const accountSizeUsd = ref(200);
 const latestHistory = computed(() =>
   result.value ? (history.value[0] ?? null) : null,
 );
@@ -92,7 +92,7 @@ async function analyze(): Promise<void> {
 }
 
 function normalizeAccountSize(value: number): number {
-  return Number.isFinite(value) && value > 0 ? Number(value) : 70;
+  return Number.isFinite(value) && value > 0 ? Number(value) : 200;
 }
 
 function replaceHistoryRecord(record: AnalysisHistoryRecord): void {

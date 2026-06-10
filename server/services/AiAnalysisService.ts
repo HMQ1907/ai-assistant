@@ -54,6 +54,26 @@ const recommendationSchema = z.object({
   pre_entry_checklist: z.array(z.string()),
   no_trade_reason: z.string(),
   next_check_suggestion: z.string(),
+  risky_trade: z
+    .object({
+      enabled: z.boolean(),
+      title: z.string(),
+      direction: z.enum(["BUY", "SELL"]),
+      order_type: z.enum(["BUY_LIMIT", "SELL_LIMIT", "BUY_STOP", "SELL_STOP"]),
+      estimated_win_probability: z.number().min(0).max(100),
+      entry_zone: z.object({ from: z.number(), to: z.number() }),
+      stop_loss: z.number(),
+      take_profit: z.number(),
+      risk_reward: z.string(),
+      suggested_lot: z.number().nullable(),
+      estimated_loss_if_sl_hit: z.number().nullable(),
+      reason: z.string(),
+      entry_conditions: z.array(z.string()),
+      cancel_conditions: z.array(z.string()),
+      warning: z.string(),
+    })
+    .nullable()
+    .default(null),
   disclaimer: z.string(),
 });
 
@@ -247,6 +267,7 @@ function buildNoTradeRecommendation(
     no_trade_reason: reason,
     next_check_suggestion:
       "Kiểm tra Evolink model/base URL/API key và chạy lại phân tích.",
+    risky_trade: null,
     disclaimer:
       "Đây là gợi ý phân tích từ AI, không phải lời khuyên tài chính. Người dùng tự chịu trách nhiệm với quyết định giao dịch.",
   };

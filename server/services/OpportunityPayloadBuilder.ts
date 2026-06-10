@@ -12,6 +12,7 @@ import type {
 import { TIMEFRAMES } from "../../types/trading";
 import { tradingRules } from "../config/tradingRules";
 import type { MarketDataCollection } from "../providers/market/MarketDataProvider";
+import { detectCandlePatterns } from "../utils/candlePatterns";
 
 export class OpportunityPayloadBuilder {
   build(
@@ -62,6 +63,7 @@ export class OpportunityPayloadBuilder {
         `Nếu risk_reward < 1:${tradingRules.minRiskReward}, trả NO_TRADE.`,
         "Nếu setup rất mạnh theo kỹ thuật hoặc tin tức, có thể dùng lot cao hơn nhưng estimated_loss_if_sl_hit không được vượt quá giới hạn lỗ tối đa.",
         "Không giao dịch khi data_quality LOW, thiếu giá realtime, thiếu candle, hoặc spread quá cao.",
+        "Thiếu bid/ask/spread không phải lý do NO_TRADE khi data_quality từ MEDIUM trở lên và candle/indicator đủ điều kiện. Chỉ xem đây là yếu tố rủi ro và nhắc người dùng tự kiểm tra spread trên sàn trước khi vào lệnh.",
         "Nếu news_data_status là UNAVAILABLE, phải giảm độ tin cậy và chỉ TRADE khi setup kỹ thuật rất rõ.",
         "All user-facing content MUST be written in Vietnamese. Only enum values may remain in English.",
         "Không khuyến nghị martingale, DCA lỗ, all-in, tăng khối lượng sau khi thua, copy trade hoặc auto trade.",
@@ -93,6 +95,7 @@ function toMarketPayloadSnapshot(
     quoteTimestampReliable: snapshot.quoteTimestampReliable,
     candle_summary: {} as Record<Timeframe, TimeframeCandleSummary>,
     recent_candles: {} as Record<Timeframe, Candle[]>,
+    candle_patterns: {} as MarketPayloadSnapshot["candle_patterns"],
     candle_diagnostics: snapshot.candle_diagnostics,
     timeframe_quality: snapshot.timeframe_quality,
   };
@@ -105,6 +108,10 @@ function toMarketPayloadSnapshot(
       snapshot.filtered_candles?.[timeframe] ?? 0,
     );
     payload.recent_candles[timeframe] = candles.slice(-40);
+    payload.candle_patterns[timeframe] = detectCandlePatterns(
+      timeframe,
+      candles,
+    );
   }
 
   return payload;

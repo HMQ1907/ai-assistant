@@ -1,4 +1,4 @@
-import type { AiTradeRecommendation } from "../../types/ai";
+import type { AiTradeRecommendation, RiskyTradeScenario } from "../../types/ai";
 import type { AnalysisPayload } from "../../types/trading";
 import { tradingRules } from "../config/tradingRules";
 import { parseRiskReward } from "../utils/risk";
@@ -31,6 +31,10 @@ export class TradeValidationService {
     );
     const reason = `Validation nội bộ đã ép NO_TRADE: ${reasons.join("; ")}.`;
 
+    const riskyTrade =
+      recommendation.risky_trade ??
+      buildRiskyTradeFromRejectedRecommendation(recommendation, payload);
+
     return {
       ...recommendation,
       decision: "NO_TRADE",
@@ -50,6 +54,7 @@ export class TradeValidationService {
       no_trade_reason: recommendation.no_trade_reason
         ? `${recommendation.no_trade_reason} ${reason}`
         : reason,
+      risky_trade: riskyTrade,
     };
   }
 
@@ -139,7 +144,9 @@ export class TradeValidationService {
         recommendation.conditions_to_recheck?.length
           ? recommendation.conditions_to_recheck
           : ["Phân tích lại khi dữ liệu thị trường, quote và indicator đã đạt yêu cầu."],
-      trade_validation_failures: recommendation.trade_validation_failures ?? [],
+      trade_validation_failures: sanitizeAiValidationFailures(
+        recommendation.trade_validation_failures ?? [],
+      ),
     };
   }
 
@@ -344,9 +351,8 @@ export class TradeValidationService {
       return;
     }
 
-    recommendation.confidence = Math.max(0, recommendation.confidence - 10);
     const warning =
-      "Lưu ý: provider không trả bid/ask/spread thật, phân tích dựa trên giá quote và dữ liệu nến sạch; độ tin cậy đã giảm 10 điểm.";
+      "Lưu ý: provider không trả bid/ask/spread thật; phân tích vẫn dựa trên giá hiện tại và dữ liệu nến sạch. Hãy kiểm tra spread trên sàn trước khi tự vào lệnh.";
     recommendation.market_context = appendSentence(
       recommendation.market_context,
       warning,
@@ -391,4 +397,117 @@ function canAnalyzeWithoutBidAsk(symbol: PayloadSymbol): boolean {
 
 function appendSentence(text: string, sentence: string): string {
   return text.includes(sentence) ? text : `${text} ${sentence}`.trim();
+}
+
+function buildRiskyTradeFromRejectedRecommendation(
+  recommendation: AiTradeRecommendation,
+  payload?: AnalysisPayload,
+): RiskyTradeScenario | null {
+  if (
+    recommendation.decision !== "TRADE" ||
+    recommendation.direction === "NONE" ||
+    !recommendation.entry_zone ||
+    !isFinitePositive(recommendation.entry_zone.from) ||
+    !isFinitePositive(recommendation.entry_zone.to) ||
+    !isFinitePositive(recommendation.stop_loss) ||
+    !isFinitePositive(recommendation.take_profit)
+  ) {
+    return null;
+  }
+
+  const entry = Number(
+    (
+      (recommendation.entry_zone.from + recommendation.entry_zone.to) /
+      2
+    ).toFixed(6),
+  );
+  const currentPrice =
+    payload?.symbols.find((item) => item.market.symbol === "XAUUSD")?.market
+      .price ?? recommendation.current_price;
+  const distance = Math.abs(entry - recommendation.stop_loss);
+  const minLotLoss = Number(
+    (
+      tradingRules.minLot *
+      distance *
+      tradingRules.xauUsdOuncesPerLot
+    ).toFixed(2),
+  );
+  const maxLossUsd =
+    payload?.maxLossUsdPerTrade ?? recommendation.position_sizing.max_loss_usd;
+  const suggestedLot =
+    minLotLoss <= maxLossUsd
+      ? tradingRules.minLot
+      : recommendation.position_sizing.suggested_lot;
+
+  return {
+    enabled: true,
+    title: "Trade mạo hiểm",
+    direction: recommendation.direction,
+    order_type: inferOrderType(recommendation.direction, entry, currentPrice),
+    estimated_win_probability: Math.max(
+      0,
+      Math.min(100, recommendation.confidence),
+    ),
+    entry_zone: recommendation.entry_zone,
+    stop_loss: recommendation.stop_loss,
+    take_profit: recommendation.take_profit,
+    risk_reward: recommendation.risk_reward ?? "Không rõ",
+    suggested_lot: suggestedLot,
+    estimated_loss_if_sl_hit:
+      suggestedLot === null
+        ? recommendation.position_sizing.estimated_loss_if_sl_hit
+        : Number(
+            (
+              suggestedLot *
+              distance *
+              tradingRules.xauUsdOuncesPerLot
+            ).toFixed(2),
+          ),
+    reason:
+      "Setup này bị validation chính ép NO_TRADE, nhưng vẫn được giữ lại như kịch bản mạo hiểm có điều kiện để người dùng tự cân nhắc thủ công.",
+    entry_conditions: recommendation.pre_entry_checklist.length
+      ? recommendation.pre_entry_checklist
+      : [
+          "Chỉ cân nhắc khi giá chạm vùng entry và có nến xác nhận trên M5/M15.",
+          "Kiểm tra spread thực tế trên sàn trước khi đặt lệnh.",
+        ],
+    cancel_conditions: recommendation.invalid_conditions.length
+      ? recommendation.invalid_conditions
+      : [
+          "Hủy kèo nếu giá phá vùng vô hiệu trước khi khớp entry.",
+          "Hủy kèo nếu H1/H4 đổi cấu trúc ngược lại setup.",
+        ],
+    warning:
+      "Đây là trade mạo hiểm do AI đánh giá lại từ setup bị validation từ chối, không phải khuyến nghị chính.",
+  };
+}
+
+function inferOrderType(
+  direction: "BUY" | "SELL",
+  entry: number,
+  currentPrice: number,
+): RiskyTradeScenario["order_type"] {
+  if (direction === "BUY") {
+    return entry < currentPrice ? "BUY_LIMIT" : "BUY_STOP";
+  }
+  return entry > currentPrice ? "SELL_LIMIT" : "SELL_STOP";
+}
+
+function sanitizeAiValidationFailures(failures: string[]): string[] {
+  const quoteOnlyPatterns = [
+    /bid/i,
+    /ask/i,
+    /spread/i,
+    /quote/i,
+    /MISSING_REALTIME_SPREAD/i,
+  ];
+
+  return Array.from(
+    new Set(
+      failures.filter(
+        (failure) =>
+          !quoteOnlyPatterns.some((pattern) => pattern.test(failure)),
+      ),
+    ),
+  );
 }

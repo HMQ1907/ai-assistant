@@ -5,12 +5,12 @@ export default defineNuxtConfig({
   devtools: { enabled: true },
   runtimeConfig: {
     evolinkApiKey: process.env.EVOLINK_API_KEY || "",
-    evolinkModel: process.env.EVOLINK_MODEL || "gemini-3.5-flash",
+    evolinkModel: process.env.EVOLINK_MODEL || "claude-opus-4-8",
     evolinkBaseUrl:
       process.env.EVOLINK_BASE_URL ||
       "https://api.evolink.ai/v1/chat/completions",
     aiTimeoutMs: Number(process.env.AI_TIMEOUT_MS || 90000),
-    accountSizeUsd: Number(process.env.ACCOUNT_SIZE_USD || 70),
+    accountSizeUsd: Number(process.env.ACCOUNT_SIZE_USD || 200),
     maxLossPercentPerTrade: Number(
       process.env.MAX_LOSS_PERCENT_PER_TRADE || 15,
     ),

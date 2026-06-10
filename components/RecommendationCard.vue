@@ -79,6 +79,88 @@
 
     <TradeLevelsCard :result="result" />
 
+    <section
+      v-if="result.decision === 'NO_TRADE' && result.risky_trade?.enabled"
+      class="card risky-card"
+    >
+      <div class="risky-head">
+        <div>
+          <p class="risky-eyebrow">Kịch bản phụ</p>
+          <h3>{{ result.risky_trade.title || "Trade mạo hiểm" }}</h3>
+        </div>
+        <strong class="risky-win">
+          {{ result.risky_trade.estimated_win_probability }}% AI đánh giá
+        </strong>
+      </div>
+
+      <p class="muted">{{ result.risky_trade.reason }}</p>
+
+      <div class="risky-grid">
+        <div>
+          <span>Loại lệnh</span>
+          <strong>{{ riskyOrderLabel(result.risky_trade.order_type) }}</strong>
+        </div>
+        <div>
+          <span>Hướng</span>
+          <strong>{{ directionLabel(result.risky_trade.direction) }}</strong>
+        </div>
+        <div>
+          <span>Vùng entry</span>
+          <strong>
+            {{ formatPrice(result.risky_trade.entry_zone.from) }} -
+            {{ formatPrice(result.risky_trade.entry_zone.to) }}
+          </strong>
+        </div>
+        <div>
+          <span>Stop loss</span>
+          <strong>{{ formatPrice(result.risky_trade.stop_loss) }}</strong>
+        </div>
+        <div>
+          <span>Take profit</span>
+          <strong>{{ formatPrice(result.risky_trade.take_profit) }}</strong>
+        </div>
+        <div>
+          <span>Risk reward</span>
+          <strong>{{ result.risky_trade.risk_reward }}</strong>
+        </div>
+        <div>
+          <span>Lot gợi ý</span>
+          <strong>{{ formatLot(result.risky_trade.suggested_lot) }}</strong>
+        </div>
+        <div>
+          <span>Lỗ nếu chạm SL</span>
+          <strong>{{ formatUsd(result.risky_trade.estimated_loss_if_sl_hit) }}</strong>
+        </div>
+      </div>
+
+      <div class="grid two">
+        <div>
+          <h4>Điều kiện vào lệnh</h4>
+          <ul class="list">
+            <li
+              v-for="item in listOrDash(result.risky_trade.entry_conditions)"
+              :key="item"
+            >
+              {{ item }}
+            </li>
+          </ul>
+        </div>
+        <div>
+          <h4>Điều kiện hủy kèo</h4>
+          <ul class="list">
+            <li
+              v-for="item in listOrDash(result.risky_trade.cancel_conditions)"
+              :key="item"
+            >
+              {{ item }}
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <p class="risky-warning">{{ result.risky_trade.warning }}</p>
+    </section>
+
     <div v-if="history" class="card">
       <h3>Dữ liệu gửi AI</h3>
       <div class="kv">
@@ -252,6 +334,7 @@ function formatTime(value: string): string {
   return new Intl.DateTimeFormat("vi-VN", {
     dateStyle: "short",
     timeStyle: "short",
+    timeZone: "Asia/Ho_Chi_Minh",
   }).format(new Date(value));
 }
 
@@ -271,6 +354,29 @@ function formatNumber(value: number | null | undefined): string {
     return "Không rõ";
   }
   return String(Number(value.toFixed(4)));
+}
+function riskyOrderLabel(value: string): string {
+  const labels: Record<string, string> = {
+    BUY_LIMIT: "BUY LIMIT",
+    SELL_LIMIT: "SELL LIMIT",
+    BUY_STOP: "BUY STOP",
+    SELL_STOP: "SELL STOP",
+  };
+  return labels[value] ?? value;
+}
+
+function formatLot(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "Không rõ";
+  }
+  return `${value.toFixed(2)} lot`;
+}
+
+function formatUsd(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "Không rõ";
+  }
+  return `$${Number(value.toFixed(2))}`;
 }
 </script>
 
@@ -303,6 +409,70 @@ function formatNumber(value: number | null | undefined): string {
   margin-bottom: 4px;
 }
 
+.risky-card {
+  background:
+    linear-gradient(180deg, rgba(245, 158, 11, 0.08), transparent 34%),
+    var(--panel);
+  border-color: rgba(245, 158, 11, 0.42);
+}
+
+.risky-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.risky-eyebrow {
+  color: #fbbf24;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  margin: 0 0 6px;
+  text-transform: uppercase;
+}
+
+.risky-head h3,
+.risky-card h4 {
+  margin-top: 0;
+}
+
+.risky-win {
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  border-radius: 999px;
+  color: #fbbf24;
+  flex: 0 0 auto;
+  padding: 7px 10px;
+}
+
+.risky-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 14px 0;
+}
+
+.risky-grid div {
+  border: 1px solid #2d3b4f;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.risky-grid span {
+  color: #9fb4cc;
+  display: block;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.risky-warning {
+  border-left: 3px solid #f59e0b;
+  color: #f8d48a;
+  margin: 12px 0 0;
+  padding-left: 10px;
+}
+
 @media (max-width: 800px) {
   .summary-head {
     align-items: flex-start;
@@ -312,10 +482,22 @@ function formatNumber(value: number | null | undefined): string {
   .price-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .risky-head {
+    flex-direction: column;
+  }
+
+  .risky-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 460px) {
   .price-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .risky-grid {
     grid-template-columns: 1fr;
   }
 }

@@ -52,6 +52,7 @@ function recommendation(
     pre_entry_checklist: [],
     no_trade_reason: "Không có setup.",
     next_check_suggestion: "",
+    risky_trade: null,
     disclaimer: "",
     ...patch,
   };
