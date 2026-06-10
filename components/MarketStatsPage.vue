@@ -2,9 +2,9 @@
   <main class="page">
     <div class="toolbar">
       <div class="heading">
-        <h1>Thống kê hiệu quả XAUUSD</h1>
+        <h1>Thống kê hiệu quả {{ symbol }}</h1>
         <p>
-          Thống kê kết quả người dùng đã ghi nhận sau khi tự giao dịch XAUUSD
+          Thống kê kết quả người dùng đã ghi nhận sau khi tự giao dịch {{ symbol }}
           bên ngoài hệ thống.
         </p>
       </div>
@@ -55,7 +55,7 @@
 
     <section class="stats-section">
       <div class="card">
-        <h2>Hiệu suất XAUUSD</h2>
+        <h2>Hiệu suất {{ symbol }}</h2>
         <SymbolPerformanceTable :items="stats.bestSymbols" />
       </div>
     </section>
@@ -65,6 +65,7 @@
 <script setup lang="ts">
 import type { PerformanceStats } from "~/types/trading";
 
+const props = defineProps<{ symbol: "XAUUSD" | "BTCUSD" }>();
 const emptyStats: PerformanceStats = {
   totalAnalysis: 0,
   totalTrades: 0,
@@ -97,7 +98,9 @@ onMounted(loadStats);
 async function loadStats(): Promise<void> {
   error.value = "";
   try {
-    stats.value = await $fetch<PerformanceStats>("/api/stats");
+    stats.value = await $fetch<PerformanceStats>("/api/stats", {
+      query: { symbol: props.symbol },
+    });
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : "Lỗi không xác định";
   }

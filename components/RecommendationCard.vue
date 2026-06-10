@@ -5,7 +5,7 @@
         <span :class="['badge', result.decision === 'TRADE' ? 'trade' : 'no-trade']">
           {{ decisionLabel(result.decision) }}
         </span>
-        <strong>XAUUSD / {{ directionLabel(result.direction) }}</strong>
+        <strong>{{ result.symbol }} / {{ directionLabel(result.direction) }}</strong>
       </div>
 
       <div class="price-strip">
@@ -124,8 +124,8 @@
           <strong>{{ result.risky_trade.risk_reward }}</strong>
         </div>
         <div>
-          <span>Lot gợi ý</span>
-          <strong>{{ formatLot(result.risky_trade.suggested_lot) }}</strong>
+          <span>{{ quantityLabel }} gợi ý</span>
+          <strong>{{ formatQuantity(result.risky_trade.suggested_lot) }}</strong>
         </div>
         <div>
           <span>Lỗ nếu chạm SL</span>
@@ -264,7 +264,7 @@ const props = defineProps<{
 
 const currentSymbol = computed(() =>
   props.history?.request_payload.symbols.find(
-    (item) => item.market.symbol === "XAUUSD",
+    (item) => item.market.symbol === props.result.symbol,
   ),
 );
 const currentMarket = computed(() => currentSymbol.value?.market);
@@ -365,11 +365,17 @@ function riskyOrderLabel(value: string): string {
   return labels[value] ?? value;
 }
 
-function formatLot(value: number | null | undefined): string {
+const quantityLabel = computed(() =>
+  props.result.symbol === "BTCUSD" ? "Số lượng BTC" : "Lot",
+);
+
+function formatQuantity(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
     return "Không rõ";
   }
-  return `${value.toFixed(2)} lot`;
+  return props.result.symbol === "BTCUSD"
+    ? `${value.toFixed(5)} BTC`
+    : `${value.toFixed(2)} lot`;
 }
 
 function formatUsd(value: number | null | undefined): string {

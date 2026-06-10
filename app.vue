@@ -5,6 +5,14 @@ const isUnlocked = ref(false);
 const isCheckingAccess = ref(true);
 const password = ref("");
 const errorMessage = ref("");
+const route = useRoute();
+const marketSlug = computed(() => {
+  const first = route.path.split("/").filter(Boolean)[0];
+  return first === "xauusd" || first === "btc" ? first : null;
+});
+const marketName = computed(() =>
+  marketSlug.value === "btc" ? "BTCUSD" : "XAUUSD",
+);
 
 onMounted(() => {
   isUnlocked.value = sessionStorage.getItem("xauusd-assistant-unlocked") === "1";
@@ -38,9 +46,9 @@ function unlock() {
 
       <div class="access-copy">
         <p class="access-eyebrow">Quyền truy cập riêng</p>
-        <h1>AI XAUUSD Trading Assistant</h1>
+        <h1>AI Trading Assistant</h1>
         <p>
-          Nhập mật khẩu để mở công cụ phân tích XAUUSD. Hệ thống chỉ hiển thị
+          Nhập mật khẩu để mở công cụ phân tích XAUUSD và BTCUSD. Hệ thống chỉ hiển thị
           gợi ý giao dịch thủ công, không tự đặt lệnh.
         </p>
       </div>
@@ -74,11 +82,14 @@ function unlock() {
   <div v-else class="app-shell">
     <header class="topbar">
       <div class="topbar-inner">
-        <NuxtLink class="brand" to="/">AI XAUUSD Trading Assistant</NuxtLink>
+        <NuxtLink class="brand" to="/">AI Trading Assistant</NuxtLink>
         <nav class="nav">
-          <NuxtLink to="/">Phân tích</NuxtLink>
-          <NuxtLink to="/history">Lịch sử</NuxtLink>
-          <NuxtLink to="/stats">Thống kê</NuxtLink>
+          <NuxtLink to="/">Dashboard</NuxtLink>
+          <template v-if="marketSlug">
+            <NuxtLink :to="`/${marketSlug}`">{{ marketName }}</NuxtLink>
+            <NuxtLink :to="`/${marketSlug}/history`">Lịch sử</NuxtLink>
+            <NuxtLink :to="`/${marketSlug}/stats`">Thống kê</NuxtLink>
+          </template>
         </nav>
       </div>
     </header>

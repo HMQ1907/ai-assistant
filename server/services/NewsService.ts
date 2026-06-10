@@ -1,6 +1,7 @@
 import type { NewsSnapshot } from "../../types/trading";
 import type { NewsProvider } from "../providers/news/NewsProvider";
 import { RealNewsProvider } from "../providers/news/RealNewsProvider";
+import { CryptoPanicNewsProvider } from "../providers/news/CryptoPanicNewsProvider";
 
 export class NewsService {
   private readonly provider: NewsProvider;
@@ -24,6 +25,14 @@ export class NewsService {
     switch (providerName) {
       case "gnews":
         return new RealNewsProvider({
+          apiKey: this.options.apiKey,
+          baseUrl: this.options.baseUrl,
+          ...(this.options.maxAgeHours !== undefined
+            ? { maxAgeHours: this.options.maxAgeHours }
+            : {}),
+        });
+      case "cryptopanic":
+        return new CryptoPanicNewsProvider({
           apiKey: this.options.apiKey,
           baseUrl: this.options.baseUrl,
           ...(this.options.maxAgeHours !== undefined

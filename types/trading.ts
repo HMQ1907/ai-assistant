@@ -1,4 +1,4 @@
-export const SYMBOLS = ["XAUUSD"] as const;
+export const SYMBOLS = ["XAUUSD", "BTCUSD"] as const;
 
 export const TIMEFRAMES = ["M5", "M15", "H1", "H4"] as const;
 
@@ -223,7 +223,11 @@ export interface NewsItem {
     | "PPI"
     | "PMI"
     | "RATES"
-    | "GEOPOLITICAL";
+    | "GEOPOLITICAL"
+    | "BTC"
+    | "CRYPTO"
+    | "REGULATION"
+    | "ETF";
   impact: "LOW" | "MEDIUM" | "HIGH";
   sentiment: "BULLISH" | "BEARISH" | "NEUTRAL";
   symbols: SymbolCode[];

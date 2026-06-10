@@ -1,8 +1,8 @@
-import type { TradeDecision, TradeDirection } from "./trading";
+import type { SymbolCode, TradeDecision, TradeDirection } from "./trading";
 
 export interface AiTradeRecommendation {
   decision: TradeDecision;
-  symbol: "XAUUSD";
+  symbol: SymbolCode;
   direction: TradeDirection;
   confidence: number;
   entry_zone: {

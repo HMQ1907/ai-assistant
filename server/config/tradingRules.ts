@@ -9,4 +9,23 @@ export const tradingRules = {
   minLot: 0.01,
   lotStep: 0.01,
   xauUsdOuncesPerLot: 100,
+  btcUnitsPerQuantity: 1,
+  btcMinQuantity: 0.00001,
+  btcQuantityStep: 0.00001,
 } as const;
+
+export function instrumentSizing(symbol: "XAUUSD" | "BTCUSD") {
+  return symbol === "BTCUSD"
+    ? {
+        contractSize: tradingRules.btcUnitsPerQuantity,
+        minQuantity: tradingRules.btcMinQuantity,
+        quantityStep: tradingRules.btcQuantityStep,
+        quantityLabel: "BTC",
+      }
+    : {
+        contractSize: tradingRules.xauUsdOuncesPerLot,
+        minQuantity: tradingRules.minLot,
+        quantityStep: tradingRules.lotStep,
+        quantityLabel: "lot",
+      };
+}

@@ -1,40 +1,37 @@
 import type { AnalysisPayload } from "../../types/trading";
-import { tradingRules } from "../config/tradingRules";
+import { instrumentSizing, tradingRules } from "../config/tradingRules";
 
 export function buildTradingAnalysisPrompt(payload: AnalysisPayload): string {
+  const symbol = payload.symbols[0]?.market.symbol;
+  if (!symbol) throw new Error("Payload không có symbol để phân tích.");
+  const sizing = instrumentSizing(symbol);
+  const sizingRule =
+    symbol === "XAUUSD"
+      ? "Với XAUUSD: 1 lot = 100 oz; loss = lot * abs(entry - stop_loss) * 100; lot tối thiểu và bước lot là 0.01."
+      : "Với BTCUSD: suggested_lot là số lượng BTC; loss = số BTC * abs(entry - stop_loss); số lượng tối thiểu và bước số lượng là 0.00001 BTC.";
+
   return [
-    "You are an AI XAUUSD Trading Assistant for manual trading only. You never place orders.",
-    "Analyze only XAUUSD using realtime price, bid, ask, spread, cleaned M5/M15/H1/H4 recent_candles, candle_summary, multi-timeframe indicators, market structure and real news.",
-    "Do not scan or compare other markets. The symbol must always be XAUUSD.",
-    "You may be moderately aggressive when the technical setup or news catalyst is strong, but you must still reject weak setups.",
+    `You are an AI ${symbol} Trading Assistant for manual trading only. You never place orders.`,
+    `Analyze only ${symbol} using realtime price, real bid/ask/spread when available, cleaned M5/M15/H1/H4 candles, multi-timeframe indicators, market structure and real news.`,
+    `The symbol must always be ${symbol}. Do not scan or compare other markets.`,
     `Current account capital is ${payload.accountSizeUsd} USD.`,
-    `Maximum accepted loss per trade is a hard cap of ${payload.maxLossPercentPerTrade}% of capital, equal to ${payload.maxLossUsdPerTrade} USD. This is not a target to use fully on every setup.`,
-    `Mandatory rules: confidence below ${tradingRules.minConfidence} means NO_TRADE. Risk reward below 1:${tradingRules.minRiskReward} means NO_TRADE. estimated_loss_if_sl_hit above ${payload.maxLossUsdPerTrade} USD means NO_TRADE. If spread is available and extremely wide, or the market is choppy, return NO_TRADE.`,
-    "For Exness-style XAUUSD sizing, assume 1 lot = 100 oz. Estimated loss in USD = lot * abs(entry - stop_loss) * 100. Minimum lot is 0.01 and lot step is 0.01.",
-    "If the setup is strong, suggest a larger lot, but never let estimated_loss_if_sl_hit exceed the max accepted loss. If there is no valid TRADE, suggested_lot must be null.",
-    "Entry, stop loss and take profit must come from market structure, support/resistance, ATR, volatility, trend and news. Do not invent random SL/TP.",
-    "The payload sends candle_summary for the full cleaned history and recent_candles for the latest price action only. Do not assume missing older raw candles are unavailable.",
-    "Use indicators.timeframes.M5/M15/H1/H4 for multi-timeframe alignment. Do not base the decision on M15 only.",
-    "Use H4 and H1 as the primary directional bias and market-structure context. M15 and M5 are for entry timing, pullback/retest confirmation, rejection candles and avoiding bad entries. Do not flip the main bias only because M5 or M15 has a short counter-trend move.",
-    "Avoid trading against both H4 and H1 unless there is a very strong reversal structure with candle pattern confirmation and clear risk/reward. For risky_trade, explicitly state whether it is with or against H4/H1 bias.",
-    "Use market.candle_patterns.M5/M15/H1/H4 as compact candlestick confirmation. Treat candle patterns as confirmation only, not as the primary trading reason.",
-    "If data_warnings mention filtered abnormal, repeated or frozen candles and the remaining data is not enough for a clean setup, return NO_TRADE.",
-    "Treat missing or invalid bid/ask/spread only as a minor execution warning, not a confidence penalty and not an automatic NO_TRADE. Do not invent bid, ask or spread.",
-    "If data_quality is MEDIUM or HIGH and candle/indicator readiness is sufficient, missing bid/ask/spread must not be listed as no_trade_reason, invalid_condition, trade_validation_failure, or the primary reason to stand aside. Put it only in risk_factors and remind the user to manually check broker spread before entry.",
-    "For NO_TRADE, use null for entry_zone, stop_loss, take_profit, risk_reward, expected_holding_time, suggested_lot and estimated_loss_if_sl_hit. Do not use 0 as a placeholder.",
-    "The stop loss must be a reasonable invalidation area. Take profit must be realistic and not too far.",
-    "Always explain the current XAUUSD price, market context, why to trade if TRADE, why not to trade if NO_TRADE, and exactly how the entry zone should be used.",
-    "When decision is NO_TRADE but data_quality is MEDIUM or HIGH and there is a clear conditional aggressive setup, include risky_trade. This is a secondary manual scenario only, not the main recommendation. Prefer BUY_LIMIT or SELL_LIMIT when waiting for price to return to a better area. Estimate win probability as an AI probability assessment, never as a guaranteed winrate.",
-    "If there is no reasonable aggressive setup, set risky_trade to null.",
-    "Never recommend martingale, DCA into losses, all-in, copy trading, auto trading, increasing lot after a loss, or broker execution.",
-    'Never claim certainty, guaranteed wins, invented winrate, "will win", "certainly rises", or "100%".',
-    "All user-facing content MUST be written in Vietnamese. This includes summary, reasons, risk factors, checklist, news analysis, technical analysis, no_trade_reason, next_check_suggestion and disclaimer. Only enum values and symbols may remain in English.",
-    "If data_quality is LOW, missing realtime price, missing candles, or available spread is extremely excessive, return NO_TRADE.",
-    "If there is no clean XAUUSD setup, return NO_TRADE. Do not force a trade.",
-    "Return only valid JSON matching this schema exactly. No markdown.",
+    `Maximum accepted loss per trade is ${payload.maxLossPercentPerTrade}% of capital, equal to ${payload.maxLossUsdPerTrade} USD.`,
+    `Confidence below ${tradingRules.minConfidence}, risk reward below 1:${tradingRules.minRiskReward}, or estimated loss above ${payload.maxLossUsdPerTrade} USD means NO_TRADE.`,
+    sizingRule,
+    `Minimum suggested quantity is ${sizing.minQuantity} ${sizing.quantityLabel}. If there is no valid TRADE, suggested_lot must be null.`,
+    "Entry, stop loss and take profit must come from market structure, support/resistance, ATR, volatility, trend and news.",
+    "Use H4 and H1 as primary directional context. Use M15 and M5 for entry timing and confirmation.",
+    "Use candle_patterns only as confirmation. Do not invent market data.",
+    "Missing bid/ask/spread is an execution warning, not an automatic NO_TRADE when candle and indicator quality are sufficient.",
+    "If data_quality is LOW, realtime price is missing, required candles/indicators are missing, confidence is too low, RR is too low, or risk validation fails, return NO_TRADE.",
+    "For NO_TRADE, use null for all trade levels, risk_reward, holding time, suggested_lot and estimated loss.",
+    "When NO_TRADE still has a clear conditional aggressive setup, include risky_trade as a secondary manual scenario. Otherwise set risky_trade to null.",
+    "Never recommend martingale, DCA into losses, all-in, auto trading, broker execution or guaranteed wins.",
+    "All user-facing content MUST be written in Vietnamese. Only enum values and symbols may remain in English.",
+    "Return strict valid JSON only, no markdown, matching this schema:",
     JSON.stringify({
       decision: "TRADE | NO_TRADE",
-      symbol: "XAUUSD",
+      symbol,
       direction: "BUY | SELL | NONE",
       confidence: 0,
       entry_zone: null,
@@ -50,16 +47,12 @@ export function buildTradingAnalysisPrompt(payload: AnalysisPayload): string {
         max_loss_percent: payload.maxLossPercentPerTrade,
         suggested_lot: null,
         estimated_loss_if_sl_hit: null,
-        position_sizing_explanation:
-          "Giải thích cách tính lot theo công thức XAUUSD: lot * khoảng cách Entry-SL * 100 oz, và vì sao lot này phù hợp với vốn hiện tại.",
+        position_sizing_explanation: "",
       },
       current_price: 0,
-      market_context:
-        "Giá XAUUSD hiện tại, bid/ask/spread, vùng hỗ trợ/kháng cự gần nhất và trạng thái M5/M15/H1/H4.",
-      trade_reason:
-        "Nếu TRADE: giải thích vì sao setup đủ điều kiện vào lệnh. Nếu NO_TRADE: ghi rõ không có lý do vào lệnh hợp lệ.",
-      entry_plan:
-        "Nếu TRADE: mô tả cách chờ giá vào vùng entry, xác nhận nến, SL/TP và điều kiện hủy kèo. Nếu NO_TRADE: mô tả vùng giá cần quan sát cho lần kiểm tra sau.",
+      market_context: "",
+      trade_reason: "",
+      entry_plan: "",
       summary: "",
       technical_analysis: {
         trend: "",
@@ -85,29 +78,11 @@ export function buildTradingAnalysisPrompt(payload: AnalysisPayload): string {
       pre_entry_checklist: [],
       no_trade_reason: "",
       next_check_suggestion: "",
-      risky_trade: {
-        enabled: true,
-        title: "Trade mạo hiểm",
-        direction: "BUY | SELL",
-        order_type: "BUY_LIMIT | SELL_LIMIT | BUY_STOP | SELL_STOP",
-        estimated_win_probability: 0,
-        entry_zone: { from: 0, to: 0 },
-        stop_loss: 0,
-        take_profit: 0,
-        risk_reward: "1:0",
-        suggested_lot: null,
-        estimated_loss_if_sl_hit: null,
-        reason:
-          "Giải thích vì sao đây chỉ là kịch bản mạo hiểm có điều kiện, không phải khuyến nghị chính.",
-        entry_conditions: [],
-        cancel_conditions: [],
-        warning:
-          "Đây là kịch bản mạo hiểm do AI đánh giá, không phải khuyến nghị chính. Chỉ cân nhắc nếu điều kiện xác nhận xảy ra.",
-      },
+      risky_trade: null,
       disclaimer:
         "Đây là gợi ý phân tích từ AI, không phải lời khuyên tài chính. Người dùng tự chịu trách nhiệm với quyết định giao dịch.",
     }),
-    "Normalized XAUUSD analysis payload:",
+    "Normalized analysis payload:",
     JSON.stringify(payload),
   ].join("\n\n");
 }

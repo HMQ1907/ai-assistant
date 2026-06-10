@@ -1,136 +1,93 @@
 <template>
-  <main class="page">
-    <div class="toolbar">
-      <div class="heading">
-        <h1>AI XAUUSD Trading Assistant</h1>
-        <p>
-          Phân tích XAUUSD bằng dữ liệu thị trường thật và tin tức thật. Công cụ
-          chỉ đưa gợi ý giao dịch thủ công, không đặt lệnh.
-        </p>
-      </div>
-      <div class="action-panel">
-        <label>
-          <span>Vốn hiện tại (USD)</span>
-          <input
-            v-model.number="accountSizeUsd"
-            class="input capital-input"
-            min="1"
-            step="1"
-            type="number"
-          />
-        </label>
-        <AnalyzeButton :loading="loading" @analyze="analyze" />
-      </div>
+  <main class="page dashboard-page">
+    <div class="heading dashboard-heading">
+      <p class="eyebrow">AI Trading Assistant</p>
+      <h1>Chọn thị trường cần phân tích</h1>
+      <p>
+        Mỗi thị trường có luồng phân tích, lịch sử và thống kê riêng. Hệ thống
+        chỉ đưa gợi ý giao dịch thủ công, không tự đặt lệnh.
+      </p>
     </div>
 
-    <div v-if="error" class="card">
-      <strong>Phân tích thất bại</strong>
-      <p class="muted">{{ error }}</p>
-    </div>
+    <section class="market-grid">
+      <NuxtLink class="market-card gold-card" to="/xauusd">
+        <span class="market-code">XAUUSD</span>
+        <h2>Vàng / Đô la Mỹ</h2>
+        <p>Twelve Data, GNews và phân tích đa khung thời gian.</p>
+        <strong>Mở XAUUSD →</strong>
+      </NuxtLink>
 
-    <div v-if="loading" class="card">
-      <strong>
-        Đang lấy dữ liệu XAUUSD, tin tức và gửi AI phân tích...
-      </strong>
-      <p class="muted">Quá trình này có thể mất 60-120 giây.</p>
-    </div>
-
-    <RecommendationCard
-      v-if="result"
-      :history="latestHistory"
-      :result="result"
-    />
-
-    <AnalysisHistoryTable
-      v-if="hasAnalyzed"
-      :records="history"
-      class="history-block"
-      @updated="replaceHistoryRecord"
-    />
+      <NuxtLink class="market-card btc-card" to="/btc">
+        <span class="market-code">BTCUSD</span>
+        <h2>Bitcoin / Đô la Mỹ</h2>
+        <p>Binance Spot, CryptoPanic và dữ liệu thị trường 24/7.</p>
+        <strong>Mở BTC →</strong>
+      </NuxtLink>
+    </section>
   </main>
 </template>
 
-<script setup lang="ts">
-import type { AiTradeRecommendation } from "~/types/ai";
-import type { AnalysisHistoryRecord } from "~/types/trading";
-
-const loading = ref(false);
-const error = ref("");
-const result = ref<AiTradeRecommendation | null>(null);
-const history = ref<AnalysisHistoryRecord[]>([]);
-const hasAnalyzed = ref(false);
-const accountSizeUsd = ref(200);
-const latestHistory = computed(() =>
-  result.value ? (history.value[0] ?? null) : null,
-);
-
-async function analyze(): Promise<void> {
-  loading.value = true;
-  error.value = "";
-  hasAnalyzed.value = true;
-  try {
-    const response = await $fetch<{
-      result: AiTradeRecommendation;
-      history: AnalysisHistoryRecord;
-    }>("/api/analyze", {
-      method: "POST",
-      body: {
-        accountSizeUsd: normalizeAccountSize(accountSizeUsd.value),
-      },
-    });
-    result.value = response.result;
-    history.value = [
-      response.history,
-      ...history.value.filter((record) => record.id !== response.history.id),
-    ];
-  } catch (caught) {
-    error.value =
-      caught instanceof Error ? caught.message : "Lỗi không xác định";
-  } finally {
-    loading.value = false;
-  }
-}
-
-function normalizeAccountSize(value: number): number {
-  return Number.isFinite(value) && value > 0 ? Number(value) : 200;
-}
-
-function replaceHistoryRecord(record: AnalysisHistoryRecord): void {
-  history.value = history.value.map((item) =>
-    item.id === record.id ? record : item,
-  );
-}
-</script>
-
 <style scoped>
-.history-block {
-  margin-top: 16px;
+.dashboard-page {
+  padding-top: 64px;
 }
-
-.action-panel {
-  display: grid;
-  gap: 10px;
-  justify-items: end;
-  min-width: 220px;
+.dashboard-heading {
+  max-width: 720px;
 }
-
-.action-panel label {
+.eyebrow {
+  color: #7cc4ff;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.market-grid {
   display: grid;
-  gap: 6px;
-  width: 100%;
-  color: #9fb4cc;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 28px;
+}
+.market-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: inherit;
+  display: grid;
+  gap: 12px;
+  min-height: 210px;
+  padding: 24px;
+  text-decoration: none;
+  transition: border-color 160ms ease, transform 160ms ease;
+}
+.market-card:hover {
+  border-color: #4f9fe3;
+  transform: translateY(-2px);
+}
+.market-card h2,
+.market-card p {
+  margin: 0;
+}
+.market-card p {
+  color: var(--muted);
+}
+.market-card strong {
+  align-self: end;
+}
+.market-code {
   font-size: 13px;
+  font-weight: 900;
 }
-
-.capital-input {
-  width: 100%;
+.gold-card .market-code {
+  color: #f5c96a;
 }
-
-@media (max-width: 760px) {
-  .action-panel {
-    justify-items: stretch;
-    min-width: 0;
-    width: 100%;
+.btc-card .market-code {
+  color: #f7931a;
+}
+@media (max-width: 700px) {
+  .dashboard-page {
+    padding-top: 32px;
+  }
+  .market-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

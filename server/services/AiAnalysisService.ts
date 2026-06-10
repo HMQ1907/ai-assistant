@@ -7,7 +7,7 @@ import { TradeValidationService } from "./TradeValidationService";
 
 const recommendationSchema = z.object({
   decision: z.enum(["TRADE", "NO_TRADE"]),
-  symbol: z.literal("XAUUSD"),
+  symbol: z.enum(["XAUUSD", "BTCUSD"]),
   direction: z.enum(["BUY", "SELL", "NONE"]),
   confidence: z.number().min(0).max(100),
   entry_zone: z.object({ from: z.number(), to: z.number() }).nullable(),
@@ -139,7 +139,7 @@ export class AiAnalysisService {
             {
               role: "system",
               content:
-                "Return strict JSON only. You analyze XAUUSD only. All user-facing content must be written in Vietnamese. Only enum values and symbols may remain in English.",
+                "Return strict JSON only. Analyze only the symbol supplied in the payload. All user-facing content must be written in Vietnamese. Only enum values and symbols may remain in English.",
             },
             { role: "user", content: prompt },
           ],
@@ -182,7 +182,12 @@ export class AiAnalysisService {
   ): AiTradeRecommendation {
     try {
       const extracted = extractJsonObject(raw);
-      return recommendationSchema.parse(extracted);
+      const parsed = recommendationSchema.parse(extracted);
+      const expectedSymbol = payload.symbols[0]?.market.symbol;
+      if (!expectedSymbol || parsed.symbol !== expectedSymbol) {
+        throw new Error(`AI trả symbol ${parsed.symbol}, mong đợi ${expectedSymbol}.`);
+      }
+      return parsed;
     } catch (error) {
       const reason =
         error instanceof Error
@@ -209,7 +214,7 @@ function buildNoTradeRecommendation(
 ): AiTradeRecommendation {
   return {
     decision: "NO_TRADE",
-    symbol: "XAUUSD",
+    symbol: payload.symbols[0]?.market.symbol ?? "XAUUSD",
     direction: "NONE",
     confidence: 0,
     entry_zone: null,

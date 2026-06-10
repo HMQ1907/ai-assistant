@@ -29,7 +29,7 @@ const timeframeIntervals: Record<Timeframe, string> = {
   H4: "4h",
 };
 
-const twelveDataSymbols: Record<SymbolCode, string> = {
+const twelveDataSymbols: Partial<Record<SymbolCode, string>> = {
   XAUUSD: "XAU/USD",
 };
 
@@ -124,6 +124,9 @@ export class RealMarketDataProvider implements MarketDataProvider {
 
   private async getSnapshot(symbol: SymbolCode): Promise<MarketSnapshot> {
     const providerSymbol = twelveDataSymbols[symbol];
+    if (!providerSymbol) {
+      throw new Error(`Twelve Data provider không hỗ trợ ${symbol}.`);
+    }
     const warnings: string[] = [];
     const informationalDiagnostics: string[] = [];
     const criticalErrors: string[] = [];

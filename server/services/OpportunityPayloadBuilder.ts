@@ -21,6 +21,8 @@ export class OpportunityPayloadBuilder {
     news: NewsSnapshot,
     accountSizeUsd: number,
   ): AnalysisPayload {
+    const symbol = market.snapshots[0]?.symbol;
+    if (!symbol) throw new Error("Không có symbol để tạo payload phân tích.");
     const dataWarnings = [...market.warnings, ...news.warnings];
     const dataQuality = combineQuality(
       market.dataQuality,
@@ -54,8 +56,8 @@ export class OpportunityPayloadBuilder {
       }),
       news,
       rules: [
-        "Hệ thống chỉ là AI Trading Assistant cho giao dịch thủ công XAUUSD. Không đặt lệnh.",
-        "Chỉ phân tích XAUUSD. Không quét hoặc chọn symbol khác.",
+        `Hệ thống chỉ là AI Trading Assistant cho giao dịch thủ công ${symbol}. Không đặt lệnh.`,
+        `Chỉ phân tích ${symbol}. Không quét hoặc chọn symbol khác.`,
         "Phong cách giao dịch có thể mạo hiểm hơn nhưng vẫn phải có setup rõ ràng và quản trị rủi ro.",
         `Vốn hiện tại là ${accountSizeUsd} USD.`,
         `Mức lỗ tối đa mỗi giao dịch là ${tradingRules.maxLossPercentPerTrade}% vốn, tương đương ${maxLossUsdPerTrade} USD.`,

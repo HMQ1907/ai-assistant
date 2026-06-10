@@ -4,7 +4,7 @@
       <div class="heading">
         <h1>Lịch sử</h1>
         <p>
-          Cập nhật kết quả giao dịch XAUUSD người dùng đã tự thực hiện bên ngoài
+          Cập nhật kết quả giao dịch {{ symbol }} người dùng đã tự thực hiện bên ngoài
           hệ thống.
         </p>
       </div>
@@ -32,6 +32,7 @@
 import type { AiTradeRecommendation } from "~/types/ai";
 import type { AnalysisHistoryRecord } from "~/types/trading";
 
+const props = defineProps<{ symbol: "XAUUSD" | "BTCUSD" }>();
 const history = ref<AnalysisHistoryRecord[]>([]);
 const selectedRecord = ref<AnalysisHistoryRecord | null>(null);
 const selectedResult = computed(() =>
@@ -41,7 +42,9 @@ const selectedResult = computed(() =>
 );
 
 onMounted(async () => {
-  history.value = await $fetch<AnalysisHistoryRecord[]>("/api/history");
+  history.value = await $fetch<AnalysisHistoryRecord[]>("/api/history", {
+    query: { symbol: props.symbol },
+  });
 });
 
 function showDetail(record: AnalysisHistoryRecord): void {
@@ -63,7 +66,7 @@ function isAiTradeRecommendation(
   if (!value || typeof value !== "object") return false;
   const record = value as Partial<AiTradeRecommendation>;
   return (
-    record.symbol === "XAUUSD" &&
+    record.symbol === props.symbol &&
     (record.decision === "TRADE" || record.decision === "NO_TRADE") &&
     typeof record.summary === "string" &&
     typeof record.position_sizing === "object"

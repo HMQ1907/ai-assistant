@@ -23,8 +23,8 @@
         <span>Risk reward</span><strong>{{ result.risk_reward ?? "Không áp dụng" }}</strong>
       </div>
       <div class="kv-row">
-        <span>Lot gợi ý</span>
-        <strong>{{ formatLot(result.position_sizing.suggested_lot) }}</strong>
+        <span>{{ quantityLabel }} gợi ý</span>
+        <strong>{{ formatQuantity(result.position_sizing.suggested_lot) }}</strong>
       </div>
       <div class="kv-row">
         <span>Thời gian giữ dự kiến</span>
@@ -54,6 +54,9 @@
 import type { AiTradeRecommendation } from "~/types/ai";
 
 const props = defineProps<{ result: AiTradeRecommendation }>();
+const quantityLabel = computed(() =>
+  props.result.symbol === "BTCUSD" ? "Số lượng BTC" : "Lot",
+);
 
 const formatEntryZone = computed(() =>
   props.result.entry_zone
@@ -67,9 +70,11 @@ function formatLevel(value: number | null): string {
     : "Không áp dụng";
 }
 
-function formatLot(value: number | null): string {
+function formatQuantity(value: number | null): string {
   return value !== null && Number.isFinite(value) && value > 0
-    ? `${value.toFixed(2)} lot`
+    ? props.result.symbol === "BTCUSD"
+      ? `${value.toFixed(5)} BTC`
+      : `${value.toFixed(2)} lot`
     : "Không vào lệnh";
 }
 

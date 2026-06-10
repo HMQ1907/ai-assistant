@@ -10,6 +10,7 @@ import { OpportunityPayloadBuilder } from "../services/OpportunityPayloadBuilder
 import { SupabaseService } from "../services/SupabaseService";
 
 const analyzeRequestSchema = z.object({
+  symbol: z.enum(["XAUUSD", "BTCUSD"]).default("XAUUSD"),
   accountSizeUsd: z
     .number()
     .positive()
@@ -22,19 +23,26 @@ export default defineEventHandler(async (event) => {
     const body = await readBody<unknown>(event);
     const input = analyzeRequestSchema.parse(body ?? {});
     const config = useRuntimeConfig();
+    const isBitcoin = input.symbol === "BTCUSD";
     const marketService = new MarketDataService({
-      providerName: config.marketDataProvider,
-      apiKey: config.marketDataApiKey,
-      baseUrl: config.marketDataBaseUrl,
+      providerName: isBitcoin
+        ? config.btcMarketDataProvider
+        : config.marketDataProvider,
+      apiKey: isBitcoin ? "" : config.marketDataApiKey,
+      baseUrl: isBitcoin
+        ? config.btcMarketDataBaseUrl
+        : config.marketDataBaseUrl,
       maxQuoteAgeSeconds: config.maxQuoteAgeSeconds,
       debug: config.marketDataDebug,
     });
     const indicatorService = new IndicatorService();
     const newsService = new NewsService({
-      providerName: config.newsProvider,
-      apiKey: config.newsApiKey,
-      baseUrl: config.newsBaseUrl,
-      maxAgeHours: config.newsMaxAgeHours,
+      providerName: isBitcoin ? config.btcNewsProvider : config.newsProvider,
+      apiKey: isBitcoin ? config.btcNewsApiKey : config.newsApiKey,
+      baseUrl: isBitcoin ? config.btcNewsBaseUrl : config.newsBaseUrl,
+      maxAgeHours: isBitcoin
+        ? config.btcNewsMaxAgeHours
+        : config.newsMaxAgeHours,
     });
     const payloadBuilder = new OpportunityPayloadBuilder();
     const aiService = new AiAnalysisService({
@@ -50,7 +58,7 @@ export default defineEventHandler(async (event) => {
       }).getClient(),
     );
 
-    const market = await marketService.collectAll();
+    const market = await marketService.collectAll([input.symbol]);
     const indicators = indicatorService.calculateMany(market.snapshots);
     const news = await newsService.collect();
     const payload = payloadBuilder.build(

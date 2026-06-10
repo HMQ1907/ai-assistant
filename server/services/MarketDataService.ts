@@ -1,6 +1,7 @@
 import { SYMBOLS } from "../../types/trading";
 import type { SymbolCode } from "../../types/trading";
 import { RealMarketDataProvider } from "../providers/market/RealMarketDataProvider";
+import { BinanceMarketDataProvider } from "../providers/market/BinanceMarketDataProvider";
 import type {
   MarketDataCollection,
   MarketDataProvider,
@@ -36,6 +37,16 @@ export class MarketDataService {
       case "twelvedata":
         return new RealMarketDataProvider({
           apiKey: this.options.apiKey,
+          baseUrl: this.options.baseUrl,
+          ...(this.options.maxQuoteAgeSeconds !== undefined
+            ? { maxQuoteAgeSeconds: this.options.maxQuoteAgeSeconds }
+            : {}),
+          ...(this.options.debug !== undefined
+            ? { debug: this.options.debug }
+            : {}),
+        });
+      case "binance":
+        return new BinanceMarketDataProvider({
           baseUrl: this.options.baseUrl,
           ...(this.options.maxQuoteAgeSeconds !== undefined
             ? { maxQuoteAgeSeconds: this.options.maxQuoteAgeSeconds }

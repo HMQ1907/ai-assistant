@@ -7,6 +7,7 @@ import type {
   PerformanceStats,
   ResultStatus,
   SymbolPerformance,
+  SymbolCode,
 } from "../../types/trading";
 
 const tableName = "analysis_history";
@@ -96,12 +97,13 @@ export class AnalysisHistoryService {
     return toRecord(data);
   }
 
-  async list(): Promise<AnalysisHistoryRecord[]> {
-    const { data, error } = await this.supabase
+  async list(symbol?: SymbolCode): Promise<AnalysisHistoryRecord[]> {
+    let query = this.supabase
       .from(tableName)
       .select("*")
-      .order("created_at", { ascending: false })
-      .limit(100);
+      .order("created_at", { ascending: false });
+    if (symbol) query = query.eq("symbol", symbol);
+    const { data, error } = await query.limit(100);
     if (error)
       throw new Error(`Không tải được lịch sử phân tích: ${error.message}`);
     return (data ?? []).map(toRecord);
@@ -139,8 +141,10 @@ export class AnalysisHistoryService {
     return toRecord(data);
   }
 
-  async stats(): Promise<PerformanceStats> {
-    const { data, error } = await this.supabase.from(tableName).select("*");
+  async stats(symbol?: SymbolCode): Promise<PerformanceStats> {
+    let query = this.supabase.from(tableName).select("*");
+    if (symbol) query = query.eq("symbol", symbol);
+    const { data, error } = await query;
     if (error)
       throw new Error(`Không tải được thống kê hiệu quả: ${error.message}`);
 

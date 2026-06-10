@@ -25,6 +25,15 @@ export default defineNuxtConfig({
     newsApiKey: process.env.NEWS_API_KEY || "",
     newsBaseUrl: process.env.NEWS_BASE_URL || "https://gnews.io",
     newsMaxAgeHours: Number(process.env.NEWS_MAX_AGE_HOURS || 48),
+    btcMarketDataProvider:
+      process.env.BTC_MARKET_DATA_PROVIDER || "binance",
+    btcMarketDataBaseUrl:
+      process.env.BTC_MARKET_DATA_BASE_URL || "https://api.binance.com",
+    btcNewsProvider: process.env.BTC_NEWS_PROVIDER || "cryptopanic",
+    btcNewsApiKey: process.env.BTC_NEWS_API_KEY || "",
+    btcNewsBaseUrl:
+      process.env.BTC_NEWS_BASE_URL || "https://cryptopanic.com",
+    btcNewsMaxAgeHours: Number(process.env.BTC_NEWS_MAX_AGE_HOURS || 48),
     supabaseUrl: process.env.SUPABASE_URL || "",
     supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || "",
   },
