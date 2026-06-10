@@ -246,6 +246,7 @@ export class RealMarketDataProvider implements MarketDataProvider {
       symbol,
       interval: timeframeIntervals[timeframe],
       outputsize: candleOutputSize,
+      timezone: "UTC", // Bắt buộc trả múi giờ UTC đồng nhất
       apikey: this.options.apiKey,
     });
     const json = await this.fetchJson<TwelveDataTimeSeriesResponse>(url);
@@ -273,6 +274,7 @@ export class RealMarketDataProvider implements MarketDataProvider {
     const json = await this.fetchJson<TwelveDataQuoteResponse>(
       this.url("/quote", {
         symbol,
+        timezone: "UTC", // Bắt buộc trả múi giờ UTC đồng nhất
         apikey: this.options.apiKey,
       }),
     );
