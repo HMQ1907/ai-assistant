@@ -5,7 +5,7 @@ export default defineNuxtConfig({
   devtools: { enabled: true },
   runtimeConfig: {
     evolinkApiKey: process.env.EVOLINK_API_KEY || "",
-    evolinkModel: process.env.EVOLINK_MODEL || "claude-opus-4-8",
+    evolinkModel: process.env.EVOLINK_MODEL || "gemini-3.5-flash",
     evolinkBaseUrl:
       process.env.EVOLINK_BASE_URL ||
       "https://api.evolink.ai/v1/chat/completions",

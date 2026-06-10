@@ -25,15 +25,31 @@ function unlock() {
 </script>
 
 <template>
-  <div v-if="isCheckingAccess" class="access-screen">
-    <div class="loading-box">
+  <div
+    class="app-shell"
+    :class="{ 'app-shell-locked': !isUnlocked }"
+    :aria-hidden="!isUnlocked"
+  >
+    <header class="topbar">
+      <div class="topbar-inner">
+        <NuxtLink class="brand" to="/">AI XAUUSD Trading Assistant</NuxtLink>
+        <nav class="nav">
+          <NuxtLink to="/">Phân tích</NuxtLink>
+          <NuxtLink to="/history">Lịch sử</NuxtLink>
+          <NuxtLink to="/stats">Thống kê</NuxtLink>
+        </nav>
+      </div>
+    </header>
+    <NuxtPage />
+  </div>
+
+  <div v-if="isCheckingAccess || !isUnlocked" class="access-screen">
+    <div v-if="isCheckingAccess" class="loading-box">
       <div class="loading-ring" />
       <p>Đang tải hệ thống...</p>
     </div>
-  </div>
 
-  <div v-else-if="!isUnlocked" class="access-screen">
-    <form class="access-card" @submit.prevent="unlock">
+    <form v-else class="access-card" @submit.prevent="unlock">
       <div class="access-mark">X</div>
 
       <div class="access-copy">
@@ -60,29 +76,13 @@ function unlock() {
         {{ errorMessage }}
       </p>
 
-      <button class="access-submit" type="submit">
-        Vào hệ thống
-      </button>
+      <button class="access-submit" type="submit">Vào hệ thống</button>
 
       <p class="access-note">
         Dữ liệu phân tích phục vụ quyết định thủ công. Người dùng tự chịu trách
         nhiệm với lệnh giao dịch của mình.
       </p>
     </form>
-  </div>
-
-  <div v-else class="app-shell">
-    <header class="topbar">
-      <div class="topbar-inner">
-        <NuxtLink class="brand" to="/">AI XAUUSD Trading Assistant</NuxtLink>
-        <nav class="nav">
-          <NuxtLink to="/">Phân tích</NuxtLink>
-          <NuxtLink to="/history">Lịch sử</NuxtLink>
-          <NuxtLink to="/stats">Thống kê</NuxtLink>
-        </nav>
-      </div>
-    </header>
-    <NuxtPage />
   </div>
 </template>
 
@@ -96,11 +96,20 @@ function unlock() {
   color: var(--text);
   display: flex;
   justify-content: center;
+  inset: 0;
   min-height: 100vh;
   overflow: hidden;
   padding: 24px;
-  position: relative;
+  position: fixed;
   width: 100%;
+  z-index: 1000;
+}
+
+.app-shell-locked {
+  height: 100vh;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
 }
 
 .access-screen::before {
