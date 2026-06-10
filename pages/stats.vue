@@ -4,8 +4,8 @@
       <div class="heading">
         <h1>Thống kê hiệu quả XAUUSD</h1>
         <p>
-          Thống kê kết quả người dùng đã ghi nhận sau khi tự giao dịch XAUUSD
-          bên ngoài hệ thống.
+          So sánh toàn bộ lượt phân tích với riêng các tín hiệu được hệ thống
+          cho phép giao dịch.
         </p>
       </div>
       <button class="button" @click="loadStats">Tải lại</button>
@@ -16,46 +16,21 @@
       <p class="muted">{{ error }}</p>
     </div>
 
-    <section class="stats-grid">
-      <div v-for="card in summaryCards" :key="card.label" class="card stat-card">
-        <span class="muted">{{ card.label }}</span>
-        <strong>{{ card.value }}</strong>
-      </div>
-    </section>
+    <StatsSection
+      title="Các phân tích được phép TRADE"
+      description="Chỉ tính những lần AI và validation trả kết quả TRADE."
+      :stats="stats.tradeAnalyses"
+    />
 
-    <section class="grid two stats-section">
-      <div class="card">
-        <h2>Thống kê confidence</h2>
-        <div class="kv">
-          <div class="kv-row">
-            <span class="muted">Độ tin cậy trung bình của lệnh Buy/Sell</span>
-            <strong>{{ stats.avgConfidence }}%</strong>
-          </div>
-          <div class="kv-row">
-            <span class="muted">Độ tin cậy trung bình của lệnh thắng</span>
-            <strong>{{ stats.avgConfidenceOfWinners }}%</strong>
-          </div>
-          <div class="kv-row">
-            <span class="muted">Độ tin cậy trung bình của lệnh thua</span>
-            <strong>{{ stats.avgConfidenceOfLosers }}%</strong>
-          </div>
-        </div>
-      </div>
-
-      <div class="card">
-        <h2>Tỷ lệ thắng</h2>
-        <div class="win-rate">{{ stats.winRate }}%</div>
-        <p class="muted">
-          Tỷ lệ thắng = THẮNG / (THẮNG + THUA), không tính CHƯA CẬP NHẬT, HÒA
-          VỐN và BỎ QUA. Nếu P/L đã nhập nhưng kết quả chưa chọn, hệ thống sẽ
-          tự suy ra thắng/thua/hòa vốn từ P/L.
-        </p>
-      </div>
-    </section>
+    <StatsSection
+      title="Tổng tất cả phân tích"
+      description="Bao gồm cả TRADE và NO_TRADE."
+      :stats="stats.allAnalyses"
+    />
 
     <section class="stats-section">
       <div class="card">
-        <h2>Hiệu suất XAUUSD</h2>
+        <h2>Hiệu suất tín hiệu TRADE</h2>
         <SymbolPerformanceTable :items="stats.bestSymbols" />
       </div>
     </section>
@@ -63,9 +38,13 @@
 </template>
 
 <script setup lang="ts">
-import type { PerformanceStats } from "~/types/trading";
+import StatsSection from "~/components/StatsSection.vue";
+import type {
+  PerformanceStats,
+  PerformanceStatsSummary,
+} from "~/types/trading";
 
-const emptyStats: PerformanceStats = {
+const emptySummary = (): PerformanceStatsSummary => ({
   totalAnalysis: 0,
   totalTrades: 0,
   wins: 0,
@@ -76,21 +55,16 @@ const emptyStats: PerformanceStats = {
   avgConfidence: 0,
   avgConfidenceOfWinners: 0,
   avgConfidenceOfLosers: 0,
+});
+
+const stats = ref<PerformanceStats>({
+  ...emptySummary(),
+  allAnalyses: emptySummary(),
+  tradeAnalyses: emptySummary(),
   bestSymbols: [],
   worstSymbols: [],
-};
-
-const stats = ref<PerformanceStats>({ ...emptyStats });
+});
 const error = ref("");
-
-const summaryCards = computed(() => [
-  { label: "Tổng phân tích", value: stats.value.totalAnalysis },
-  { label: "Giao dịch đã ghi nhận", value: stats.value.totalTrades },
-  { label: "THẮNG", value: stats.value.wins },
-  { label: "THUA", value: stats.value.losses },
-  { label: "HÒA VỐN", value: stats.value.breakevens },
-  { label: "BỎ QUA", value: stats.value.skipped },
-]);
 
 onMounted(loadStats);
 
@@ -99,47 +73,14 @@ async function loadStats(): Promise<void> {
   try {
     stats.value = await $fetch<PerformanceStats>("/api/stats");
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : "Lỗi không xác định";
+    error.value =
+      caught instanceof Error ? caught.message : "Lỗi không xác định";
   }
 }
 </script>
 
 <style scoped>
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.stat-card {
-  display: grid;
-  gap: 8px;
-}
-
-.stat-card strong,
-.win-rate {
-  font-size: 28px;
-  font-weight: 800;
-}
-
 .stats-section {
-  margin-top: 16px;
-}
-
-@media (max-width: 920px) {
-  .stats-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 520px) {
-  .stats-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .stat-card strong,
-  .win-rate {
-    font-size: 26px;
-  }
+  margin-top: 18px;
 }
 </style>

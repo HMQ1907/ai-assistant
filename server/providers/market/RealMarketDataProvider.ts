@@ -59,6 +59,7 @@ interface TwelveDataQuoteResponse {
   bid?: string;
   ask?: string;
   datetime?: string;
+  timestamp?: number;
 }
 
 export class RealMarketDataProvider implements MarketDataProvider {
@@ -172,7 +173,9 @@ export class RealMarketDataProvider implements MarketDataProvider {
     }
 
     const providerFetchedAt = new Date().toISOString();
-    const quoteTime = parseProviderTimestamp(quote.datetime);
+    const quoteTime =
+      parseUnixTimestamp(quote.timestamp) ??
+      parseProviderTimestamp(quote.datetime);
     const quoteAgeSeconds = quoteTime
       ? Math.max(0, Math.round((Date.now() - new Date(quoteTime).getTime()) / 1000))
       : null;
@@ -222,9 +225,7 @@ export class RealMarketDataProvider implements MarketDataProvider {
       data_warnings: warnings,
       informational_diagnostics: informationalDiagnostics,
       critical_errors: criticalErrors,
-      updated_at: quote.datetime
-        ? (quoteTime ?? providerFetchedAt)
-        : providerFetchedAt,
+      updated_at: quoteTime ?? providerFetchedAt,
       provider: this.name,
       providerFetchedAt,
       providerQuoteTime: quoteTime,
@@ -319,6 +320,12 @@ function parseNumber(value: string | undefined): number | undefined {
   if (value === undefined || value === "") return undefined;
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : undefined;
+}
+
+function parseUnixTimestamp(value: number | undefined): string | null {
+  if (!Number.isFinite(value) || value === undefined || value <= 0) return null;
+  const date = new Date(value * 1000);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 function formatReasons(

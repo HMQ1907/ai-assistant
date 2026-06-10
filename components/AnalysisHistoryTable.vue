@@ -5,6 +5,7 @@
     <table v-else class="history-table">
       <thead>
         <tr>
+          <th>ID</th>
           <th>Thời gian</th>
           <th>Khuyến nghị</th>
           <th>Symbol</th>
@@ -21,6 +22,16 @@
       </thead>
       <tbody>
         <tr v-for="record in records" :key="record.id">
+          <td data-label="ID">
+            <button
+              class="history-id"
+              :title="`Bấm để sao chép ID: ${record.id}`"
+              type="button"
+              @click="copyId(record.id)"
+            >
+              {{ copiedId === record.id ? "Đã sao chép" : record.id }}
+            </button>
+          </td>
           <td data-label="Thời gian">{{ formatTime(record.created_at) }}</td>
           <td data-label="Khuyến nghị">
             <span
@@ -136,6 +147,7 @@ type Draft = {
 };
 
 const drafts = reactive<Record<string, Draft>>({});
+const copiedId = ref("");
 
 watch(
   () => props.records,
@@ -161,6 +173,14 @@ async function save(id: string): Promise<void> {
     body: draft,
   });
   emit("updated", updated);
+}
+
+async function copyId(id: string): Promise<void> {
+  await navigator.clipboard.writeText(id);
+  copiedId.value = id;
+  window.setTimeout(() => {
+    if (copiedId.value === id) copiedId.value = "";
+  }, 1500);
 }
 
 function setStatus(id: string, event: Event): void {
@@ -272,6 +292,25 @@ function formatTime(value: string): string {
 
 .result-select {
   min-width: 106px;
+}
+
+.history-id {
+  background: transparent;
+  border: 0;
+  color: #7cc4ff;
+  cursor: pointer;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  max-width: 150px;
+  overflow: hidden;
+  padding: 0;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-id:hover {
+  text-decoration: underline;
 }
 
 .direction-pill {

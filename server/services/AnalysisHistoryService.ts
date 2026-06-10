@@ -145,6 +145,23 @@ export class AnalysisHistoryService {
       throw new Error(`Không tải được thống kê hiệu quả: ${error.message}`);
 
     const records = (data ?? []).map(toRecord);
+    const tradeRecords = records.filter((record) => record.decision === "TRADE");
+    const allAnalyses = summarizeRecords(records);
+    const tradeAnalyses = summarizeRecords(tradeRecords);
+
+    return {
+      ...allAnalyses,
+      allAnalyses,
+      tradeAnalyses,
+      bestSymbols: symbolPerformance(tradeRecords, "best"),
+      worstSymbols: symbolPerformance(tradeRecords, "worst"),
+    };
+  }
+}
+
+function summarizeRecords(
+  records: AnalysisHistoryRecord[],
+): Omit<PerformanceStats, "allAnalyses" | "tradeAnalyses" | "bestSymbols" | "worstSymbols"> {
     const recordsWithEffectiveStatus = records.map((record) => ({
       record,
       resultStatus: effectiveResultStatus(record),
@@ -168,7 +185,7 @@ export class AnalysisHistoryService {
       (item) => item.resultStatus !== "PENDING",
     );
 
-    return {
+  return {
       totalAnalysis: records.length,
       totalTrades: recordedTrades.length,
       wins: wins.length,
@@ -181,10 +198,7 @@ export class AnalysisHistoryService {
       ),
       avgConfidenceOfWinners: average(wins.map((record) => record.confidence)),
       avgConfidenceOfLosers: average(losses.map((record) => record.confidence)),
-      bestSymbols: symbolPerformance(records, "best"),
-      worstSymbols: symbolPerformance(records, "worst"),
-    };
-  }
+  };
 }
 
 function toRecord(row: unknown): AnalysisHistoryRecord {

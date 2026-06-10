@@ -302,7 +302,7 @@ export interface SymbolPerformance {
   totalProfitLoss: number;
 }
 
-export interface PerformanceStats {
+export interface PerformanceStatsSummary {
   totalAnalysis: number;
   totalTrades: number;
   wins: number;
@@ -313,6 +313,11 @@ export interface PerformanceStats {
   avgConfidence: number;
   avgConfidenceOfWinners: number;
   avgConfidenceOfLosers: number;
+}
+
+export interface PerformanceStats extends PerformanceStatsSummary {
+  allAnalyses: PerformanceStatsSummary;
+  tradeAnalyses: PerformanceStatsSummary;
   bestSymbols: SymbolPerformance[];
   worstSymbols: SymbolPerformance[];
 }
