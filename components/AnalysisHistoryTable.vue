@@ -2,7 +2,8 @@
   <section class="card">
     <h2>Lịch sử phân tích</h2>
     <div v-if="records.length === 0" class="muted">Chưa có phân tích.</div>
-    <table v-else class="history-table">
+    <div v-else class="history-table-wrap">
+    <table class="history-table">
       <thead>
         <tr>
           <th>ID</th>
@@ -16,9 +17,7 @@
           <th>Exit thực tế</th>
           <th>P/L</th>
           <th>Ghi chú</th>
-          <th></th>
-          <th></th>
-          <th></th>
+          <th>Thao tác</th>
         </tr>
       </thead>
       <tbody>
@@ -103,26 +102,36 @@
               @input="setNote(record.id, $event)"
             >
           </td>
-          <td data-label="Chi tiết">
-            <button class="button small secondary" @click="emit('detail', record)">
-              Chi tiết
-            </button>
-          </td>
-          <td data-label="Check lại">
-            <button
-              class="button small secondary"
-              :disabled="checkingId === record.id"
-              @click="reviewOrder(record)"
-            >
-              {{ checkingId === record.id ? "Đang check..." : "Check lại lệnh" }}
-            </button>
-          </td>
-          <td data-label="Lưu">
-            <button class="button small" @click="save(record.id)">Lưu</button>
+          <td data-label="Thao tác" class="actions-cell">
+            <div class="row-actions">
+              <button
+                class="action-button action-button-secondary"
+                type="button"
+                @click="emit('detail', record)"
+              >
+                Chi tiết
+              </button>
+              <button
+                class="action-button action-button-secondary review-button"
+                type="button"
+                :disabled="checkingId === record.id"
+                @click="reviewOrder(record)"
+              >
+                {{ checkingId === record.id ? "Đang kiểm tra..." : "Check lại lệnh" }}
+              </button>
+              <button
+                class="action-button action-button-primary"
+                type="button"
+                @click="save(record.id)"
+              >
+                Lưu
+              </button>
+            </div>
           </td>
         </tr>
       </tbody>
     </table>
+    </div>
 
     <p v-if="reviewError" class="review-error">{{ reviewError }}</p>
 
@@ -438,6 +447,84 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
 </script>
 
 <style scoped>
+.history-table-wrap {
+  margin: 0 -4px;
+  overflow-x: auto;
+  padding: 0 4px 6px;
+  scrollbar-color: #465666 transparent;
+  scrollbar-width: thin;
+}
+
+.history-table {
+  min-width: 1120px;
+  table-layout: fixed;
+}
+
+.history-table th {
+  color: #aebdca;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding-bottom: 12px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.history-table td {
+  height: 68px;
+  vertical-align: middle;
+}
+
+.history-table tbody tr {
+  transition: background-color 150ms ease;
+}
+
+.history-table tbody tr:hover {
+  background: rgba(101, 166, 255, 0.035);
+}
+
+.history-table th:nth-child(1) {
+  width: 110px;
+}
+
+.history-table th:nth-child(2) {
+  width: 112px;
+}
+
+.history-table th:nth-child(3) {
+  width: 118px;
+}
+
+.history-table th:nth-child(4) {
+  width: 78px;
+}
+
+.history-table th:nth-child(5) {
+  width: 76px;
+}
+
+.history-table th:nth-child(6) {
+  width: 88px;
+}
+
+.history-table th:nth-child(7) {
+  width: 134px;
+}
+
+.history-table th:nth-child(8),
+.history-table th:nth-child(9),
+.history-table th:nth-child(10) {
+  width: 116px;
+}
+
+.history-table th:nth-child(11) {
+  width: 130px;
+}
+
+.history-table th:nth-child(12) {
+  width: 236px;
+}
+
 .small {
   min-height: 34px;
   padding: 0 10px;
@@ -466,7 +553,7 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
   cursor: pointer;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12px;
-  max-width: 150px;
+  max-width: 96px;
   overflow: hidden;
   padding: 0;
   text-align: left;
@@ -476,6 +563,51 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
 
 .history-id:hover {
   text-decoration: underline;
+}
+
+.row-actions {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: 70px minmax(104px, 1fr) 52px;
+}
+
+.action-button {
+  align-items: center;
+  border: 1px solid #425264;
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 750;
+  justify-content: center;
+  line-height: 1.15;
+  min-height: 34px;
+  padding: 6px 9px;
+  white-space: nowrap;
+}
+
+.action-button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.action-button-secondary {
+  background: #202a34;
+}
+
+.action-button-secondary:hover:not(:disabled) {
+  background: #293746;
+  border-color: #5c7186;
+}
+
+.action-button-primary {
+  background: #1f63ad;
+  border-color: #4777b8;
+}
+
+.action-button-primary:hover {
+  background: #2772c4;
 }
 
 .direction-pill {
@@ -561,6 +693,12 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
 }
 
 @media (max-width: 820px) {
+  .history-table-wrap {
+    margin: 0;
+    overflow: visible;
+    padding: 0;
+  }
+
   .history-table,
   .history-table tbody,
   .history-table tr,
@@ -572,6 +710,8 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
   .history-table {
     border-collapse: separate;
     border-spacing: 0 12px;
+    min-width: 0;
+    table-layout: auto;
   }
 
   .history-table thead {
@@ -582,7 +722,8 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
     border: 1px solid var(--border);
     border-radius: 8px;
     overflow: hidden;
-    background: rgba(255, 255, 255, 0.015);
+    background: #192027;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
   }
 
   .history-table td {
@@ -591,7 +732,7 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
     display: grid;
     gap: 10px;
     grid-template-columns: minmax(104px, 0.42fr) minmax(0, 1fr);
-    min-height: 48px;
+    min-height: 52px;
     padding: 10px 12px;
   }
 
@@ -606,14 +747,31 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
     border-bottom: 0;
   }
 
+  .history-table td[data-label="ID"] {
+    background: rgba(101, 166, 255, 0.035);
+  }
+
+  .history-id {
+    max-width: 100%;
+  }
+
   .compact,
   .note-input,
   .result-select {
     min-width: 0;
   }
 
-  .small {
+  .row-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
+  }
+
+  .action-button {
+    min-height: 40px;
+  }
+
+  .action-button-primary {
+    grid-column: 1 / -1;
   }
 
   .review-grid {
@@ -629,6 +787,14 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
 
   .review-grid {
     grid-template-columns: 1fr;
+  }
+
+  .row-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .action-button-primary {
+    grid-column: auto;
   }
 }
 </style>
