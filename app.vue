@@ -1,5 +1,5 @@
 <script setup lang="ts">
-const accessPassword = "Nhung2803@";
+const accessPassword = ["Nhung2803@", "1"];
 
 const isUnlocked = ref(false);
 const isCheckingAccess = ref(true);
@@ -12,7 +12,7 @@ onMounted(() => {
 });
 
 function unlock() {
-  if (password.value === accessPassword) {
+  if (accessPassword.includes(password.value)) {
     sessionStorage.setItem("xauusd-assistant-unlocked", "1");
     isUnlocked.value = true;
     password.value = "";

@@ -1,21 +1,37 @@
 import { z } from "zod";
-import type { AiAnalysisResult, AiTradeRecommendation } from "../../types/ai";
-import type { AnalysisPayload } from "../../types/trading";
+import type {
+  AiAnalysisResult,
+  AiOrderReview,
+  AiOrderReviewResult,
+  AiTradeRecommendation,
+} from "../../types/ai";
+import type { AnalysisHistoryRecord, AnalysisPayload } from "../../types/trading";
+import { buildOrderReviewPrompt } from "../prompts/order-review.prompt";
 import { buildTradingAnalysisPrompt } from "../prompts/trading-analysis.prompt";
 import { extractJsonObject } from "../utils/jsonParser";
 import { TradeValidationService } from "./TradeValidationService";
+
+const entryZoneSchema = z.preprocess(
+  normalizeEntryZone,
+  z.object({ from: z.number(), to: z.number() }).nullable(),
+);
+
+const riskRewardSchema = z.preprocess(
+  normalizeRiskReward,
+  z.string().nullable(),
+);
 
 const recommendationSchema = z.object({
   decision: z.enum(["TRADE", "NO_TRADE"]),
   symbol: z.literal("XAUUSD"),
   direction: z.enum(["BUY", "SELL", "NONE"]),
   confidence: z.number().min(0).max(100),
-  entry_zone: z.object({ from: z.number(), to: z.number() }).nullable(),
+  entry_zone: entryZoneSchema,
   stop_loss: z.number().nullable(),
   stop_loss_reason: z.string(),
   take_profit: z.number().nullable(),
   take_profit_reason: z.string(),
-  risk_reward: z.string().nullable(),
+  risk_reward: riskRewardSchema,
   expected_holding_time: z.string().nullable(),
   position_sizing: z.object({
     account_size_usd: z.number(),
@@ -64,7 +80,7 @@ const recommendationSchema = z.object({
       entry_zone: z.object({ from: z.number(), to: z.number() }),
       stop_loss: z.number(),
       take_profit: z.number(),
-      risk_reward: z.string(),
+      risk_reward: z.preprocess(normalizeRiskReward, z.string()),
       suggested_lot: z.number().nullable(),
       estimated_loss_if_sl_hit: z.number().nullable(),
       reason: z.string(),
@@ -76,6 +92,66 @@ const recommendationSchema = z.object({
     .default(null),
   disclaimer: z.string(),
 });
+
+const orderReviewSchema = z.object({
+  symbol: z.literal("XAUUSD"),
+  reviewed_history_id: z.string(),
+  current_price: z.number(),
+  order_status_assessment: z.enum([
+    "LIKELY_NOT_FILLED",
+    "LIKELY_FILLED",
+    "ALREADY_INVALIDATED",
+    "UNCLEAR",
+  ]),
+  recommended_action: z.enum([
+    "KEEP_ORDER",
+    "CANCEL_ORDER",
+    "MOVE_SL",
+    "MOVE_TP",
+    "MOVE_SL_TP",
+    "WAIT",
+    "CLOSE_MANUALLY",
+    "TRADE_COMPLETED",
+  ]),
+  confidence: z.number().min(0).max(100),
+  summary: z.string(),
+  fill_assessment: z.string(),
+  action_reason: z.string(),
+  stop_loss_plan: z.object({
+    keep_current: z.boolean(),
+    suggested_stop_loss: z.number().nullable(),
+    reason: z.string(),
+  }),
+  take_profit_plan: z.object({
+    keep_current: z.boolean(),
+    suggested_take_profit: z.number().nullable(),
+    reason: z.string(),
+  }),
+  cancellation_conditions: z.array(z.string()),
+  risk_warnings: z.array(z.string()),
+  next_check_minutes: z.number().min(1).max(240),
+  checklist: z.array(z.string()),
+  disclaimer: z.string(),
+});
+
+function normalizeEntryZone(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+
+  const matches = value.match(/-?\d+(?:[.,]\d+)?/g);
+  if (!matches || matches.length !== 2) return value;
+
+  const [fromText, toText] = matches;
+  const from = Number(fromText?.replace(",", "."));
+  const to = Number(toText?.replace(",", "."));
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return value;
+
+  return { from, to };
+}
+
+function normalizeRiskReward(value: unknown): unknown {
+  if (typeof value !== "number" || !Number.isFinite(value)) return value;
+  return `1:${value}`;
+}
 
 export class AiAnalysisService {
   private readonly validationService = new TradeValidationService();
@@ -99,6 +175,24 @@ export class AiAnalysisService {
     const raw = await this.callWithRetry(prompt);
     const parsed = this.parseOrNoTrade(raw, payload);
     return { raw, parsed: this.validationService.validate(parsed, payload) };
+  }
+
+  async reviewOrder(input: {
+    history: AnalysisHistoryRecord;
+    latestPayload: AnalysisPayload;
+    actualEntry: number | null;
+    actualExit: number | null;
+    actualProfitLoss: number | null;
+    userNote: string;
+    resultStatus: string;
+  }): Promise<AiOrderReviewResult> {
+    if (!this.options.apiKey) {
+      throw new Error("Chưa cấu hình Evolink API key.");
+    }
+
+    const prompt = buildOrderReviewPrompt(input);
+    const raw = await this.callWithRetry(prompt);
+    return { raw, parsed: this.parseOrderReview(raw, input) };
   }
 
   private async callWithRetry(prompt: string): Promise<string> {
@@ -191,6 +285,59 @@ export class AiAnalysisService {
       return buildNoTradeRecommendation(payload, reason);
     }
   }
+
+  private parseOrderReview(
+    raw: string,
+    input: {
+      history: AnalysisHistoryRecord;
+      latestPayload: AnalysisPayload;
+    },
+  ): AiOrderReview {
+    try {
+      const extracted = extractJsonObject(raw);
+      return orderReviewSchema.parse(extracted);
+    } catch (error) {
+      const reason =
+        error instanceof Error
+          ? `AI trả JSON không hợp lệ: ${error.message}`
+          : "AI trả JSON không hợp lệ.";
+      return buildFallbackOrderReview(input.history, input.latestPayload, reason);
+    }
+  }
+}
+
+function buildFallbackOrderReview(
+  history: AnalysisHistoryRecord,
+  payload: AnalysisPayload,
+  reason: string,
+): AiOrderReview {
+  return {
+    symbol: "XAUUSD",
+    reviewed_history_id: history.id,
+    current_price: payload.symbols[0]?.market.price ?? 0,
+    order_status_assessment: "UNCLEAR",
+    recommended_action: "WAIT",
+    confidence: 0,
+    summary: "Không xác thực được phản hồi AI khi check lại lệnh.",
+    fill_assessment: "Không thể kết luận lệnh đã khớp hay chưa.",
+    action_reason: reason,
+    stop_loss_plan: {
+      keep_current: true,
+      suggested_stop_loss: null,
+      reason: "Không dời SL khi phản hồi AI không hợp lệ.",
+    },
+    take_profit_plan: {
+      keep_current: true,
+      suggested_take_profit: null,
+      reason: "Không dời TP khi phản hồi AI không hợp lệ.",
+    },
+    cancellation_conditions: ["Chạy lại check lệnh khi AI trả JSON hợp lệ."],
+    risk_warnings: [reason],
+    next_check_minutes: 15,
+    checklist: ["Kiểm tra trực tiếp trạng thái lệnh trên Exness."],
+    disclaimer:
+      "Đây là gợi ý phân tích từ AI, không phải lời khuyên tài chính. Người dùng tự chịu trách nhiệm với quyết định giao dịch.",
+  };
 }
 
 function sanitizeErrorBody(value: string): string {

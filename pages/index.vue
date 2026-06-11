@@ -38,6 +38,8 @@
     <RecommendationCard
       v-if="result"
       :history="latestHistory"
+      :latest-price="latestPrice"
+      :latest-price-loading="latestPriceLoading"
       :result="result"
     />
 
@@ -60,6 +62,8 @@ const result = ref<AiTradeRecommendation | null>(null);
 const history = ref<AnalysisHistoryRecord[]>([]);
 const hasAnalyzed = ref(false);
 const accountSizeUsd = ref(200);
+const latestPrice = ref<number | null>(null);
+const latestPriceLoading = ref(false);
 const latestHistory = computed(() =>
   result.value ? (history.value[0] ?? null) : null,
 );
@@ -68,6 +72,7 @@ async function analyze(): Promise<void> {
   loading.value = true;
   error.value = "";
   hasAnalyzed.value = true;
+  latestPrice.value = null;
   try {
     const response = await $fetch<{
       result: AiTradeRecommendation;
@@ -83,11 +88,26 @@ async function analyze(): Promise<void> {
       response.history,
       ...history.value.filter((record) => record.id !== response.history.id),
     ];
+    await refreshLatestPrice();
   } catch (caught) {
     error.value =
       caught instanceof Error ? caught.message : "Lỗi không xác định";
   } finally {
     loading.value = false;
+  }
+}
+
+async function refreshLatestPrice(): Promise<void> {
+  latestPriceLoading.value = true;
+  try {
+    const response = await $fetch<{ price: number }>("/api/market/price", {
+      query: { timestamp: Date.now() },
+    });
+    latestPrice.value = response.price;
+  } catch {
+    latestPrice.value = null;
+  } finally {
+    latestPriceLoading.value = false;
   }
 }
 

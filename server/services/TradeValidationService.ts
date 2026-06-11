@@ -95,7 +95,14 @@ export class TradeValidationService {
     const rawLot =
       targetLossUsd / (distance * tradingRules.xauUsdOuncesPerLot);
     const lot = floorToStep(rawLot, tradingRules.lotStep);
-    const suggestedLot = lot >= tradingRules.minLot ? lot : null;
+    const minLotLoss =
+      tradingRules.minLot * distance * tradingRules.xauUsdOuncesPerLot;
+    const suggestedLot =
+      lot >= tradingRules.minLot
+        ? lot
+        : minLotLoss <= maxLossUsd
+          ? tradingRules.minLot
+          : null;
     const estimatedLoss =
       suggestedLot === null
         ? null
@@ -179,12 +186,11 @@ export class TradeValidationService {
       );
     }
 
-    if (
-      (recommendation.position_sizing.estimated_loss_if_sl_hit ?? Infinity) >
-      maxLossUsd
-    ) {
+    const estimatedLoss =
+      recommendation.position_sizing.estimated_loss_if_sl_hit;
+    if (estimatedLoss !== null && estimatedLoss > maxLossUsd) {
       reasons.push(
-        `estimated_loss_if_sl_hit ${recommendation.position_sizing.estimated_loss_if_sl_hit} USD vượt giới hạn ${maxLossUsd} USD`,
+        `estimated_loss_if_sl_hit ${estimatedLoss} USD vượt giới hạn ${maxLossUsd} USD`,
       );
     }
 

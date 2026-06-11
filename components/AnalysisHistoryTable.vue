@@ -18,6 +18,7 @@
           <th>Ghi chú</th>
           <th></th>
           <th></th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -107,16 +108,114 @@
               Chi tiết
             </button>
           </td>
+          <td data-label="Check lại">
+            <button
+              class="button small secondary"
+              :disabled="checkingId === record.id"
+              @click="reviewOrder(record)"
+            >
+              {{ checkingId === record.id ? "Đang check..." : "Check lại lệnh" }}
+            </button>
+          </td>
           <td data-label="Lưu">
             <button class="button small" @click="save(record.id)">Lưu</button>
           </td>
         </tr>
       </tbody>
     </table>
+
+    <p v-if="reviewError" class="review-error">{{ reviewError }}</p>
+
+    <section v-if="reviewResult" class="review-panel">
+      <div class="review-head">
+        <div>
+          <p class="review-eyebrow">AI check lại lệnh</p>
+          <h3>{{ actionLabel(reviewResult.recommended_action) }}</h3>
+        </div>
+        <button class="button small secondary" @click="reviewResult = null">
+          Đóng
+        </button>
+      </div>
+
+      <div class="review-grid">
+        <div>
+          <span>ID lịch sử</span>
+          <strong>{{ reviewResult.reviewed_history_id }}</strong>
+        </div>
+        <div>
+          <span>Giá hiện tại</span>
+          <strong>{{ formatPrice(reviewResult.current_price) }}</strong>
+        </div>
+        <div>
+          <span>Khả năng khớp</span>
+          <strong>{{ reviewStatusLabel(reviewResult.order_status_assessment) }}</strong>
+        </div>
+        <div>
+          <span>Độ tin cậy</span>
+          <strong>{{ reviewResult.confidence }}%</strong>
+        </div>
+      </div>
+
+      <p>{{ reviewResult.summary }}</p>
+      <p class="muted">
+        <strong>Đánh giá khớp lệnh:</strong> {{ reviewResult.fill_assessment }}
+      </p>
+      <p class="muted">
+        <strong>Lý do hành động:</strong> {{ reviewResult.action_reason }}
+      </p>
+
+      <div class="grid two">
+        <section>
+          <h4>Stop loss</h4>
+          <p class="muted">{{ reviewResult.stop_loss_plan.reason }}</p>
+          <strong v-if="reviewResult.stop_loss_plan.suggested_stop_loss !== null">
+            SL đề xuất: {{ formatPrice(reviewResult.stop_loss_plan.suggested_stop_loss) }}
+          </strong>
+        </section>
+        <section>
+          <h4>Take profit</h4>
+          <p class="muted">{{ reviewResult.take_profit_plan.reason }}</p>
+          <strong v-if="reviewResult.take_profit_plan.suggested_take_profit !== null">
+            TP đề xuất: {{ formatPrice(reviewResult.take_profit_plan.suggested_take_profit) }}
+          </strong>
+        </section>
+      </div>
+
+      <div class="grid two">
+        <section>
+          <h4>Điều kiện hủy</h4>
+          <ul class="list">
+            <li v-for="item in listOrDash(reviewResult.cancellation_conditions)" :key="item">
+              {{ item }}
+            </li>
+          </ul>
+        </section>
+        <section>
+          <h4>Rủi ro</h4>
+          <ul class="list">
+            <li v-for="item in listOrDash(reviewResult.risk_warnings)" :key="item">
+              {{ item }}
+            </li>
+          </ul>
+        </section>
+      </div>
+
+      <h4>Checklist thủ công</h4>
+      <ul class="list">
+        <li v-for="item in listOrDash(reviewResult.checklist)" :key="item">
+          {{ item }}
+        </li>
+      </ul>
+      <p class="muted">
+        Nên check lại sau {{ reviewResult.next_check_minutes }} phút.
+        {{ reviewResult.disclaimer }}
+      </p>
+    </section>
   </section>
 </template>
 
 <script setup lang="ts">
+import type { AiOrderReview } from "~/types/ai";
 import type {
   AnalysisHistoryRecord,
   ResultStatus,
@@ -148,6 +247,9 @@ type Draft = {
 
 const drafts = reactive<Record<string, Draft>>({});
 const copiedId = ref("");
+const checkingId = ref("");
+const reviewResult = ref<AiOrderReview | null>(null);
+const reviewError = ref("");
 
 watch(
   () => props.records,
@@ -181,6 +283,34 @@ async function copyId(id: string): Promise<void> {
   window.setTimeout(() => {
     if (copiedId.value === id) copiedId.value = "";
   }, 1500);
+}
+
+async function reviewOrder(record: AnalysisHistoryRecord): Promise<void> {
+  checkingId.value = record.id;
+  reviewResult.value = null;
+  reviewError.value = "";
+  try {
+    const draft = drafts[record.id] ?? {
+      result_status: record.result_status,
+      actual_entry: record.actual_entry,
+      actual_exit: record.actual_exit,
+      actual_profit_loss: record.actual_profit_loss,
+      user_note: record.user_note,
+    };
+    const response = await $fetch<{ review: AiOrderReview }>(
+      `/api/history/${record.id}/review`,
+      {
+        method: "POST",
+        body: draft,
+      },
+    );
+    reviewResult.value = response.review;
+  } catch (error) {
+    reviewError.value =
+      error instanceof Error ? error.message : "Không check lại được lệnh.";
+  } finally {
+    checkingId.value = "";
+  }
 }
 
 function setStatus(id: string, event: Event): void {
@@ -270,6 +400,41 @@ function formatTime(value: string): string {
     timeZone: "Asia/Ho_Chi_Minh",
   }).format(new Date(value));
 }
+
+function actionLabel(value: AiOrderReview["recommended_action"]): string {
+  const labels: Record<AiOrderReview["recommended_action"], string> = {
+    KEEP_ORDER: "Giữ nguyên lệnh",
+    CANCEL_ORDER: "Hủy lệnh chờ",
+    MOVE_SL: "Dời stop loss",
+    MOVE_TP: "Dời take profit",
+    MOVE_SL_TP: "Dời stop loss và take profit",
+    WAIT: "Chờ thêm",
+    CLOSE_MANUALLY: "Cân nhắc đóng thủ công",
+    TRADE_COMPLETED: "Giao dịch đã hoàn tất",
+  };
+  return labels[value];
+}
+
+function reviewStatusLabel(
+  value: AiOrderReview["order_status_assessment"],
+): string {
+  const labels: Record<AiOrderReview["order_status_assessment"], string> = {
+    LIKELY_NOT_FILLED: "Có thể chưa khớp",
+    LIKELY_FILLED: "Có thể đã khớp",
+    ALREADY_INVALIDATED: "Kèo đã bị vô hiệu",
+    UNCLEAR: "Chưa xác định",
+  };
+  return labels[value];
+}
+
+function formatPrice(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "Không rõ";
+  }
+  return value.toFixed(2);
+}
+
+const listOrDash = (items: string[]) => (items.length ? items : ["Không có."]);
 </script>
 
 <style scoped>
@@ -339,6 +504,62 @@ function formatTime(value: string): string {
   color: var(--muted);
 }
 
+.review-panel {
+  border-top: 1px solid var(--border);
+  margin-top: 18px;
+  padding-top: 18px;
+}
+
+.review-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.review-eyebrow {
+  color: #7cc4ff;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  margin: 0 0 6px;
+  text-transform: uppercase;
+}
+
+.review-head h3 {
+  margin-top: 0;
+}
+
+.review-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 12px 0;
+}
+
+.review-grid div {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-width: 0;
+  padding: 10px;
+}
+
+.review-grid span {
+  color: var(--muted);
+  display: block;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.review-grid strong {
+  overflow-wrap: anywhere;
+}
+
+.review-error {
+  color: var(--red);
+  margin-top: 14px;
+}
+
 @media (max-width: 820px) {
   .history-table,
   .history-table tbody,
@@ -394,11 +615,19 @@ function formatTime(value: string): string {
   .small {
     width: 100%;
   }
+
+  .review-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 420px) {
   .history-table td {
     align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .review-grid {
     grid-template-columns: 1fr;
   }
 }

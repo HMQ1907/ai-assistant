@@ -1,6 +1,7 @@
 import { SYMBOLS } from "../../types/trading";
 import type { SymbolCode } from "../../types/trading";
 import { RealMarketDataProvider } from "../providers/market/RealMarketDataProvider";
+import type { LatestMarketPrice } from "../providers/market/RealMarketDataProvider";
 import type {
   MarketDataCollection,
   MarketDataProvider,
@@ -29,6 +30,13 @@ export class MarketDataService {
     symbols: SymbolCode[] = this.getDefaultSymbols(),
   ): Promise<MarketDataCollection> {
     return this.provider.getSnapshots(symbols);
+  }
+
+  async getLatestPrice(symbol: SymbolCode = "XAUUSD"): Promise<LatestMarketPrice> {
+    if (!(this.provider instanceof RealMarketDataProvider)) {
+      throw new Error("Provider hiện tại không hỗ trợ lấy giá riêng lẻ.");
+    }
+    return this.provider.getLatestPrice(symbol);
   }
 
   private createProvider(providerName: string): MarketDataProvider {

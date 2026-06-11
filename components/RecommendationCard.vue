@@ -11,6 +11,12 @@
       <div class="price-strip">
         <div>
           <span>Giá hiện tại</span>
+          <strong>
+            {{ latestPriceLoading ? "Đang cập nhật..." : formatPrice(latestPrice) }}
+          </strong>
+        </div>
+        <div>
+          <span>Giá lúc bấm phân tích</span>
           <strong>{{ formatPrice(currentMarket?.price ?? result.current_price) }}</strong>
         </div>
         <div>
@@ -260,6 +266,8 @@ import {
 const props = defineProps<{
   result: AiTradeRecommendation;
   history?: AnalysisHistoryRecord | null;
+  latestPrice?: number | null;
+  latestPriceLoading?: boolean;
 }>();
 
 const currentSymbol = computed(() =>
@@ -391,7 +399,7 @@ function formatUsd(value: number | null | undefined): string {
 
 .price-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }

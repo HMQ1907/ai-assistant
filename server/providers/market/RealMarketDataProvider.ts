@@ -21,6 +21,9 @@ import type {
 const candleOutputSize = String(marketCandleRequestCount);
 const minimumCandlesForHighQuality = 200;
 const maxQuoteAgeSeconds = 180;
+const m5IntervalSeconds = 5 * 60;
+const m5FreshnessGraceSeconds = 5 * 60;
+const quoteToCandleToleranceRatio = 0.0005;
 
 const timeframeIntervals: Record<Timeframe, string> = {
   M5: "5min",
@@ -60,6 +63,18 @@ interface TwelveDataQuoteResponse {
   ask?: string;
   datetime?: string;
   timestamp?: number;
+}
+
+interface TwelveDataPriceResponse {
+  status?: string;
+  message?: string;
+  price?: string;
+}
+
+export interface LatestMarketPrice {
+  symbol: SymbolCode;
+  price: number;
+  fetchedAt: string;
 }
 
 export class RealMarketDataProvider implements MarketDataProvider {
@@ -123,6 +138,19 @@ export class RealMarketDataProvider implements MarketDataProvider {
     };
   }
 
+  async getLatestPrice(symbol: SymbolCode): Promise<LatestMarketPrice> {
+    const priceResponse = await this.getPrice(twelveDataSymbols[symbol]);
+    const price = parseNumber(priceResponse.price);
+    if (!price) {
+      throw new Error("Không có giá XAUUSD hợp lệ từ provider.");
+    }
+    return {
+      symbol,
+      price,
+      fetchedAt: new Date().toISOString(),
+    };
+  }
+
   private async getSnapshot(symbol: SymbolCode): Promise<MarketSnapshot> {
     const providerSymbol = twelveDataSymbols[symbol];
     const warnings: string[] = [];
@@ -154,8 +182,11 @@ export class RealMarketDataProvider implements MarketDataProvider {
       }
     }
 
-    const quote = await this.getQuote(providerSymbol);
-    const price = parseNumber(quote.close);
+    const [quote, priceResponse] = await Promise.all([
+      this.getQuote(providerSymbol),
+      this.getPrice(providerSymbol),
+    ]);
+    const price = parseNumber(priceResponse.price);
     if (!price) throw new Error("Không có giá realtime hợp lệ từ quote.");
 
     let bid = parseNumber(quote.bid);
@@ -173,17 +204,34 @@ export class RealMarketDataProvider implements MarketDataProvider {
     }
 
     const providerFetchedAt = new Date().toISOString();
-    const quoteTime =
+    const providerQuoteTime =
       parseUnixTimestamp(quote.timestamp) ??
       parseProviderTimestamp(quote.datetime);
-    const quoteAgeSeconds = quoteTime
-      ? Math.max(0, Math.round((Date.now() - new Date(quoteTime).getTime()) / 1000))
-      : null;
+    const providerQuoteAgeSeconds = ageInSeconds(providerQuoteTime);
+    const m5FallbackTime = resolveM5FallbackTime(price, candles.M5.at(-1));
+    const useM5Fallback =
+      (providerQuoteAgeSeconds === null ||
+        providerQuoteAgeSeconds > this.maxQuoteAgeSeconds()) &&
+      m5FallbackTime !== null;
+    const quoteTime = useM5Fallback ? m5FallbackTime : providerQuoteTime;
+    const quoteAgeSeconds = ageInSeconds(quoteTime);
     const quoteTimestampReliable = quoteTime !== null;
+    if (useM5Fallback) {
+      informationalDiagnostics.push(
+        "Timestamp /quote không đồng bộ; freshness được xác thực bằng nến M5 mới nhất khớp với giá quote.",
+      );
+    }
     if (!quoteTimestampReliable) {
-      warnings.push("Quote timestamp không đáng tin cậy hoặc chỉ là date-only.");
-    } else if (quoteAgeSeconds !== null && quoteAgeSeconds > this.maxQuoteAgeSeconds()) {
-      warnings.push(`Quote stale ${quoteAgeSeconds}s, vượt ngưỡng ${this.maxQuoteAgeSeconds()}s.`);
+      warnings.push(
+        "Quote timestamp không đáng tin cậy hoặc chỉ là date-only.",
+      );
+    } else if (
+      quoteAgeSeconds !== null &&
+      quoteAgeSeconds > this.maxQuoteAgeSeconds()
+    ) {
+      warnings.push(
+        `Quote stale ${quoteAgeSeconds}s, vượt ngưỡng ${this.maxQuoteAgeSeconds()}s.`,
+      );
     }
 
     const indicatorReadiness = buildBasicReadiness(candles);
@@ -207,8 +255,12 @@ export class RealMarketDataProvider implements MarketDataProvider {
       console.info("[market:twelvedata]", {
         symbol,
         bidAskStatus,
+        providerQuoteTime,
+        providerQuoteAgeSeconds,
+        quoteTime,
         quoteAgeSeconds,
         quoteTimestampReliable,
+        usedM5TimestampFallback: useM5Fallback,
         timeframeQuality,
         candleDiagnostics,
       });
@@ -275,12 +327,27 @@ export class RealMarketDataProvider implements MarketDataProvider {
     const json = await this.fetchJson<TwelveDataQuoteResponse>(
       this.url("/quote", {
         symbol,
-        timezone: "UTC", // Bắt buộc trả múi giờ UTC đồng nhất
+        timezone: "UTC",
         apikey: this.options.apiKey,
       }),
     );
     if (json.status === "error") {
       throw new Error(json.message || `Không lấy được quote cho ${symbol}.`);
+    }
+    return json;
+  }
+
+  private async getPrice(symbol: string): Promise<TwelveDataPriceResponse> {
+    const json = await this.fetchJson<TwelveDataPriceResponse>(
+      this.url("/price", {
+        symbol,
+        apikey: this.options.apiKey,
+      }),
+    );
+    if (json.status === "error") {
+      throw new Error(
+        json.message || `Twelve Data không trả giá cho ${symbol}.`,
+      );
     }
     return json;
   }
@@ -294,7 +361,7 @@ export class RealMarketDataProvider implements MarketDataProvider {
   }
 
   private async fetchJson<T>(url: string): Promise<T> {
-    const response = await fetch(url);
+    const response = await fetch(url, { cache: "no-store" });
     if (!response.ok) throw new Error(`Provider trả HTTP ${response.status}.`);
     return (await response.json()) as T;
   }
@@ -328,9 +395,49 @@ function parseUnixTimestamp(value: number | undefined): string | null {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
-function formatReasons(
-  reasons: Partial<Record<string, number>>,
-): string {
+function ageInSeconds(isoTime: string | null): number | null {
+  if (!isoTime) return null;
+  const timestamp = new Date(isoTime).getTime();
+  if (!Number.isFinite(timestamp)) return null;
+  return Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+}
+
+function resolveM5FallbackTime(
+  quotePrice: number,
+  latestCandle: Candle | undefined,
+): string | null {
+  if (!latestCandle || !pricesAreConsistent(quotePrice, latestCandle)) {
+    return null;
+  }
+
+  const candleStartMs = new Date(latestCandle.time).getTime();
+  if (!Number.isFinite(candleStartMs)) return null;
+
+  const nowMs = Date.now();
+  const candleAgeSeconds = Math.max(
+    0,
+    Math.round((nowMs - candleStartMs) / 1000),
+  );
+  if (candleAgeSeconds > m5IntervalSeconds + m5FreshnessGraceSeconds) {
+    return null;
+  }
+
+  const effectiveTimeMs = Math.min(
+    nowMs,
+    candleStartMs + m5IntervalSeconds * 1000,
+  );
+  return new Date(effectiveTimeMs).toISOString();
+}
+
+function pricesAreConsistent(quotePrice: number, candle: Candle): boolean {
+  const tolerance = Math.max(0.1, quotePrice * quoteToCandleToleranceRatio);
+  return (
+    quotePrice >= candle.low - tolerance &&
+    quotePrice <= candle.high + tolerance
+  );
+}
+
+function formatReasons(reasons: Partial<Record<string, number>>): string {
   const entries = Object.entries(reasons);
   return entries.length
     ? entries.map(([reason, count]) => `${reason}=${count}`).join(", ")
@@ -356,7 +463,10 @@ function buildBasicReadiness(
 }
 
 function aggregateMarketQuality(input: {
-  timeframeQuality: Record<Timeframe, MarketSnapshot["timeframe_quality"][Timeframe]>;
+  timeframeQuality: Record<
+    Timeframe,
+    MarketSnapshot["timeframe_quality"][Timeframe]
+  >;
   bidAskStatus: MarketSnapshot["bidAskStatus"];
   quoteTimestampReliable: boolean;
   quoteAgeSeconds: number | null;
@@ -372,8 +482,11 @@ function aggregateMarketQuality(input: {
   if (
     input.bidAskStatus !== "AVAILABLE" ||
     !input.quoteTimestampReliable ||
-    (input.quoteAgeSeconds !== null && input.quoteAgeSeconds > input.maxQuoteAgeSeconds) ||
-    Object.values(input.timeframeQuality).some((item) => item.quality === "MEDIUM")
+    (input.quoteAgeSeconds !== null &&
+      input.quoteAgeSeconds > input.maxQuoteAgeSeconds) ||
+    Object.values(input.timeframeQuality).some(
+      (item) => item.quality === "MEDIUM",
+    )
   ) {
     return "MEDIUM";
   }

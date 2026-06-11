@@ -107,6 +107,17 @@ export class AnalysisHistoryService {
     return (data ?? []).map(toRecord);
   }
 
+  async getById(id: string): Promise<AnalysisHistoryRecord> {
+    const { data, error } = await this.supabase
+      .from(tableName)
+      .select("*")
+      .eq("id", id)
+      .single();
+    if (error)
+      throw new Error(`Không tải được lịch sử phân tích: ${error.message}`);
+    return toRecord(data);
+  }
+
   async update(
     id: string,
     input: HistoryUpdateInput,

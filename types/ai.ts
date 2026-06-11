@@ -61,6 +61,54 @@ export interface AiAnalysisResult {
   parsed: AiTradeRecommendation;
 }
 
+export type OrderReviewAction =
+  | "KEEP_ORDER"
+  | "CANCEL_ORDER"
+  | "MOVE_SL"
+  | "MOVE_TP"
+  | "MOVE_SL_TP"
+  | "WAIT"
+  | "CLOSE_MANUALLY"
+  | "TRADE_COMPLETED";
+
+export type OrderReviewStatus =
+  | "LIKELY_NOT_FILLED"
+  | "LIKELY_FILLED"
+  | "ALREADY_INVALIDATED"
+  | "UNCLEAR";
+
+export interface AiOrderReview {
+  symbol: "XAUUSD";
+  reviewed_history_id: string;
+  current_price: number;
+  order_status_assessment: OrderReviewStatus;
+  recommended_action: OrderReviewAction;
+  confidence: number;
+  summary: string;
+  fill_assessment: string;
+  action_reason: string;
+  stop_loss_plan: {
+    keep_current: boolean;
+    suggested_stop_loss: number | null;
+    reason: string;
+  };
+  take_profit_plan: {
+    keep_current: boolean;
+    suggested_take_profit: number | null;
+    reason: string;
+  };
+  cancellation_conditions: string[];
+  risk_warnings: string[];
+  next_check_minutes: number;
+  checklist: string[];
+  disclaimer: string;
+}
+
+export interface AiOrderReviewResult {
+  raw: string;
+  parsed: AiOrderReview;
+}
+
 export interface RiskyTradeScenario {
   enabled: boolean;
   title: string;
