@@ -168,6 +168,33 @@ export function trend(values: number[]): IndicatorTrend {
   return "SIDEWAY_OR_MIXED";
 }
 
+export function structureTrend(
+  candles: Candle[],
+  window = 20,
+): IndicatorTrend {
+  const recent = candles.slice(-window);
+  if (recent.length < 8) return "INSUFFICIENT_DATA";
+
+  const half = Math.floor(recent.length / 2);
+  const older = recent.slice(0, half);
+  const newer = recent.slice(half);
+  if (older.length === 0 || newer.length === 0) return "INSUFFICIENT_DATA";
+
+  const olderHigh = Math.max(...older.map((candle) => candle.high));
+  const olderLow = Math.min(...older.map((candle) => candle.low));
+  const newerHigh = Math.max(...newer.map((candle) => candle.high));
+  const newerLow = Math.min(...newer.map((candle) => candle.low));
+
+  const higherHigh = newerHigh > olderHigh;
+  const higherLow = newerLow > olderLow;
+  const lowerHigh = newerHigh < olderHigh;
+  const lowerLow = newerLow < olderLow;
+
+  if (higherHigh && higherLow) return "UPTREND";
+  if (lowerHigh && lowerLow) return "DOWNTREND";
+  return "SIDEWAY_OR_MIXED";
+}
+
 export function indicatorReadiness(values: number[], candles: Candle[]): IndicatorReadiness {
   const clean = values.filter(Number.isFinite);
   return {

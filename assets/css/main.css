@@ -216,24 +216,17 @@ a {
 }
 
 @media (max-width: 760px) {
-  .topbar {
-    position: static;
-  }
-
-  .toolbar,
   .topbar-inner {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .topbar-inner {
-    gap: 12px;
-    padding: 14px 16px;
+    gap: 10px;
+    padding: 10px 14px;
   }
 
   .brand {
-    font-size: 17px;
+    font-size: 16px;
     line-height: 1.25;
+    text-align: center;
   }
 
   .nav {
@@ -243,27 +236,37 @@ a {
   }
 
   .nav a {
+    align-items: center;
     border: 1px solid var(--border);
+    display: flex;
+    justify-content: center;
+    min-height: 40px;
     text-align: center;
   }
 
-  .page {
-    padding: 22px 14px 36px;
-  }
-
   .toolbar {
+    align-items: stretch;
+    flex-direction: column;
     gap: 14px;
     margin-bottom: 16px;
   }
 
+  .page {
+    padding: 20px 14px 36px;
+  }
+
   .heading h1 {
-    font-size: 25px;
-    line-height: 1.18;
+    font-size: 23px;
+    line-height: 1.2;
   }
 
   .heading p {
     font-size: 15px;
     line-height: 1.45;
+  }
+
+  .grid {
+    gap: 16px;
   }
 
   .grid.two,
@@ -272,7 +275,7 @@ a {
   }
 
   .card {
-    padding: 14px;
+    padding: 16px;
   }
 
   .kv-row {
@@ -285,7 +288,14 @@ a {
     overflow-wrap: anywhere;
   }
 
+  /* Vùng chạm dễ bấm hơn trên điện thoại */
   .button {
+    min-height: 48px;
     width: 100%;
+  }
+
+  .select,
+  .input {
+    min-height: 44px;
   }
 }

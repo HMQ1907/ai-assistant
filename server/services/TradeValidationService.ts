@@ -269,6 +269,26 @@ export class TradeValidationService {
     }
 
     if (
+      selectedSymbol &&
+      recommendation.direction === "SELL" &&
+      hasStrongRegimeShift(selectedSymbol, "BULLISH")
+    ) {
+      reasons.push(
+        "SELL bị chặn vì nến đã đóng cho thấy động lượng tăng mạnh và phá cấu trúc ngắn hạn",
+      );
+    }
+
+    if (
+      selectedSymbol &&
+      recommendation.direction === "BUY" &&
+      hasStrongRegimeShift(selectedSymbol, "BEARISH")
+    ) {
+      reasons.push(
+        "BUY bị chặn vì nến đã đóng cho thấy động lượng giảm mạnh và phá cấu trúc ngắn hạn",
+      );
+    }
+
+    if (
       recommendation.decision === "TRADE" &&
       recommendation.direction === "NONE"
     ) {
@@ -370,6 +390,75 @@ export class TradeValidationService {
       ]),
     );
   }
+}
+
+function hasStrongRegimeShift(
+  symbol: PayloadSymbol,
+  direction: "BULLISH" | "BEARISH",
+): boolean {
+  const timeframes = symbol.indicators.timeframes;
+  const market = symbol.market.recent_candles;
+  const h1Break = breaksRecentStructure(market.H1, direction, 6);
+  const m15Break = breaksRecentStructure(market.M15, direction, 8);
+  const h1Impulse = hasDirectionalImpulse(market.H1, direction);
+  const m15Impulse = hasDirectionalImpulse(market.M15, direction);
+
+  const m5Momentum = timeframes.M5.momentumScore;
+  const m15Momentum = timeframes.M15.momentumScore;
+
+  if (direction === "BULLISH") {
+    const momentumExpanding =
+      m5Momentum !== null &&
+      m15Momentum !== null &&
+      m5Momentum >= 65 &&
+      m15Momentum >= 60;
+    return (
+      (h1Break && h1Impulse) ||
+      (m15Break && m15Impulse && momentumExpanding)
+    );
+  }
+
+  const momentumExpanding =
+    m5Momentum !== null &&
+    m15Momentum !== null &&
+    m5Momentum <= 35 &&
+    m15Momentum <= 40;
+  return (
+    (h1Break && h1Impulse) ||
+    (m15Break && m15Impulse && momentumExpanding)
+  );
+}
+
+function breaksRecentStructure(
+  candles: PayloadSymbol["market"]["recent_candles"]["H1"],
+  direction: "BULLISH" | "BEARISH",
+  lookback: number,
+): boolean {
+  const latest = candles.at(-1);
+  const previous = candles.slice(-(lookback + 1), -1);
+  if (!latest || previous.length < Math.min(3, lookback)) return false;
+
+  if (direction === "BULLISH") {
+    return latest.close > Math.max(...previous.map((candle) => candle.high));
+  }
+  return latest.close < Math.min(...previous.map((candle) => candle.low));
+}
+
+function hasDirectionalImpulse(
+  candles: PayloadSymbol["market"]["recent_candles"]["H1"],
+  direction: "BULLISH" | "BEARISH",
+): boolean {
+  const latest = candles.at(-1);
+  if (!latest) return false;
+  const range = latest.high - latest.low;
+  if (range <= 0) return false;
+
+  const bodyRatio = Math.abs(latest.close - latest.open) / range;
+  const directional =
+    direction === "BULLISH"
+      ? latest.close > latest.open
+      : latest.close < latest.open;
+  return directional && bodyRatio >= 0.55;
 }
 
 function confidenceRiskMultiplier(confidence: number): number {

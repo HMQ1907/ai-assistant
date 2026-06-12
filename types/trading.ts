@@ -28,6 +28,7 @@ export type CandleFilterReason =
   | "ZERO_RANGE"
   | "LOW_RANGE"
   | "FROZEN_SEQUENCE"
+  | "INCOMPLETE_CANDLE"
   | "EXPECTED_MARKET_CLOSED";
 
 export interface Candle {
@@ -181,8 +182,9 @@ export interface TimeframeIndicatorSnapshot {
   atr14: number | null;
   readiness: IndicatorReadiness;
   trend: IndicatorTrend;
-  momentumScore: number;
-  volatilityScore: number;
+  structureTrend: IndicatorTrend;
+  momentumScore: number | null;
+  volatilityScore: number | null;
   marketStructure: SupportResistanceSnapshot;
 }
 
@@ -204,8 +206,10 @@ export interface IndicatorSnapshot {
   swingLow: number;
   trendM15: IndicatorTrend;
   trendH1: IndicatorTrend;
-  momentumScore: number;
-  volatilityScore: number;
+  structureTrendM15: IndicatorTrend;
+  structureTrendH1: IndicatorTrend;
+  momentumScore: number | null;
+  volatilityScore: number | null;
   timeframes: Record<Timeframe, TimeframeIndicatorSnapshot>;
   timeframeAlignment: string;
 }

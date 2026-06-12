@@ -500,13 +500,21 @@ function formatUsd(value: number | null | undefined): string {
   }
 }
 
+/* Giữ 2 cột trên điện thoại để các ô không bị xếp dọc quá dài */
 @media (max-width: 460px) {
-  .price-strip {
-    grid-template-columns: 1fr;
+  .price-strip,
+  .risky-grid {
+    gap: 8px;
   }
 
-  .risky-grid {
-    grid-template-columns: 1fr;
+  .price-strip div,
+  .risky-grid div {
+    padding: 9px 10px;
+  }
+
+  .price-strip span,
+  .risky-grid span {
+    font-size: 12px;
   }
 }
 </style>

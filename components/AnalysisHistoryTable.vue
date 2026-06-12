@@ -693,8 +693,13 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
 }
 
 @media (max-width: 820px) {
+  :deep(.card) {
+    min-width: 0;
+  }
+
   .history-table-wrap {
     margin: 0;
+    max-width: 100%;
     overflow: visible;
     padding: 0;
   }
@@ -709,7 +714,7 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
 
   .history-table {
     border-collapse: separate;
-    border-spacing: 0 12px;
+    border-spacing: 0 18px;
     min-width: 0;
     table-layout: auto;
   }
@@ -720,27 +725,42 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
 
   .history-table tr {
     border: 1px solid var(--border);
-    border-radius: 8px;
-    overflow: hidden;
+    border-radius: 12px;
     background: #192027;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.2);
+    max-width: 100%;
+    overflow: hidden;
   }
 
+  /* Mặc định: nhãn trái – giá trị phải, gọn trên một dòng cho ô chỉ-đọc */
   .history-table td {
     align-items: center;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    display: grid;
-    gap: 10px;
-    grid-template-columns: minmax(104px, 0.42fr) minmax(0, 1fr);
-    min-height: 52px;
-    padding: 10px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    display: flex;
+    gap: 12px;
+    height: auto;
+    justify-content: space-between;
+    min-height: 46px;
+    max-width: 100%;
+    overflow: hidden;
+    padding: 11px 14px;
   }
 
   .history-table td::before {
     color: var(--muted);
     content: attr(data-label);
+    flex: 0 0 auto;
     font-size: 13px;
-    font-weight: 700;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+
+  /* Giá trị căn phải, không tràn, nổi bật hơn nhãn */
+  .history-table td > * {
+    color: var(--text);
+    font-weight: 600;
+    min-width: 0;
+    text-align: right;
   }
 
   .history-table td:last-child {
@@ -752,26 +772,92 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
   }
 
   .history-id {
-    max-width: 100%;
+    display: block;
+    flex: 1 1 auto;
+    max-width: min(220px, 62vw);
+    overflow: hidden;
+    text-align: right;
+    text-overflow: ellipsis;
+    width: 100%;
+  }
+
+  /* Các ô nhập liệu: nhãn trên, ô input chiếm trọn chiều ngang bên dưới */
+  .history-table td[data-label="Entry thực tế"],
+  .history-table td[data-label="Exit thực tế"],
+  .history-table td[data-label="P/L"],
+  .history-table td[data-label="Ghi chú"],
+  .history-table td[data-label="Kết quả"],
+  .history-table td[data-label="Thao tác"] {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .history-table td[data-label="Kết quả"] {
+    background: #151c23;
+    border-top: 8px solid var(--bg);
+    margin-top: -1px;
+    padding-top: 14px;
+  }
+
+  .history-table td[data-label="Entry thực tế"],
+  .history-table td[data-label="Exit thực tế"],
+  .history-table td[data-label="P/L"],
+  .history-table td[data-label="Ghi chú"] {
+    background: #151c23;
+  }
+
+  .history-table td[data-label="Thao tác"] {
+    background: #121920;
+    border-top: 8px solid var(--bg);
+    margin-top: -1px;
+    padding-bottom: 14px;
+    padding-top: 14px;
+  }
+
+  .history-table td[data-label="Entry thực tế"]::before,
+  .history-table td[data-label="Exit thực tế"]::before,
+  .history-table td[data-label="P/L"]::before,
+  .history-table td[data-label="Ghi chú"]::before,
+  .history-table td[data-label="Kết quả"]::before,
+  .history-table td[data-label="Thao tác"]::before {
+    text-align: left;
+  }
+
+  .history-table td[data-label="Entry thực tế"] > *,
+  .history-table td[data-label="Exit thực tế"] > *,
+  .history-table td[data-label="P/L"] > *,
+  .history-table td[data-label="Ghi chú"] > *,
+  .history-table td[data-label="Kết quả"] > * {
+    text-align: left;
+    width: 100%;
   }
 
   .compact,
   .note-input,
   .result-select {
+    display: block;
+    max-width: 100%;
     min-width: 0;
+    width: 100%;
   }
 
   .row-actions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-width: 100%;
     width: 100%;
   }
 
   .action-button {
-    min-height: 40px;
+    max-width: 100%;
+    min-height: 42px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .action-button-primary {
     grid-column: 1 / -1;
+    display: inline-flex;
   }
 
   .review-grid {
@@ -781,12 +867,36 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
 
 @media (max-width: 420px) {
   .history-table td {
-    align-items: stretch;
-    grid-template-columns: 1fr;
+    padding: 11px 12px;
   }
 
-  .review-grid {
-    grid-template-columns: 1fr;
+  .history-table td:not(
+      [data-label="Entry thực tế"],
+      [data-label="Exit thực tế"],
+      [data-label="P/L"],
+      [data-label="Ghi chú"],
+      [data-label="Kết quả"],
+      [data-label="Thao tác"]
+    ) {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .history-table td:not(
+      [data-label="Entry thực tế"],
+      [data-label="Exit thực tế"],
+      [data-label="P/L"],
+      [data-label="Ghi chú"],
+      [data-label="Kết quả"],
+      [data-label="Thao tác"]
+    ) > * {
+    text-align: left;
+  }
+
+  .history-id {
+    max-width: 100%;
+    text-align: left;
   }
 
   .row-actions {
@@ -795,6 +905,10 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
 
   .action-button-primary {
     grid-column: auto;
+  }
+
+  .review-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

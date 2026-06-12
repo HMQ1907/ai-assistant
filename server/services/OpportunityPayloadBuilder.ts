@@ -65,6 +65,8 @@ export class OpportunityPayloadBuilder {
         "Không giao dịch khi data_quality LOW, thiếu giá realtime, thiếu candle, hoặc spread quá cao.",
         "Thiếu bid/ask/spread không phải lý do NO_TRADE khi data_quality từ MEDIUM trở lên và candle/indicator đủ điều kiện. Chỉ xem đây là yếu tố rủi ro và nhắc người dùng tự kiểm tra spread trên sàn trước khi vào lệnh.",
         "Nếu news_data_status là UNAVAILABLE, phải giảm độ tin cậy và chỉ TRADE khi setup kỹ thuật rất rõ.",
+        "EMA H1/H4 là chỉ báo trễ, không được dùng làm lý do bắt buộc BUY/SELL khi nến H1/M15 đã đóng và phá cấu trúc theo hướng ngược lại.",
+        "Không SELL vào động lượng tăng đang mở rộng và không BUY vào động lượng giảm đang mở rộng. Khi có dấu hiệu chuyển pha mạnh, phải chờ pullback/retest hoặc trả NO_TRADE.",
         "All user-facing content MUST be written in Vietnamese. Only enum values may remain in English.",
         "Không khuyến nghị martingale, DCA lỗ, all-in, tăng khối lượng sau khi thua, copy trade hoặc auto trade.",
         `Thời gian giữ lệnh dự kiến không vượt quá ${tradingRules.maxHoldingMinutes} phút.`,

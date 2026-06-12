@@ -32,6 +32,13 @@ const timeframeIntervals: Record<Timeframe, string> = {
   H4: "4h",
 };
 
+const timeframeDurationMs: Record<Timeframe, number> = {
+  M5: 5 * 60 * 1000,
+  M15: 15 * 60 * 1000,
+  H1: 60 * 60 * 1000,
+  H4: 4 * 60 * 60 * 1000,
+};
+
 const twelveDataSymbols: Record<SymbolCode, string> = {
   XAUUSD: "XAU/USD",
 };
@@ -310,7 +317,7 @@ export class RealMarketDataProvider implements MarketDataProvider {
     }
     const values = json.values ?? [];
 
-    return parseProviderCandles(
+    const parsed = parseProviderCandles(
       values.map((item) => ({
         time: item.datetime,
         open: item.open,
@@ -321,6 +328,8 @@ export class RealMarketDataProvider implements MarketDataProvider {
       })),
       timeframe,
     );
+
+    return removeIncompleteCandles(parsed, timeframe);
   }
 
   private async getQuote(symbol: string): Promise<TwelveDataQuoteResponse> {
@@ -371,6 +380,34 @@ export class RealMarketDataProvider implements MarketDataProvider {
       ? Math.max(1, Number(this.options.maxQuoteAgeSeconds))
       : maxQuoteAgeSeconds;
   }
+}
+
+function removeIncompleteCandles(
+  result: ReturnType<typeof parseProviderCandles>,
+  timeframe: Timeframe,
+): TimeSeriesResult {
+  const now = Date.now();
+  const candles = result.candles.filter((candle) => {
+    const start = new Date(candle.time).getTime();
+    return Number.isFinite(start) && start + timeframeDurationMs[timeframe] <= now;
+  });
+  const removed = result.candles.length - candles.length;
+
+  if (removed > 0) {
+    result.diagnostics.reasons.INCOMPLETE_CANDLE =
+      (result.diagnostics.reasons.INCOMPLETE_CANDLE ?? 0) + removed;
+  }
+
+  return {
+    candles,
+    diagnostics: {
+      ...result.diagnostics,
+      validCount: candles.length,
+      filteredCount: result.diagnostics.filteredCount + removed,
+      lastValidCandleTime: candles.at(-1)?.time ?? null,
+      indicatorDataSufficient: candles.length >= minimumCandlesForHighQuality,
+    },
+  };
 }
 
 function combineCollectionQuality(snapshots: MarketSnapshot[]): DataQuality {

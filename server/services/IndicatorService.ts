@@ -13,6 +13,7 @@ import {
   rsi,
   supportResistance,
   trend,
+  structureTrend,
   indicatorReadiness,
 } from "../utils/indicators";
 
@@ -45,6 +46,8 @@ export class IndicatorService {
       swingLow: primary.marketStructure.swingLow,
       trendM15: primary.trend,
       trendH1: h1.trend,
+      structureTrendM15: primary.structureTrend,
+      structureTrendH1: h1.structureTrend,
       momentumScore: primary.momentumScore,
       volatilityScore: primary.volatilityScore,
       timeframes,
@@ -76,29 +79,41 @@ export class IndicatorService {
       atr14,
       readiness,
       trend: trend(closes),
+      structureTrend: structureTrend(candles),
       momentumScore: this.scoreMomentum(candles, atr14),
-      volatilityScore: Math.min(
-        100,
-        Math.round(((atr14 ?? 0) / Math.max(current, 0.00001)) * 10000),
-      ),
+      volatilityScore: this.scoreVolatility(atr14, current),
       marketStructure: supportResistance(candles),
     };
   }
 
-  private scoreMomentum(candles: Candle[], atr14: number | null): number {
+  // Trả null khi không đủ data thay vì bịa 50 (trung tính) — để AI phân biệt
+  // "momentum trung tính thật" với "không tính được".
+  private scoreMomentum(candles: Candle[], atr14: number | null): number | null {
     const recent = candles.slice(-12);
-    if (recent.length < 2) return 50;
+    if (recent.length < 2) return null;
     const first = recent[0];
     const last = recent.at(-1);
-    if (!first || !last) return 50;
+    if (!first || !last) return null;
 
-    const priceMove = last.close - first.open;
-    const averageRange =
+    const range =
       recent.reduce((sum, candle) => sum + (candle.high - candle.low), 0) /
       recent.length;
-    const normalizer = Math.max(atr14 ?? 0, averageRange, 0.00001);
-    const normalizedMove = priceMove / normalizer;
+    const normalizer = Math.max(atr14 ?? 0, range, 0);
+    if (normalizer <= 0) return null;
+
+    const normalizedMove = (last.close - first.open) / normalizer;
     return Math.max(0, Math.min(100, Math.round(50 + normalizedMove * 12)));
+  }
+
+  // Trả null khi atr/giá không hợp lệ thay vì né chia-0 bằng 0.00001 (tạo số giả).
+  private scoreVolatility(
+    atr14: number | null,
+    current: number,
+  ): number | null {
+    if (atr14 === null || !Number.isFinite(current) || current <= 0) {
+      return null;
+    }
+    return Math.min(100, Math.round((atr14 / current) * 10000));
   }
 
   private alignTimeframes(
@@ -113,6 +128,19 @@ export class IndicatorService {
     if (trends.some((item) => item === "INSUFFICIENT_DATA")) {
       return "INSUFFICIENT_DATA";
     }
+
+    // Khi EMA trend (lagging) không đồng thuận, kiểm tra structure trend để
+    // phát hiện chuyển pha sớm mà EMA chưa kịp phản ánh.
+    const structure = TIMEFRAMES.map(
+      (timeframe) => timeframes[timeframe].structureTrend,
+    );
+    const structureUp = structure.filter((item) => item === "UPTREND").length;
+    const structureDown = structure.filter(
+      (item) => item === "DOWNTREND",
+    ).length;
+    if (structureUp >= 3 && down === 0) return "BULLISH_STRUCTURE_SHIFT";
+    if (structureDown >= 3 && up === 0) return "BEARISH_STRUCTURE_SHIFT";
+
     return "MIXED_ALIGNMENT";
   }
 }

@@ -124,7 +124,7 @@ function replaceHistoryRecord(record: AnalysisHistoryRecord): void {
 
 <style scoped>
 .history-block {
-  margin-top: 16px;
+  margin-top: 24px;
 }
 
 .action-panel {
@@ -147,10 +147,19 @@ function replaceHistoryRecord(record: AnalysisHistoryRecord): void {
 }
 
 @media (max-width: 760px) {
+  /* Ô vốn + nút phân tích nằm cùng hàng cho gọn, nút chiếm phần lớn để dễ bấm */
   .action-panel {
+    align-items: end;
+    grid-template-columns: minmax(110px, 0.8fr) 1.2fr;
     justify-items: stretch;
     min-width: 0;
     width: 100%;
+  }
+}
+
+@media (max-width: 380px) {
+  .action-panel {
+    grid-template-columns: 1fr;
   }
 }
 </style>
