@@ -1,7 +1,29 @@
 import type { AiTradeRecommendation, RiskyTradeScenario } from "../../types/ai";
-import type { AnalysisPayload } from "../../types/trading";
+import type {
+  AnalysisPayload,
+  NormalizedSymbolPayload,
+  SymbolCode,
+} from "../../types/trading";
+import { SYMBOLS, getSymbolMeta } from "../../types/trading";
 import { tradingRules } from "../config/tradingRules";
 import { parseRiskReward } from "../utils/risk";
+
+/** Tìm dữ liệu của đúng symbol mà AI khuyến nghị trong payload. */
+function findSelectedSymbol(
+  payload: AnalysisPayload | undefined,
+  symbol: SymbolCode,
+): NormalizedSymbolPayload | undefined {
+  return payload?.symbols.find((item) => item.market.symbol === symbol);
+}
+
+/** Số đơn vị / 1 lot của symbol (XAUUSD=100, EURUSD=100000). */
+function contractSizeFor(symbol: SymbolCode): number {
+  return getSymbolMeta(symbol).contractSize;
+}
+
+function isKnownSymbol(value: string): value is SymbolCode {
+  return (SYMBOLS as readonly string[]).includes(value);
+}
 
 export class TradeValidationService {
   validate(
@@ -16,9 +38,7 @@ export class TradeValidationService {
     const reasons = this.findInvalidReasons(recommendation, payload);
 
     if (payload) {
-      const selectedSymbol = payload.symbols.find(
-        (item) => item.market.symbol === "XAUUSD",
-      );
+      const selectedSymbol = findSelectedSymbol(payload, recommendation.symbol);
       if (selectedSymbol) {
         recommendation.current_price = selectedSymbol.market.price;
       }
@@ -89,14 +109,14 @@ export class TradeValidationService {
       return;
     }
 
+    const contractSize = contractSizeFor(recommendation.symbol);
+    const meta = getSymbolMeta(recommendation.symbol);
     const maxLossUsd = payload.maxLossUsdPerTrade;
     const riskMultiplier = confidenceRiskMultiplier(recommendation.confidence);
     const targetLossUsd = maxLossUsd * riskMultiplier;
-    const rawLot =
-      targetLossUsd / (distance * tradingRules.xauUsdOuncesPerLot);
+    const rawLot = targetLossUsd / (distance * contractSize);
     const lot = floorToStep(rawLot, tradingRules.lotStep);
-    const minLotLoss =
-      tradingRules.minLot * distance * tradingRules.xauUsdOuncesPerLot;
+    const minLotLoss = tradingRules.minLot * distance * contractSize;
     const suggestedLot =
       lot >= tradingRules.minLot
         ? lot
@@ -106,20 +126,14 @@ export class TradeValidationService {
     const estimatedLoss =
       suggestedLot === null
         ? null
-        : Number(
-            (
-              suggestedLot *
-              distance *
-              tradingRules.xauUsdOuncesPerLot
-            ).toFixed(2),
-          );
+        : Number((suggestedLot * distance * contractSize).toFixed(2));
 
     recommendation.position_sizing.suggested_lot = suggestedLot;
     recommendation.position_sizing.estimated_loss_if_sl_hit = estimatedLoss;
     recommendation.position_sizing.position_sizing_explanation =
       suggestedLot !== null && suggestedLot > 0
-        ? `Lot gợi ý: ${suggestedLot.toFixed(2)} lot. Công thức XAUUSD: lot * khoảng cách Entry-SL (${distance.toFixed(2)} USD) * 100 oz = khoảng $${estimatedLoss} nếu chạm SL. Giới hạn lỗ hiện tại là ${payload.maxLossPercentPerTrade}% vốn ($${maxLossUsd}).`
-        : `Không gợi ý lot vì với khoảng cách Entry-SL ${distance.toFixed(2)} USD, lot tối thiểu ${tradingRules.minLot.toFixed(2)} có thể không phù hợp với giới hạn lỗ hoặc setup chưa đủ điều kiện.`;
+        ? `Lot gợi ý: ${suggestedLot.toFixed(2)} lot. Công thức ${recommendation.symbol}: lot * khoảng cách Entry-SL (${distance.toFixed(meta.priceDecimals)}) * ${contractSize} (${meta.contractUnitLabel}/lot) = khoảng $${estimatedLoss} nếu chạm SL. Giới hạn lỗ hiện tại là ${payload.maxLossPercentPerTrade}% vốn ($${maxLossUsd}).`
+        : `Không gợi ý lot vì với khoảng cách Entry-SL ${distance.toFixed(meta.priceDecimals)}, lot tối thiểu ${tradingRules.minLot.toFixed(2)} có thể không phù hợp với giới hạn lỗ hoặc setup chưa đủ điều kiện.`;
   }
 
   private normalizeNoTrade(
@@ -128,8 +142,8 @@ export class TradeValidationService {
   ): AiTradeRecommendation {
     if (payload) {
       recommendation.current_price =
-        payload.symbols.find((item) => item.market.symbol === "XAUUSD")?.market
-          .price ?? recommendation.current_price;
+        findSelectedSymbol(payload, recommendation.symbol)?.market.price ??
+        recommendation.current_price;
     }
     return {
       ...recommendation,
@@ -164,14 +178,17 @@ export class TradeValidationService {
     const reasons: string[] = [];
     const entry = this.averageEntry(recommendation);
     const riskReward = parseRiskReward(recommendation.risk_reward ?? "");
-    const selectedSymbol = payload?.symbols.find(
-      (item) => item.market.symbol === "XAUUSD",
-    );
+    const selectedSymbol = findSelectedSymbol(payload, recommendation.symbol);
     const maxLossUsd =
       payload?.maxLossUsdPerTrade ?? recommendation.position_sizing.max_loss_usd;
+    const expectedSymbol = payload?.symbols[0]?.market.symbol;
 
-    if (recommendation.symbol !== "XAUUSD") {
-      reasons.push("AI trả symbol khác XAUUSD");
+    if (!isKnownSymbol(recommendation.symbol)) {
+      reasons.push(`AI trả symbol không hỗ trợ: ${recommendation.symbol}`);
+    } else if (expectedSymbol && recommendation.symbol !== expectedSymbol) {
+      reasons.push(
+        `AI trả symbol ${recommendation.symbol} khác symbol đang phân tích ${expectedSymbol}`,
+      );
     }
 
     if (recommendation.confidence < tradingRules.minConfidence) {
@@ -207,7 +224,9 @@ export class TradeValidationService {
     if (isFinitePositive(entry) && isFinitePositive(stopLoss)) {
       const distance = Math.abs(entry - stopLoss);
       const minLotLoss =
-        tradingRules.minLot * distance * tradingRules.xauUsdOuncesPerLot;
+        tradingRules.minLot *
+        distance *
+        contractSizeFor(recommendation.symbol);
       if (recommendation.decision === "TRADE" && minLotLoss > maxLossUsd) {
         reasons.push(
           `Khoảng cách SL (${distance.toFixed(2)} USD) quá xa. Với lot tối thiểu ${tradingRules.minLot.toFixed(2)}, mức lỗ dự kiến là $${minLotLoss.toFixed(2)}, vượt giới hạn $${maxLossUsd}.`,
@@ -245,27 +264,32 @@ export class TradeValidationService {
     }
 
     if (payload && !selectedSymbol) {
-      reasons.push("không có dữ liệu realtime hợp lệ cho XAUUSD");
+      reasons.push(
+        `không có dữ liệu realtime hợp lệ cho ${recommendation.symbol}`,
+      );
     }
 
     if (selectedSymbol?.market.data_quality === "LOW") {
-      reasons.push("XAUUSD có data_quality LOW");
+      reasons.push(`${recommendation.symbol} có data_quality LOW`);
     }
 
     if (selectedSymbol && selectedSymbol.market.spread !== null) {
+      const maxSpreadPercent = getSymbolMeta(
+        recommendation.symbol,
+      ).maxSpreadPercent;
       const spreadPercent =
         (selectedSymbol.market.spread /
           Math.max(selectedSymbol.market.price, 0.00001)) *
         100;
-      if (spreadPercent > tradingRules.maxSpreadPercent) {
+      if (spreadPercent > maxSpreadPercent) {
         reasons.push(
-          `XAUUSD có spread ${spreadPercent.toFixed(4)}% cao hơn ngưỡng ${tradingRules.maxSpreadPercent}%`,
+          `${recommendation.symbol} có spread ${spreadPercent.toFixed(4)}% cao hơn ngưỡng ${maxSpreadPercent}%`,
         );
       }
     }
 
     if (selectedSymbol && selectedSymbol.market.price <= 0) {
-      reasons.push("XAUUSD không có giá realtime hợp lệ");
+      reasons.push(`${recommendation.symbol} không có giá realtime hợp lệ`);
     }
 
     if (
@@ -366,9 +390,7 @@ export class TradeValidationService {
     recommendation: AiTradeRecommendation,
     payload?: AnalysisPayload,
   ): void {
-    const selectedSymbol = payload?.symbols.find(
-      (item) => item.market.symbol === "XAUUSD",
-    );
+    const selectedSymbol = findSelectedSymbol(payload, recommendation.symbol);
     if (
       !selectedSymbol ||
       selectedSymbol.market.bidAskStatus === "AVAILABLE" ||
@@ -398,6 +420,10 @@ function hasStrongRegimeShift(
 ): boolean {
   const timeframes = symbol.indicators.timeframes;
   const market = symbol.market.recent_candles;
+  // Thiếu dữ liệu nến hoặc indicator -> không đủ cơ sở để khẳng định regime shift.
+  if (!timeframes?.M5 || !timeframes?.M15 || !market?.H1 || !market?.M15) {
+    return false;
+  }
   const h1Break = breaksRecentStructure(market.H1, direction, 6);
   const m15Break = breaksRecentStructure(market.M15, direction, 8);
   const h1Impulse = hasDirectionalImpulse(market.H1, direction);
@@ -517,15 +543,12 @@ function buildRiskyTradeFromRejectedRecommendation(
     ).toFixed(6),
   );
   const currentPrice =
-    payload?.symbols.find((item) => item.market.symbol === "XAUUSD")?.market
-      .price ?? recommendation.current_price;
+    findSelectedSymbol(payload, recommendation.symbol)?.market.price ??
+    recommendation.current_price;
+  const contractSize = contractSizeFor(recommendation.symbol);
   const distance = Math.abs(entry - recommendation.stop_loss);
   const minLotLoss = Number(
-    (
-      tradingRules.minLot *
-      distance *
-      tradingRules.xauUsdOuncesPerLot
-    ).toFixed(2),
+    (tradingRules.minLot * distance * contractSize).toFixed(2),
   );
   const maxLossUsd =
     payload?.maxLossUsdPerTrade ?? recommendation.position_sizing.max_loss_usd;
@@ -551,13 +574,7 @@ function buildRiskyTradeFromRejectedRecommendation(
     estimated_loss_if_sl_hit:
       suggestedLot === null
         ? recommendation.position_sizing.estimated_loss_if_sl_hit
-        : Number(
-            (
-              suggestedLot *
-              distance *
-              tradingRules.xauUsdOuncesPerLot
-            ).toFixed(2),
-          ),
+        : Number((suggestedLot * distance * contractSize).toFixed(2)),
     reason:
       "Setup này bị validation chính ép NO_TRADE, nhưng vẫn được giữ lại như kịch bản mạo hiểm có điều kiện để người dùng tự cân nhắc thủ công.",
     entry_conditions: recommendation.pre_entry_checklist.length

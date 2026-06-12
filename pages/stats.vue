@@ -2,10 +2,10 @@
   <main class="page">
     <div class="toolbar">
       <div class="heading">
-        <h1>Thống kê hiệu quả XAUUSD</h1>
+        <h1>Thống kê hiệu quả giao dịch</h1>
         <p>
-          So sánh toàn bộ lượt phân tích với riêng các tín hiệu được hệ thống
-          cho phép giao dịch.
+          So sánh toàn bộ lượt phân tích (XAUUSD và EURUSD) với riêng các tín
+          hiệu được hệ thống cho phép giao dịch.
         </p>
       </div>
       <button class="button" @click="loadStats">Tải lại</button>

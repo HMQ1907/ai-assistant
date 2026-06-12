@@ -16,18 +16,73 @@ interface GNewsResponse {
   errors?: string[];
 }
 
-const query = [
-  "USD",
-  "gold",
-  "Federal Reserve",
-  "CPI",
-  "NFP",
-  "PPI",
-  "PMI",
-  "interest rate",
-  "treasury yield",
-  "geopolitical risk",
-].join(" OR ");
+/**
+ * Hồ sơ tin tức theo từng symbol. Vàng (XAUUSD) phản ứng với USD/Fed/lạm phát/
+ * địa chính trị; EURUSD phản ứng với cả Fed (vế USD) lẫn ECB/Eurozone (vế EUR).
+ * Sentiment được tính theo CHIỀU TĂNG của chính symbol đó:
+ *   - XAUUSD tăng khi: USD yếu, hạ lãi suất, rủi ro địa chính trị, lạm phát hạ nhiệt.
+ *   - EURUSD tăng khi: USD yếu HOẶC EUR mạnh (ECB hawkish, Eurozone tốt).
+ */
+interface NewsProfile {
+  /** Các từ khóa OR để query GNews */
+  queryTerms: string[];
+  /** Tin được coi là liên quan nếu khớp regex này */
+  relevant: RegExp;
+  /** Khớp → đẩy giá symbol LÊN */
+  bullish: RegExp;
+  /** Khớp → đẩy giá symbol XUỐNG */
+  bearish: RegExp;
+  /** Mô tả ngắn cho warning khi không có tin */
+  topicLabel: string;
+}
+
+const irrelevantCrypto =
+  /(staking|token|airdrop|defi|nft|memecoin|blockchain|crypto exchange)/;
+
+const newsProfiles: Record<SymbolCode, NewsProfile> = {
+  XAUUSD: {
+    queryTerms: [
+      "gold price",
+      "XAUUSD",
+      "Federal Reserve",
+      "US inflation",
+      "CPI",
+      "NFP",
+      "interest rate",
+      "treasury yield",
+      "geopolitical risk",
+    ],
+    relevant:
+      /(gold|xau|xauusd|usd|dxy|dollar|federal reserve|\bfed\b|fomc|interest rate|treasury yield|yield|cpi|ppi|inflation|nfp|payroll|unemployment|geopolitical|war|conflict)/,
+    bullish:
+      /(rate cut|cuts rates|dovish|weaker dollar|dollar falls|usd falls|yields fall|recession|safe haven|geopolitical|war|conflict|gold rises|gold gains|inflation cools)/,
+    bearish:
+      /(rate hike|higher rates|hawkish|stronger dollar|dollar rises|usd rises|yields rise|hot inflation|sticky inflation|gold falls|gold drops|risk-on|payrolls beat|jobs beat)/,
+    topicLabel: "XAUUSD/USD/Fed/CPI/NFP",
+  },
+  EURUSD: {
+    queryTerms: [
+      "EURUSD",
+      "euro dollar",
+      "European Central Bank",
+      "ECB",
+      "Eurozone inflation",
+      "Federal Reserve",
+      "US inflation",
+      "interest rate",
+      "Lagarde",
+    ],
+    relevant:
+      /(eur|euro|eurusd|ecb|european central bank|lagarde|eurozone|germany|usd|dxy|dollar|federal reserve|\bfed\b|fomc|interest rate|cpi|inflation|nfp|payroll|treasury yield|yield)/,
+    // EUR/USD tăng khi USD yếu HOẶC EUR mạnh (ECB hawkish, Eurozone khỏe)
+    bullish:
+      /(weaker dollar|dollar falls|usd falls|fed dovish|fed cut|rate cut|yields fall|ecb hawkish|ecb hikes|ecb raises|euro rises|euro gains|euro strengthens|eurozone growth|hot eurozone inflation|stronger euro)/,
+    // EUR/USD giảm khi USD mạnh HOẶC EUR yếu (ECB dovish, Eurozone yếu)
+    bearish:
+      /(stronger dollar|dollar rises|usd rises|fed hawkish|fed hike|rate hike|yields rise|ecb dovish|ecb cut|ecb cuts|euro falls|euro drops|euro weakens|eurozone recession|weak eurozone|cooling eurozone inflation|weaker euro)/,
+    topicLabel: "EURUSD/EUR/ECB/USD/Fed",
+  },
+};
 
 export class RealNewsProvider implements NewsProvider {
   readonly name = "gnews";
@@ -47,11 +102,12 @@ export class RealNewsProvider implements NewsProvider {
     }
   }
 
-  async getLatestNews(): Promise<NewsSnapshot> {
+  async getLatestNews(symbol: SymbolCode): Promise<NewsSnapshot> {
     const updatedAt = new Date().toISOString();
+    const profile = newsProfiles[symbol];
     try {
       const url = new URL("/api/v4/search", this.options.baseUrl);
-      url.searchParams.set("q", query);
+      url.searchParams.set("q", profile.queryTerms.join(" OR "));
       url.searchParams.set("lang", "en");
       url.searchParams.set("sortby", "publishedAt");
       url.searchParams.set("max", "10");
@@ -71,7 +127,7 @@ export class RealNewsProvider implements NewsProvider {
       const relevantArticles = articles.flatMap((article) => {
         if (!article.title || !article.publishedAt) return [];
         const text = `${article.title} ${article.description ?? ""}`;
-        return isRelevant(text)
+        return isRelevant(text, profile)
           ? [
               {
                 article: {
@@ -97,8 +153,8 @@ export class RealNewsProvider implements NewsProvider {
             publishedAt: item.article.publishedAt,
             category: categorize(item.text),
             impact: impact(item.text),
-            sentiment: sentiment(item.text),
-            symbols: symbolsFor(item.text),
+            sentiment: sentiment(item.text, profile),
+            symbols: [symbol],
           },
         ];
       });
@@ -118,13 +174,13 @@ export class RealNewsProvider implements NewsProvider {
         warnings:
           items.length > 0
             ? [
-                "Provider hiện tại không xác nhận lịch CPI, NFP, FOMC hoặc các sự kiện kinh tế mạnh sắp tới.",
+                "Provider hiện tại không xác nhận lịch CPI, NFP, FOMC, ECB hoặc các sự kiện kinh tế mạnh sắp tới.",
               ]
             : [
                 status === "STALE"
                   ? "Chỉ nhận được tin liên quan nhưng đã cũ hơn ngưỡng freshness."
-                  : "Không nhận được tin tức mới và liên quan trực tiếp đến XAUUSD/USD/Fed/CPI/NFP.",
-                "Provider hiện tại không xác nhận lịch CPI, NFP, FOMC hoặc các sự kiện kinh tế mạnh sắp tới.",
+                  : `Không nhận được tin tức mới và liên quan trực tiếp đến ${profile.topicLabel}.`,
+                "Provider hiện tại không xác nhận lịch CPI, NFP, FOMC, ECB hoặc các sự kiện kinh tế mạnh sắp tới.",
               ],
       };
     } catch (error) {
@@ -132,7 +188,7 @@ export class RealNewsProvider implements NewsProvider {
         error instanceof Error
           ? error.message
           : "Không lấy được tin tức thật.";
-      console.warn(`[news:${this.name}] ${message}`);
+      console.warn(`[news:${this.name}] ${symbol}: ${message}`);
       return {
         items: [],
         upcomingEvents: [],
@@ -151,13 +207,9 @@ export class RealNewsProvider implements NewsProvider {
   }
 }
 
-function isRelevant(textInput: string): boolean {
+function isRelevant(textInput: string, profile: NewsProfile): boolean {
   const text = textInput.toLowerCase();
-  const relevant =
-    /(gold|xau|xauusd|usd|dxy|dollar|federal reserve|\bfed\b|fomc|interest rate|treasury yield|yield|cpi|ppi|inflation|nfp|payroll|unemployment|geopolitical|war|conflict)/;
-  const irrelevantCrypto =
-    /(staking|token|airdrop|defi|nft|memecoin|blockchain|crypto exchange)/;
-  return relevant.test(text) && !irrelevantCrypto.test(text);
+  return profile.relevant.test(text) && !irrelevantCrypto.test(text);
 }
 
 function isStale(publishedAt: string, maxAgeHours: number): boolean {
@@ -174,7 +226,9 @@ function categorize(textInput: string): NewsItem["category"] {
   if (/nfp|payroll|jobs report/.test(text)) return "NFP";
   if (/ppi/.test(text)) return "PPI";
   if (/pmi/.test(text)) return "PMI";
-  if (/rate|yield|treasury/.test(text)) return "RATES";
+  if (/rate|yield|treasury|ecb|european central bank/.test(text)) {
+    return "RATES";
+  }
   if (/war|geopolitical|conflict/.test(text)) return "GEOPOLITICAL";
   if (/gold|xau/.test(text)) return "GOLD";
   return "USD";
@@ -183,28 +237,23 @@ function categorize(textInput: string): NewsItem["category"] {
 function impact(textInput: string): NewsItem["impact"] {
   const text = textInput.toLowerCase();
   if (
-    /(\bfed\b|federal reserve|fomc|cpi|nfp|payroll|interest rate|treasury yield|war|geopolitical|conflict)/.test(
+    /(\bfed\b|federal reserve|fomc|ecb|european central bank|cpi|nfp|payroll|interest rate|treasury yield|war|geopolitical|conflict)/.test(
       text,
     )
   ) {
     return "HIGH";
   }
-  if (/(ppi|pmi|inflation|gold|xau|dxy|dollar)/.test(text)) return "MEDIUM";
+  if (/(ppi|pmi|inflation|gold|xau|euro|eurozone|dxy|dollar)/.test(text)) {
+    return "MEDIUM";
+  }
   return "LOW";
 }
 
-function sentiment(textInput: string): NewsItem["sentiment"] {
+function sentiment(textInput: string, profile: NewsProfile): NewsItem["sentiment"] {
   const text = textInput.toLowerCase();
-  const bullishGold =
-    /(rate cut|cuts rates|dovish|weaker dollar|dollar falls|usd falls|yields fall|recession|safe haven|geopolitical|war|conflict|gold rises|gold gains|inflation cools)/;
-  const bearishGold =
-    /(rate hike|higher rates|hawkish|stronger dollar|dollar rises|usd rises|yields rise|hot inflation|sticky inflation|gold falls|gold drops|risk-on|payrolls beat|jobs beat)/;
-
-  if (bullishGold.test(text) && !bearishGold.test(text)) return "BULLISH";
-  if (bearishGold.test(text) && !bullishGold.test(text)) return "BEARISH";
+  const bull = profile.bullish.test(text);
+  const bear = profile.bearish.test(text);
+  if (bull && !bear) return "BULLISH";
+  if (bear && !bull) return "BEARISH";
   return "NEUTRAL";
-}
-
-function symbolsFor(textInput: string): SymbolCode[] {
-  return isRelevant(textInput) ? ["XAUUSD"] : [];
 }

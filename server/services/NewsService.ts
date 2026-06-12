@@ -1,4 +1,4 @@
-import type { NewsSnapshot } from "../../types/trading";
+import type { NewsSnapshot, SymbolCode } from "../../types/trading";
 import type { NewsProvider } from "../providers/news/NewsProvider";
 import { RealNewsProvider } from "../providers/news/RealNewsProvider";
 
@@ -16,8 +16,8 @@ export class NewsService {
     this.provider = this.createProvider(options.providerName);
   }
 
-  async collect(): Promise<NewsSnapshot> {
-    return this.provider.getLatestNews();
+  async collect(symbol: SymbolCode): Promise<NewsSnapshot> {
+    return this.provider.getLatestNews(symbol);
   }
 
   private createProvider(providerName: string): NewsProvider {

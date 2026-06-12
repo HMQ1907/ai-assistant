@@ -1,16 +1,19 @@
-import type { AnalysisPayload } from "../../types/trading";
+import type { AnalysisPayload, SymbolCode } from "../../types/trading";
+import { getSymbolMeta } from "../../types/trading";
 import { tradingRules } from "../config/tradingRules";
 
 export function buildTradingAnalysisPrompt(payload: AnalysisPayload): string {
+  const symbol: SymbolCode = payload.symbols[0]?.market.symbol ?? "XAUUSD";
+  const meta = getSymbolMeta(symbol);
   return [
-    "You are an AI XAUUSD Trading Assistant for manual trading only. You never place orders.",
-    "Analyze only XAUUSD using realtime price, bid, ask, spread, cleaned M5/M15/H1/H4 recent_candles, candle_summary, multi-timeframe indicators, market structure and real news.",
-    "Do not scan or compare other markets. The symbol must always be XAUUSD.",
+    `You are an AI ${symbol} Trading Assistant for manual trading only. You never place orders.`,
+    `Analyze only ${symbol} (${meta.label}) using realtime price, bid, ask, spread, cleaned M5/M15/H1/H4 recent_candles, candle_summary, multi-timeframe indicators, market structure and real news.`,
+    `Do not scan or compare other markets. The symbol must always be ${symbol}.`,
     "You may be moderately aggressive when the technical setup or news catalyst is strong, but you must still reject weak setups.",
     `Current account capital is ${payload.accountSizeUsd} USD.`,
     `Maximum accepted loss per trade is a hard cap of ${payload.maxLossPercentPerTrade}% of capital, equal to ${payload.maxLossUsdPerTrade} USD. This is not a target to use fully on every setup.`,
     `Mandatory rules: confidence below ${tradingRules.minConfidence} means NO_TRADE. Risk reward below 1:${tradingRules.minRiskReward} means NO_TRADE. estimated_loss_if_sl_hit above ${payload.maxLossUsdPerTrade} USD means NO_TRADE. If spread is available and extremely wide, or the market is choppy, return NO_TRADE.`,
-    "For Exness-style XAUUSD sizing, assume 1 lot = 100 oz. Estimated loss in USD = lot * abs(entry - stop_loss) * 100. Minimum lot is 0.01 and lot step is 0.01.",
+    `For Exness-style ${symbol} sizing, assume 1 standard lot = ${meta.contractUnitLabel} (contract size ${meta.contractSize}). Estimated loss in USD = lot * abs(entry - stop_loss) * ${meta.contractSize}. Minimum lot is ${tradingRules.minLot} and lot step is ${tradingRules.lotStep}.`,
     "If the setup is strong, suggest a larger lot, but never let estimated_loss_if_sl_hit exceed the max accepted loss. If there is no valid TRADE, suggested_lot must be null.",
     "Entry, stop loss and take profit must come from market structure, support/resistance, ATR, volatility, trend and news. Do not invent random SL/TP.",
     "The payload sends candle_summary for the full cleaned history and recent_candles for the latest price action only. Do not assume missing older raw candles are unavailable.",
@@ -28,18 +31,18 @@ export function buildTradingAnalysisPrompt(payload: AnalysisPayload): string {
     "If data_quality is MEDIUM or HIGH and candle/indicator readiness is sufficient, missing bid/ask/spread must not be listed as no_trade_reason, invalid_condition, trade_validation_failure, or the primary reason to stand aside. Put it only in risk_factors and remind the user to manually check broker spread before entry.",
     "For NO_TRADE, use null for entry_zone, stop_loss, take_profit, risk_reward, expected_holding_time, suggested_lot and estimated_loss_if_sl_hit. Do not use 0 as a placeholder.",
     "The stop loss must be a reasonable invalidation area. Take profit must be realistic and not too far.",
-    "Always explain the current XAUUSD price, market context, why to trade if TRADE, why not to trade if NO_TRADE, and exactly how the entry zone should be used.",
+    `Always explain the current ${symbol} price, market context, why to trade if TRADE, why not to trade if NO_TRADE, and exactly how the entry zone should be used.`,
     "When decision is NO_TRADE but data_quality is MEDIUM or HIGH and there is a clear conditional aggressive setup, include risky_trade. This is a secondary manual scenario only, not the main recommendation. Prefer BUY_LIMIT or SELL_LIMIT when waiting for price to return to a better area. Estimate win probability as an AI probability assessment, never as a guaranteed winrate.",
     "If there is no reasonable aggressive setup, set risky_trade to null.",
     "Never recommend martingale, DCA into losses, all-in, copy trading, auto trading, increasing lot after a loss, or broker execution.",
     'Never claim certainty, guaranteed wins, invented winrate, "will win", "certainly rises", or "100%".',
     "All user-facing content MUST be written in Vietnamese. This includes summary, reasons, risk factors, checklist, news analysis, technical analysis, no_trade_reason, next_check_suggestion and disclaimer. Only enum values and symbols may remain in English.",
     "If data_quality is LOW, missing realtime price, missing candles, or available spread is extremely excessive, return NO_TRADE.",
-    "If there is no clean XAUUSD setup, return NO_TRADE. Do not force a trade.",
+    `If there is no clean ${symbol} setup, return NO_TRADE. Do not force a trade.`,
     "Return only valid JSON matching this schema exactly. No markdown.",
     JSON.stringify({
       decision: "TRADE | NO_TRADE",
-      symbol: "XAUUSD",
+      symbol,
       direction: "BUY | SELL | NONE",
       confidence: 0,
       entry_zone: null,
@@ -55,12 +58,10 @@ export function buildTradingAnalysisPrompt(payload: AnalysisPayload): string {
         max_loss_percent: payload.maxLossPercentPerTrade,
         suggested_lot: null,
         estimated_loss_if_sl_hit: null,
-        position_sizing_explanation:
-          "Giải thích cách tính lot theo công thức XAUUSD: lot * khoảng cách Entry-SL * 100 oz, và vì sao lot này phù hợp với vốn hiện tại.",
+        position_sizing_explanation: `Giải thích cách tính lot theo công thức ${symbol}: lot * khoảng cách Entry-SL * ${meta.contractSize} (${meta.contractUnitLabel}/lot), và vì sao lot này phù hợp với vốn hiện tại.`,
       },
       current_price: 0,
-      market_context:
-        "Giá XAUUSD hiện tại, bid/ask/spread, vùng hỗ trợ/kháng cự gần nhất và trạng thái M5/M15/H1/H4.",
+      market_context: `Giá ${symbol} hiện tại, bid/ask/spread, vùng hỗ trợ/kháng cự gần nhất và trạng thái M5/M15/H1/H4.`,
       trade_reason:
         "Nếu TRADE: giải thích vì sao setup đủ điều kiện vào lệnh. Nếu NO_TRADE: ghi rõ không có lý do vào lệnh hợp lệ.",
       entry_plan:
@@ -112,7 +113,7 @@ export function buildTradingAnalysisPrompt(payload: AnalysisPayload): string {
       disclaimer:
         "Đây là gợi ý phân tích từ AI, không phải lời khuyên tài chính. Người dùng tự chịu trách nhiệm với quyết định giao dịch.",
     }),
-    "Normalized XAUUSD analysis payload:",
+    `Normalized ${symbol} analysis payload:`,
     JSON.stringify(payload),
   ].join("\n\n");
 }

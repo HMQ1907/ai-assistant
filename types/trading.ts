@@ -1,8 +1,62 @@
-export const SYMBOLS = ["XAUUSD"] as const;
+export const SYMBOLS = ["XAUUSD", "EURUSD"] as const;
 
 export const TIMEFRAMES = ["M5", "M15", "H1", "H4"] as const;
 
 export type SymbolCode = (typeof SYMBOLS)[number];
+
+/**
+ * Metadata per-symbol — nguồn sự thật duy nhất cho mọi tầng (provider, sizing,
+ * prompt, validation). Khi thêm symbol mới chỉ cần khai báo ở đây.
+ *
+ * contractSize: số đơn vị tài sản trên 1 lot tiêu chuẩn. Công thức lỗ chung cho
+ * mọi symbol: loss_usd = lot * |entry - stop_loss| * contractSize.
+ *   - XAUUSD: 100 oz/lot   (giá USD/oz)
+ *   - EURUSD: 100000 EUR/lot (forex standard lot)
+ */
+export interface SymbolMeta {
+  code: SymbolCode;
+  /** Tên hiển thị / mô tả ngắn dùng trong prompt */
+  label: string;
+  /** Loại tài sản, ảnh hưởng cách AI lập luận và tin tức liên quan */
+  kind: "metal" | "forex";
+  /** Ký hiệu provider TwelveData (vd "XAU/USD") */
+  twelveDataSymbol: string;
+  /** Số đơn vị / 1 lot tiêu chuẩn (dùng cho công thức sizing) */
+  contractSize: number;
+  /** Đơn vị mô tả 1 lot, để giải thích trong prompt (vd "100 oz", "100,000 EUR") */
+  contractUnitLabel: string;
+  /** Số chữ số thập phân hiển thị giá (XAU 2, EURUSD 5) */
+  priceDecimals: number;
+  /** Ngưỡng spread tối đa cho phép (% giá). Forex chặt hơn metal nhiều. */
+  maxSpreadPercent: number;
+}
+
+export const SYMBOL_META: Record<SymbolCode, SymbolMeta> = {
+  XAUUSD: {
+    code: "XAUUSD",
+    label: "XAUUSD (vàng giao ngay / USD)",
+    kind: "metal",
+    twelveDataSymbol: "XAU/USD",
+    contractSize: 100,
+    contractUnitLabel: "100 oz",
+    priceDecimals: 2,
+    maxSpreadPercent: 0.08,
+  },
+  EURUSD: {
+    code: "EURUSD",
+    label: "EURUSD (Euro / USD)",
+    kind: "forex",
+    twelveDataSymbol: "EUR/USD",
+    contractSize: 100000,
+    contractUnitLabel: "100,000 EUR",
+    priceDecimals: 5,
+    maxSpreadPercent: 0.03,
+  },
+};
+
+export function getSymbolMeta(symbol: SymbolCode): SymbolMeta {
+  return SYMBOL_META[symbol];
+}
 export type Timeframe = (typeof TIMEFRAMES)[number];
 export type TradeDecision = "TRADE" | "NO_TRADE";
 export type TradeDirection = "BUY" | "SELL" | "NONE";

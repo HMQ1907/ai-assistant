@@ -1,5 +1,6 @@
 import { createError, readBody } from "h3";
 import { z } from "zod";
+import { SYMBOLS } from "../../types/trading";
 import { tradingRules } from "../config/tradingRules";
 import { AiAnalysisService } from "../services/AiAnalysisService";
 import { AnalysisHistoryService } from "../services/AnalysisHistoryService";
@@ -15,6 +16,7 @@ const analyzeRequestSchema = z.object({
     .positive()
     .max(1_000_000)
     .default(tradingRules.defaultAccountSizeUsd),
+  symbol: z.enum(SYMBOLS).default("XAUUSD"),
 });
 
 export default defineEventHandler(async (event) => {
@@ -50,9 +52,9 @@ export default defineEventHandler(async (event) => {
       }).getClient(),
     );
 
-    const market = await marketService.collectAll();
+    const market = await marketService.collectAll([input.symbol]);
     const indicators = indicatorService.calculateMany(market.snapshots);
-    const news = await newsService.collect();
+    const news = await newsService.collect(input.symbol);
     const payload = payloadBuilder.build(
       market,
       indicators,

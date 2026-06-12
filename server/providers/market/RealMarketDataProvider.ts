@@ -6,7 +6,7 @@ import type {
   SymbolCode,
   Timeframe,
 } from "../../../types/trading";
-import { TIMEFRAMES } from "../../../types/trading";
+import { TIMEFRAMES, getSymbolMeta } from "../../../types/trading";
 import {
   buildTimeframeQuality,
   marketCandleRequestCount,
@@ -39,9 +39,9 @@ const timeframeDurationMs: Record<Timeframe, number> = {
   H4: 4 * 60 * 60 * 1000,
 };
 
-const twelveDataSymbols: Record<SymbolCode, string> = {
-  XAUUSD: "XAU/USD",
-};
+function providerSymbolFor(symbol: SymbolCode): string {
+  return getSymbolMeta(symbol).twelveDataSymbol;
+}
 
 interface TimeSeriesResult {
   candles: Candle[];
@@ -132,7 +132,7 @@ export class RealMarketDataProvider implements MarketDataProvider {
 
     if (snapshots.length === 0) {
       throw new Error(
-        "Không lấy được dữ liệu realtime hợp lệ cho XAUUSD từ provider thật.",
+        "Không lấy được dữ liệu realtime hợp lệ từ provider thật.",
       );
     }
 
@@ -146,10 +146,10 @@ export class RealMarketDataProvider implements MarketDataProvider {
   }
 
   async getLatestPrice(symbol: SymbolCode): Promise<LatestMarketPrice> {
-    const priceResponse = await this.getPrice(twelveDataSymbols[symbol]);
+    const priceResponse = await this.getPrice(providerSymbolFor(symbol));
     const price = parseNumber(priceResponse.price);
     if (!price) {
-      throw new Error("Không có giá XAUUSD hợp lệ từ provider.");
+      throw new Error(`Không có giá ${symbol} hợp lệ từ provider.`);
     }
     return {
       symbol,
@@ -159,7 +159,7 @@ export class RealMarketDataProvider implements MarketDataProvider {
   }
 
   private async getSnapshot(symbol: SymbolCode): Promise<MarketSnapshot> {
-    const providerSymbol = twelveDataSymbols[symbol];
+    const providerSymbol = providerSymbolFor(symbol);
     const warnings: string[] = [];
     const informationalDiagnostics: string[] = [];
     const criticalErrors: string[] = [];

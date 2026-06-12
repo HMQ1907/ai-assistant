@@ -5,7 +5,7 @@
         <span :class="['badge', result.decision === 'TRADE' ? 'trade' : 'no-trade']">
           {{ decisionLabel(result.decision) }}
         </span>
-        <strong>XAUUSD / {{ directionLabel(result.direction) }}</strong>
+        <strong>{{ result.symbol }} / {{ directionLabel(result.direction) }}</strong>
       </div>
 
       <div class="price-strip">
@@ -272,7 +272,7 @@ const props = defineProps<{
 
 const currentSymbol = computed(() =>
   props.history?.request_payload.symbols.find(
-    (item) => item.market.symbol === "XAUUSD",
+    (item) => item.market.symbol === props.result.symbol,
   ),
 );
 const currentMarket = computed(() => currentSymbol.value?.market);

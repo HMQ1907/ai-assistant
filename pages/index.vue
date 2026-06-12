@@ -2,10 +2,10 @@
   <main class="page">
     <div class="toolbar">
       <div class="heading">
-        <h1>AI XAUUSD Trading Assistant</h1>
+        <h1>AI Trading Assistant</h1>
         <p>
-          Phân tích XAUUSD bằng dữ liệu thị trường thật và tin tức thật. Công cụ
-          chỉ đưa gợi ý giao dịch thủ công, không đặt lệnh.
+          Phân tích XAUUSD và EURUSD bằng dữ liệu thị trường thật và tin tức
+          thật. Công cụ chỉ đưa gợi ý giao dịch thủ công, không đặt lệnh.
         </p>
       </div>
       <div class="action-panel">
@@ -19,29 +19,52 @@
             type="number"
           />
         </label>
-        <AnalyzeButton :loading="loading" @analyze="analyze" />
       </div>
     </div>
 
-    <div v-if="error" class="card">
-      <strong>Phân tích thất bại</strong>
-      <p class="muted">{{ error }}</p>
-    </div>
+    <div class="symbols-grid">
+      <section
+        v-for="symbol in symbols"
+        :key="symbol"
+        class="symbol-column"
+      >
+        <header class="symbol-head">
+          <h2>{{ symbol }}</h2>
+          <AnalyzeButton
+            :loading="states[symbol].loading"
+            :symbol="symbol"
+            @analyze="() => analyze(symbol)"
+          />
+        </header>
 
-    <div v-if="loading" class="card">
-      <strong>
-        Đang lấy dữ liệu XAUUSD, tin tức và gửi AI phân tích...
-      </strong>
-      <p class="muted">Quá trình này có thể mất 60-120 giây.</p>
-    </div>
+        <div v-if="states[symbol].error" class="card">
+          <strong>Phân tích {{ symbol }} thất bại</strong>
+          <p class="muted">{{ states[symbol].error }}</p>
+        </div>
 
-    <RecommendationCard
-      v-if="result"
-      :history="latestHistory"
-      :latest-price="latestPrice"
-      :latest-price-loading="latestPriceLoading"
-      :result="result"
-    />
+        <div v-if="states[symbol].loading" class="card">
+          <strong>
+            Đang lấy dữ liệu {{ symbol }}, tin tức và gửi AI phân tích...
+          </strong>
+          <p class="muted">Quá trình này có thể mất 60-120 giây.</p>
+        </div>
+
+        <RecommendationCard
+          v-if="states[symbol].result"
+          :history="states[symbol].latestHistory"
+          :latest-price="states[symbol].latestPrice"
+          :latest-price-loading="states[symbol].latestPriceLoading"
+          :result="states[symbol].result!"
+        />
+
+        <p
+          v-if="!states[symbol].result && !states[symbol].loading && !states[symbol].error"
+          class="muted symbol-empty"
+        >
+          Bấm "Hiển thị gợi ý {{ symbol }}" để phân tích.
+        </p>
+      </section>
+    </div>
 
     <AnalysisHistoryTable
       v-if="hasAnalyzed"
@@ -54,25 +77,49 @@
 
 <script setup lang="ts">
 import type { AiTradeRecommendation } from "~/types/ai";
-import type { AnalysisHistoryRecord } from "~/types/trading";
+import type { AnalysisHistoryRecord, SymbolCode } from "~/types/trading";
+import { SYMBOLS } from "~/types/trading";
 
-const loading = ref(false);
-const error = ref("");
-const result = ref<AiTradeRecommendation | null>(null);
-const history = ref<AnalysisHistoryRecord[]>([]);
-const hasAnalyzed = ref(false);
+interface SymbolState {
+  loading: boolean;
+  error: string;
+  result: AiTradeRecommendation | null;
+  latestHistory: AnalysisHistoryRecord | null;
+  latestPrice: number | null;
+  latestPriceLoading: boolean;
+}
+
+const symbols = [...SYMBOLS];
 const accountSizeUsd = ref(200);
-const latestPrice = ref<number | null>(null);
-const latestPriceLoading = ref(false);
-const latestHistory = computed(() =>
-  result.value ? (history.value[0] ?? null) : null,
+const history = ref<AnalysisHistoryRecord[]>([]);
+
+function emptyState(): SymbolState {
+  return {
+    loading: false,
+    error: "",
+    result: null,
+    latestHistory: null,
+    latestPrice: null,
+    latestPriceLoading: false,
+  };
+}
+
+const states = reactive<Record<SymbolCode, SymbolState>>(
+  Object.fromEntries(symbols.map((symbol) => [symbol, emptyState()])) as Record<
+    SymbolCode,
+    SymbolState
+  >,
 );
 
-async function analyze(): Promise<void> {
-  loading.value = true;
-  error.value = "";
-  hasAnalyzed.value = true;
-  latestPrice.value = null;
+const hasAnalyzed = computed(() =>
+  symbols.some((symbol) => states[symbol].result !== null),
+);
+
+async function analyze(symbol: SymbolCode): Promise<void> {
+  const state = states[symbol];
+  state.loading = true;
+  state.error = "";
+  state.latestPrice = null;
   try {
     const response = await $fetch<{
       result: AiTradeRecommendation;
@@ -80,34 +127,37 @@ async function analyze(): Promise<void> {
     }>("/api/analyze", {
       method: "POST",
       body: {
+        symbol,
         accountSizeUsd: normalizeAccountSize(accountSizeUsd.value),
       },
     });
-    result.value = response.result;
+    state.result = response.result;
+    state.latestHistory = response.history;
     history.value = [
       response.history,
       ...history.value.filter((record) => record.id !== response.history.id),
     ];
-    await refreshLatestPrice();
+    await refreshLatestPrice(symbol);
   } catch (caught) {
-    error.value =
+    state.error =
       caught instanceof Error ? caught.message : "Lỗi không xác định";
   } finally {
-    loading.value = false;
+    state.loading = false;
   }
 }
 
-async function refreshLatestPrice(): Promise<void> {
-  latestPriceLoading.value = true;
+async function refreshLatestPrice(symbol: SymbolCode): Promise<void> {
+  const state = states[symbol];
+  state.latestPriceLoading = true;
   try {
     const response = await $fetch<{ price: number }>("/api/market/price", {
-      query: { timestamp: Date.now() },
+      query: { symbol, timestamp: Date.now() },
     });
-    latestPrice.value = response.price;
+    state.latestPrice = response.price;
   } catch {
-    latestPrice.value = null;
+    state.latestPrice = null;
   } finally {
-    latestPriceLoading.value = false;
+    state.latestPriceLoading = false;
   }
 }
 
@@ -119,6 +169,11 @@ function replaceHistoryRecord(record: AnalysisHistoryRecord): void {
   history.value = history.value.map((item) =>
     item.id === record.id ? record : item,
   );
+  for (const symbol of symbols) {
+    if (states[symbol].latestHistory?.id === record.id) {
+      states[symbol].latestHistory = record;
+    }
+  }
 }
 </script>
 
@@ -146,20 +201,67 @@ function replaceHistoryRecord(record: AnalysisHistoryRecord): void {
   width: 100%;
 }
 
+.symbols-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  align-items: start;
+}
+
+.symbol-column {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.symbol-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+}
+
+.symbol-head h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.symbol-head :deep(.button) {
+  width: auto;
+  min-width: 200px;
+}
+
+.symbol-empty {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 22px 16px;
+  text-align: center;
+}
+
+@media (max-width: 920px) {
+  .symbols-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 760px) {
-  /* Ô vốn + nút phân tích nằm cùng hàng cho gọn, nút chiếm phần lớn để dễ bấm */
   .action-panel {
-    align-items: end;
-    grid-template-columns: minmax(110px, 0.8fr) 1.2fr;
     justify-items: stretch;
     min-width: 0;
     width: 100%;
   }
-}
 
-@media (max-width: 380px) {
-  .action-panel {
-    grid-template-columns: 1fr;
+  .symbol-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .symbol-head :deep(.button) {
+    width: 100%;
+    min-width: 0;
   }
 }
 </style>

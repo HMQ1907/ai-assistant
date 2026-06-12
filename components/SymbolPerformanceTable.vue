@@ -1,6 +1,6 @@
 <template>
   <p v-if="items.length === 0" class="muted">
-    Chưa có kết quả XAUUSD nào được ghi nhận.
+    Chưa có kết quả nào được ghi nhận.
   </p>
   <div v-else class="perf-table-wrap">
     <table class="history-table perf-table">

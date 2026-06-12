@@ -4,8 +4,8 @@
       <div class="heading">
         <h1>Lịch sử</h1>
         <p>
-          Cập nhật kết quả giao dịch XAUUSD người dùng đã tự thực hiện bên ngoài
-          hệ thống.
+          Cập nhật kết quả giao dịch XAUUSD và EURUSD người dùng đã tự thực hiện
+          bên ngoài hệ thống.
         </p>
       </div>
     </div>
@@ -31,6 +31,7 @@
 <script setup lang="ts">
 import type { AiTradeRecommendation } from "~/types/ai";
 import type { AnalysisHistoryRecord } from "~/types/trading";
+import { SYMBOLS } from "~/types/trading";
 
 const history = ref<AnalysisHistoryRecord[]>([]);
 const selectedRecord = ref<AnalysisHistoryRecord | null>(null);
@@ -63,7 +64,8 @@ function isAiTradeRecommendation(
   if (!value || typeof value !== "object") return false;
   const record = value as Partial<AiTradeRecommendation>;
   return (
-    record.symbol === "XAUUSD" &&
+    typeof record.symbol === "string" &&
+    (SYMBOLS as readonly string[]).includes(record.symbol) &&
     (record.decision === "TRADE" || record.decision === "NO_TRADE") &&
     typeof record.summary === "string" &&
     typeof record.position_sizing === "object"

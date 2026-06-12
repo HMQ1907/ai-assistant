@@ -1,7 +1,20 @@
 <template>
   <section class="card">
-    <h2>Lịch sử phân tích</h2>
-    <div v-if="records.length === 0" class="muted">Chưa có phân tích.</div>
+    <div class="history-header">
+      <h2>Lịch sử phân tích</h2>
+      <label class="symbol-filter">
+        <span>Symbol</span>
+        <select v-model="symbolFilter" class="select">
+          <option value="ALL">Tất cả</option>
+          <option v-for="symbol in symbols" :key="symbol" :value="symbol">
+            {{ symbol }}
+          </option>
+        </select>
+      </label>
+    </div>
+    <div v-if="filteredRecords.length === 0" class="muted">
+      Chưa có phân tích.
+    </div>
     <div v-else class="history-table-wrap">
     <table class="history-table">
       <thead>
@@ -21,7 +34,7 @@
         </tr>
       </thead>
       <tbody>
-        <tr v-for="record in records" :key="record.id">
+        <tr v-for="record in filteredRecords" :key="record.id">
           <td data-label="ID">
             <button
               class="history-id"
@@ -230,6 +243,7 @@ import type {
   ResultStatus,
   TradeDirection,
 } from "~/types/trading";
+import { SYMBOLS } from "~/types/trading";
 import { decisionLabel, statusLabel } from "~/utils/display";
 
 const props = defineProps<{ records: AnalysisHistoryRecord[] }>();
@@ -237,6 +251,14 @@ const emit = defineEmits<{
   updated: [record: AnalysisHistoryRecord];
   detail: [record: AnalysisHistoryRecord];
 }>();
+
+const symbols = [...SYMBOLS];
+const symbolFilter = ref<"ALL" | (typeof SYMBOLS)[number]>("ALL");
+const filteredRecords = computed(() =>
+  symbolFilter.value === "ALL"
+    ? props.records
+    : props.records.filter((record) => record.symbol === symbolFilter.value),
+);
 
 const statuses: ResultStatus[] = [
   "PENDING",
@@ -447,6 +469,31 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
 </script>
 
 <style scoped>
+.history-header {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.history-header h2 {
+  margin: 0;
+}
+
+.symbol-filter {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 13px;
+  gap: 8px;
+}
+
+.symbol-filter .select {
+  width: auto;
+  min-width: 120px;
+}
+
 .history-table-wrap {
   margin: 0 -4px;
   overflow-x: auto;

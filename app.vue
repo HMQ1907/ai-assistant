@@ -32,7 +32,7 @@ function unlock() {
   >
     <header class="topbar">
       <div class="topbar-inner">
-        <NuxtLink class="brand" to="/">AI XAUUSD Trading Assistant</NuxtLink>
+        <NuxtLink class="brand" to="/">AI Trading Assistant</NuxtLink>
         <nav class="nav">
           <NuxtLink to="/">Phân tích</NuxtLink>
           <NuxtLink to="/history">Lịch sử</NuxtLink>
@@ -54,10 +54,10 @@ function unlock() {
 
       <div class="access-copy">
         <p class="access-eyebrow">Quyền truy cập riêng</p>
-        <h1>AI XAUUSD Trading Assistant</h1>
+        <h1>AI Trading Assistant</h1>
         <p>
-          Nhập mật khẩu để mở công cụ phân tích XAUUSD. Hệ thống chỉ hiển thị
-          gợi ý giao dịch thủ công, không tự đặt lệnh.
+          Nhập mật khẩu để mở công cụ phân tích XAUUSD và EURUSD. Hệ thống chỉ
+          hiển thị gợi ý giao dịch thủ công, không tự đặt lệnh.
         </p>
       </div>
 

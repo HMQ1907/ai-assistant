@@ -1,5 +1,6 @@
 import { createError, getRouterParam, readBody } from "h3";
 import { z } from "zod";
+import { SYMBOLS, type SymbolCode } from "../../../../types/trading";
 import { AiAnalysisService } from "../../../services/AiAnalysisService";
 import { AnalysisHistoryService } from "../../../services/AnalysisHistoryService";
 import { IndicatorService } from "../../../services/IndicatorService";
@@ -58,9 +59,14 @@ export default defineEventHandler(async (event) => {
       timeoutMs: config.aiTimeoutMs,
     });
 
-    const market = await marketService.collectAll();
+    const reviewSymbol: SymbolCode = (SYMBOLS as readonly string[]).includes(
+      history.symbol,
+    )
+      ? (history.symbol as SymbolCode)
+      : "XAUUSD";
+    const market = await marketService.collectAll([reviewSymbol]);
     const indicators = indicatorService.calculateMany(market.snapshots);
-    const news = await newsService.collect();
+    const news = await newsService.collect(reviewSymbol);
     const payload = payloadBuilder.build(
       market,
       indicators,

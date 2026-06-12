@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AiTradeRecommendation } from "../../types/ai";
-import type { AnalysisPayload } from "../../types/trading";
+import type { AnalysisPayload, SymbolCode } from "../../types/trading";
 import { TradeValidationService } from "../../server/services/TradeValidationService";
 
 function recommendation(
@@ -84,6 +84,64 @@ function payload(): AnalysisPayload {
   };
 }
 
+// Payload có 1 symbol với market/indicator hợp lệ để validation tìm thấy
+// đúng symbol (price > 0, spread null, data_quality HIGH — không tự chặn).
+function payloadFor(symbol: SymbolCode): AnalysisPayload {
+  const base = payload();
+  const price = symbol === "EURUSD" ? 1.08 : 4300;
+  return {
+    ...base,
+    symbols: [
+      {
+        market: {
+          symbol,
+          price,
+          bid: null,
+          ask: null,
+          spread: null,
+          bidAskStatus: "UNAVAILABLE",
+          data_quality: "HIGH",
+          data_warnings: [],
+          informational_diagnostics: [],
+          critical_errors: [],
+          updated_at: base.marketDataTimestamp,
+          provider: "test",
+          providerFetchedAt: base.marketDataTimestamp,
+          providerQuoteTime: null,
+          quoteAgeSeconds: null,
+          quoteTimestampReliable: true,
+          candle_summary: {} as never,
+          recent_candles: { M5: [], M15: [], H1: [], H4: [] },
+          candle_patterns: {} as never,
+          candle_diagnostics: {} as never,
+          timeframe_quality: {} as never,
+        },
+        indicators: {
+          symbol,
+          ema20: null,
+          ema50: null,
+          ema200: null,
+          rsi14: null,
+          macd: { macd: null, signal: null, histogram: null },
+          atr14: null,
+          nearestSupport: null,
+          nearestResistance: null,
+          swingHigh: 0,
+          swingLow: 0,
+          trendM15: "INSUFFICIENT_DATA",
+          trendH1: "INSUFFICIENT_DATA",
+          structureTrendM15: "INSUFFICIENT_DATA",
+          structureTrendH1: "INSUFFICIENT_DATA",
+          momentumScore: null,
+          volatilityScore: null,
+          timeframes: {} as never,
+          timeframeAlignment: "INSUFFICIENT_DATA",
+        },
+      },
+    ],
+  };
+}
+
 describe("trade validation", () => {
   it("does not validate entry/sl/tp for a deliberate NO_TRADE", () => {
     const result = new TradeValidationService().validate(recommendation(), payload());
@@ -118,5 +176,56 @@ describe("trade validation", () => {
     expect(result.trade_validation_failures?.join(" ")).toContain(
       "vượt giới hạn",
     );
+  });
+
+  it("sizes EURUSD with forex contract size (100000), not the gold formula", () => {
+    // EURUSD: entry 1.08000, SL 1.07500 -> distance 0.005.
+    // Với lot tối thiểu 0.01: loss = 0.01 * 0.005 * 100000 = $5 (<= maxLoss 10.5).
+    const result = new TradeValidationService().validate(
+      recommendation({
+        symbol: "EURUSD",
+        decision: "TRADE",
+        direction: "BUY",
+        confidence: 80,
+        entry_zone: { from: 1.08, to: 1.08 },
+        stop_loss: 1.075,
+        take_profit: 1.09,
+        risk_reward: "1:2",
+        position_sizing: {
+          account_size_usd: 70,
+          max_loss_usd: 10.5,
+          max_loss_percent: 15,
+          suggested_lot: null,
+          estimated_loss_if_sl_hit: null,
+          position_sizing_explanation: "",
+        },
+      }),
+      payloadFor("EURUSD"),
+    );
+
+    expect(result.decision).toBe("TRADE");
+    expect(result.symbol).toBe("EURUSD");
+    expect(result.position_sizing.suggested_lot).toBe(0.01);
+    // 0.01 * 0.005 * 100000 = 5
+    expect(result.position_sizing.estimated_loss_if_sl_hit).toBeCloseTo(5, 5);
+  });
+
+  it("forces NO_TRADE when AI returns a symbol different from the analyzed one", () => {
+    const result = new TradeValidationService().validate(
+      recommendation({
+        symbol: "EURUSD",
+        decision: "TRADE",
+        direction: "BUY",
+        confidence: 80,
+        entry_zone: { from: 1.08, to: 1.08 },
+        stop_loss: 1.075,
+        take_profit: 1.09,
+        risk_reward: "1:2",
+      }),
+      payloadFor("XAUUSD"),
+    );
+
+    expect(result.decision).toBe("NO_TRADE");
+    expect(result.trade_validation_failures?.join(" ")).toContain("khác symbol");
   });
 });

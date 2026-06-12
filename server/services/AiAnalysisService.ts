@@ -5,7 +5,12 @@ import type {
   AiOrderReviewResult,
   AiTradeRecommendation,
 } from "../../types/ai";
-import type { AnalysisHistoryRecord, AnalysisPayload } from "../../types/trading";
+import type {
+  AnalysisHistoryRecord,
+  AnalysisPayload,
+  SymbolCode,
+} from "../../types/trading";
+import { SYMBOLS, getSymbolMeta } from "../../types/trading";
 import { buildOrderReviewPrompt } from "../prompts/order-review.prompt";
 import { buildTradingAnalysisPrompt } from "../prompts/trading-analysis.prompt";
 import { extractJsonObject } from "../utils/jsonParser";
@@ -23,7 +28,7 @@ const riskRewardSchema = z.preprocess(
 
 const recommendationSchema = z.object({
   decision: z.enum(["TRADE", "NO_TRADE"]),
-  symbol: z.literal("XAUUSD"),
+  symbol: z.enum(SYMBOLS),
   direction: z.enum(["BUY", "SELL", "NONE"]),
   confidence: z.number().min(0).max(100),
   entry_zone: entryZoneSchema,
@@ -94,7 +99,7 @@ const recommendationSchema = z.object({
 });
 
 const orderReviewSchema = z.object({
-  symbol: z.literal("XAUUSD"),
+  symbol: z.enum(SYMBOLS),
   reviewed_history_id: z.string(),
   current_price: z.number(),
   order_status_assessment: z.enum([
@@ -170,9 +175,10 @@ export class AiAnalysisService {
       throw new Error("Chưa cấu hình Evolink API key.");
     }
 
+    const symbol: SymbolCode = payload.symbols[0]?.market.symbol ?? "XAUUSD";
     console.info("[ai:payload]", JSON.stringify(payload, null, 2));
     const prompt = buildTradingAnalysisPrompt(payload);
-    const raw = await this.callWithRetry(prompt);
+    const raw = await this.callWithRetry(prompt, symbol);
     const parsed = this.parseOrNoTrade(raw, payload);
     return { raw, parsed: this.validationService.validate(parsed, payload) };
   }
@@ -190,16 +196,22 @@ export class AiAnalysisService {
       throw new Error("Chưa cấu hình Evolink API key.");
     }
 
+    const reviewSymbol: SymbolCode = isKnownSymbolCode(input.history.symbol)
+      ? input.history.symbol
+      : "XAUUSD";
     const prompt = buildOrderReviewPrompt(input);
-    const raw = await this.callWithRetry(prompt);
+    const raw = await this.callWithRetry(prompt, reviewSymbol);
     return { raw, parsed: this.parseOrderReview(raw, input) };
   }
 
-  private async callWithRetry(prompt: string): Promise<string> {
+  private async callWithRetry(
+    prompt: string,
+    symbol: SymbolCode,
+  ): Promise<string> {
     let lastError: unknown;
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
-        return await this.callEvolink(prompt);
+        return await this.callEvolink(prompt, symbol);
       } catch (error) {
         lastError = error;
         if (attempt < 2) {
@@ -213,7 +225,10 @@ export class AiAnalysisService {
       : new Error("Không gửi được yêu cầu phân tích AI.");
   }
 
-  private async callEvolink(prompt: string): Promise<string> {
+  private async callEvolink(
+    prompt: string,
+    symbol: SymbolCode,
+  ): Promise<string> {
     const controller = new AbortController();
     const timeout = setTimeout(
       () => controller.abort(),
@@ -232,8 +247,7 @@ export class AiAnalysisService {
           messages: [
             {
               role: "system",
-              content:
-                "Return strict JSON only. You analyze XAUUSD only. All user-facing content must be written in Vietnamese. Only enum values and symbols may remain in English.",
+              content: `Return strict JSON only. You analyze ${symbol} (${getSymbolMeta(symbol).label}) only. All user-facing content must be written in Vietnamese. Only enum values and symbols may remain in English.`,
             },
             { role: "user", content: prompt },
           ],
@@ -312,7 +326,7 @@ function buildFallbackOrderReview(
   reason: string,
 ): AiOrderReview {
   return {
-    symbol: "XAUUSD",
+    symbol: isKnownSymbolCode(history.symbol) ? history.symbol : "XAUUSD",
     reviewed_history_id: history.id,
     current_price: payload.symbols[0]?.market.price ?? 0,
     order_status_assessment: "UNCLEAR",
@@ -340,6 +354,10 @@ function buildFallbackOrderReview(
   };
 }
 
+function isKnownSymbolCode(value: string): value is SymbolCode {
+  return (SYMBOLS as readonly string[]).includes(value);
+}
+
 function sanitizeErrorBody(value: string): string {
   return value.replace(/\s+/g, " ").trim().slice(0, 500);
 }
@@ -356,7 +374,7 @@ function buildNoTradeRecommendation(
 ): AiTradeRecommendation {
   return {
     decision: "NO_TRADE",
-    symbol: "XAUUSD",
+    symbol: payload.symbols[0]?.market.symbol ?? "XAUUSD",
     direction: "NONE",
     confidence: 0,
     entry_zone: null,
