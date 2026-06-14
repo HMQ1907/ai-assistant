@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "nuxt dev",
+    "mt5:bridge": "powershell -ExecutionPolicy Bypass -File scripts/start-mt5-bridge.ps1",
     "build": "npm run typecheck && set NUXT_IGNORE_LOCK=1&& nuxt build",
     "lint": "nuxt typecheck",
     "preview": "nuxt preview",

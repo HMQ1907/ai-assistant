@@ -14,6 +14,7 @@ import {
   parseProviderTimestamp,
 } from "../../utils/marketDiagnostics";
 import type {
+  LatestMarketPrice,
   MarketDataCollection,
   MarketDataProvider,
 } from "./MarketDataProvider";
@@ -76,12 +77,6 @@ interface TwelveDataPriceResponse {
   status?: string;
   message?: string;
   price?: string;
-}
-
-export interface LatestMarketPrice {
-  symbol: SymbolCode;
-  price: number;
-  fetchedAt: string;
 }
 
 export class RealMarketDataProvider implements MarketDataProvider {

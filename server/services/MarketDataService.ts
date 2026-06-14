@@ -1,8 +1,9 @@
 import { SYMBOLS } from "../../types/trading";
 import type { SymbolCode } from "../../types/trading";
+import { Mt5MarketDataProvider } from "../providers/market/Mt5MarketDataProvider";
 import { RealMarketDataProvider } from "../providers/market/RealMarketDataProvider";
-import type { LatestMarketPrice } from "../providers/market/RealMarketDataProvider";
 import type {
+  LatestMarketPrice,
   MarketDataCollection,
   MarketDataProvider,
 } from "../providers/market/MarketDataProvider";
@@ -15,6 +16,8 @@ export class MarketDataService {
       providerName: string;
       apiKey: string;
       baseUrl: string;
+      mt5BridgeUrl?: string;
+      mt5Symbol?: string;
       maxQuoteAgeSeconds?: number;
       debug?: boolean;
     },
@@ -33,7 +36,7 @@ export class MarketDataService {
   }
 
   async getLatestPrice(symbol: SymbolCode = "XAUUSD"): Promise<LatestMarketPrice> {
-    if (!(this.provider instanceof RealMarketDataProvider)) {
+    if (!this.provider.getLatestPrice) {
       throw new Error("Provider hiện tại không hỗ trợ lấy giá riêng lẻ.");
     }
     return this.provider.getLatestPrice(symbol);
@@ -45,6 +48,17 @@ export class MarketDataService {
         return new RealMarketDataProvider({
           apiKey: this.options.apiKey,
           baseUrl: this.options.baseUrl,
+          ...(this.options.maxQuoteAgeSeconds !== undefined
+            ? { maxQuoteAgeSeconds: this.options.maxQuoteAgeSeconds }
+            : {}),
+          ...(this.options.debug !== undefined
+            ? { debug: this.options.debug }
+            : {}),
+        });
+      case "mt5":
+        return new Mt5MarketDataProvider({
+          bridgeUrl: this.options.mt5BridgeUrl ?? "",
+          symbol: this.options.mt5Symbol ?? "XAUUSDm",
           ...(this.options.maxQuoteAgeSeconds !== undefined
             ? { maxQuoteAgeSeconds: this.options.maxQuoteAgeSeconds }
             : {}),

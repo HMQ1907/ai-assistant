@@ -12,7 +12,14 @@ export interface MarketDataCollection {
   snapshots: MarketSnapshot[];
 }
 
+export interface LatestMarketPrice {
+  symbol: SymbolCode;
+  price: number;
+  fetchedAt: string;
+}
+
 export interface MarketDataProvider {
   readonly name: string;
   getSnapshots(symbols: SymbolCode[]): Promise<MarketDataCollection>;
+  getLatestPrice?(symbol: SymbolCode): Promise<LatestMarketPrice>;
 }

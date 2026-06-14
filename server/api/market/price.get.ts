@@ -12,6 +12,8 @@ export default defineEventHandler(async (event) => {
       providerName: config.marketDataProvider,
       apiKey: config.marketDataApiKey,
       baseUrl: config.marketDataBaseUrl,
+      mt5BridgeUrl: config.mt5BridgeUrl,
+      mt5Symbol: config.mt5Symbol,
       maxQuoteAgeSeconds: config.maxQuoteAgeSeconds,
       debug: config.marketDataDebug,
     }).getLatestPrice("XAUUSD");

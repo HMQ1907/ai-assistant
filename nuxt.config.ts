@@ -19,6 +19,8 @@ export default defineNuxtConfig({
     marketDataApiKey: process.env.MARKET_DATA_API_KEY || "",
     marketDataBaseUrl:
       process.env.MARKET_DATA_BASE_URL || "https://api.twelvedata.com",
+    mt5BridgeUrl: process.env.MT5_BRIDGE_URL || "http://127.0.0.1:8765",
+    mt5Symbol: process.env.MT5_SYMBOL || "XAUUSDm",
     maxQuoteAgeSeconds: Number(process.env.MAX_QUOTE_AGE_SECONDS || 180),
     marketDataDebug: process.env.MARKET_DATA_DEBUG === "true",
     newsProvider: process.env.NEWS_PROVIDER || "gnews",
