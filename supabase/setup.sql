@@ -65,3 +65,27 @@ create index if not exists analysis_history_symbol_idx
 
 create index if not exists analysis_history_result_status_idx
   on analysis_history (result_status);
+
+-- Cột phục vụ đặt/hủy lệnh thủ công qua MT5 bridge.
+alter table analysis_history
+  add column if not exists mt5_ticket bigint,
+  add column if not exists order_type text,
+  add column if not exists order_state text not null default 'NONE',
+  add column if not exists placed_at timestamptz;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'analysis_history_order_state_check'
+      and conrelid = 'analysis_history'::regclass
+  ) then
+    alter table analysis_history
+      add constraint analysis_history_order_state_check
+      check (order_state in ('NONE', 'PENDING', 'FILLED', 'CANCELLED', 'CLOSED'));
+  end if;
+end $$;
+
+create index if not exists analysis_history_mt5_ticket_idx
+  on analysis_history (mt5_ticket);

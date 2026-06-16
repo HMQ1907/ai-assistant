@@ -7,6 +7,12 @@ export type Timeframe = (typeof TIMEFRAMES)[number];
 export type TradeDecision = "TRADE" | "NO_TRADE";
 export type TradeDirection = "BUY" | "SELL" | "NONE";
 export type ResultStatus = "PENDING" | "WIN" | "LOSS" | "BREAKEVEN" | "SKIPPED";
+export type OrderState =
+  | "NONE"
+  | "PENDING"
+  | "FILLED"
+  | "CANCELLED"
+  | "CLOSED";
 export type DataQuality = "HIGH" | "MEDIUM" | "LOW";
 export type NewsDataStatus =
   | "AVAILABLE"
@@ -296,6 +302,10 @@ export interface AnalysisHistoryRecord {
   data_warnings: string[];
   market_data_timestamp: string;
   news_data_timestamp: string;
+  mt5_ticket: number | null;
+  order_type: string | null;
+  order_state: OrderState;
+  placed_at: string | null;
 }
 
 export interface SymbolPerformance {

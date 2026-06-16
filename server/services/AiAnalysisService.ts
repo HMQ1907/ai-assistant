@@ -25,6 +25,9 @@ const recommendationSchema = z.object({
   decision: z.enum(["TRADE", "NO_TRADE"]),
   symbol: z.literal("XAUUSD"),
   direction: z.enum(["BUY", "SELL", "NONE"]),
+  order_type: z
+    .enum(["MARKET", "BUY_LIMIT", "SELL_LIMIT", "BUY_STOP", "SELL_STOP"])
+    .default("MARKET"),
   confidence: z.number().min(0).max(100),
   entry_zone: entryZoneSchema,
   stop_loss: z.number().nullable(),
@@ -358,6 +361,7 @@ function buildNoTradeRecommendation(
     decision: "NO_TRADE",
     symbol: "XAUUSD",
     direction: "NONE",
+    order_type: "MARKET",
     confidence: 0,
     entry_zone: null,
     stop_loss: null,

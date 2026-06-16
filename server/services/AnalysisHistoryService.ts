@@ -4,6 +4,7 @@ import type { AiTradeRecommendation } from "../../types/ai";
 import type {
   AnalysisHistoryRecord,
   AnalysisPayload,
+  OrderState,
   PerformanceStats,
   ResultStatus,
   SymbolPerformance,
@@ -44,6 +45,10 @@ interface AnalysisHistoryRow {
   data_warnings: unknown;
   market_data_timestamp: string | null;
   news_data_timestamp: string | null;
+  mt5_ticket: number | null;
+  order_type: string | null;
+  order_state: string | null;
+  placed_at: string | null;
 }
 
 export interface HistoryUpdateInput {
@@ -87,6 +92,10 @@ export class AnalysisHistoryService {
         data_warnings: input.requestPayload.dataWarnings,
         market_data_timestamp: input.requestPayload.marketDataTimestamp,
         news_data_timestamp: input.requestPayload.newsDataTimestamp,
+        mt5_ticket: null,
+        order_type: input.parsedResult.order_type,
+        order_state: "NONE",
+        placed_at: null,
       })
       .select("*")
       .single();
@@ -147,6 +156,41 @@ export class AnalysisHistoryService {
       .single();
     if (error)
       throw new Error(`Không cập nhật được lịch sử phân tích: ${error.message}`);
+    return toRecord(data);
+  }
+
+  async markOrderPlaced(
+    id: string,
+    input: { mt5_ticket: number; order_type: string; order_state: OrderState },
+  ): Promise<AnalysisHistoryRecord> {
+    const { data, error } = await this.supabase
+      .from(tableName)
+      .update({
+        mt5_ticket: input.mt5_ticket,
+        order_type: input.order_type,
+        order_state: input.order_state,
+        placed_at: new Date().toISOString(),
+      })
+      .eq("id", id)
+      .select("*")
+      .single();
+    if (error)
+      throw new Error(`Không lưu được trạng thái đặt lệnh: ${error.message}`);
+    return toRecord(data);
+  }
+
+  async markOrderState(
+    id: string,
+    orderState: OrderState,
+  ): Promise<AnalysisHistoryRecord> {
+    const { data, error } = await this.supabase
+      .from(tableName)
+      .update({ order_state: orderState })
+      .eq("id", id)
+      .select("*")
+      .single();
+    if (error)
+      throw new Error(`Không cập nhật được trạng thái lệnh: ${error.message}`);
     return toRecord(data);
   }
 
@@ -247,7 +291,23 @@ function toRecord(row: unknown): AnalysisHistoryRecord {
     data_warnings: stringArray(value.data_warnings),
     market_data_timestamp: value.market_data_timestamp ?? "",
     news_data_timestamp: value.news_data_timestamp ?? "",
+    mt5_ticket: nullableNumber(value.mt5_ticket),
+    order_type: value.order_type ?? null,
+    order_state: normalizeOrderState(value.order_state),
+    placed_at: value.placed_at ?? null,
   };
+}
+
+function normalizeOrderState(value: string | null): OrderState {
+  if (
+    value === "PENDING" ||
+    value === "FILLED" ||
+    value === "CANCELLED" ||
+    value === "CLOSED"
+  ) {
+    return value;
+  }
+  return "NONE";
 }
 
 function normalizeStatus(value: string): ResultStatus {

@@ -10,6 +10,7 @@ function recommendation(
     decision: "NO_TRADE",
     symbol: "XAUUSD",
     direction: "NONE",
+    order_type: "MARKET",
     confidence: 50,
     entry_zone: null,
     stop_loss: null,
@@ -143,5 +144,58 @@ describe("trade validation", () => {
 
     expect(result.decision).toBe("NO_TRADE");
     expect(result.trade_validation_failures?.join(" ")).toContain("risk_reward");
+  });
+
+  it("rejects an order_type that does not match the direction", () => {
+    const result = new TradeValidationService().validate(
+      recommendation({
+        decision: "TRADE",
+        direction: "BUY",
+        order_type: "SELL_LIMIT",
+        confidence: 80,
+        entry_zone: { from: 4300, to: 4300 },
+        stop_loss: 4280,
+        take_profit: 4340,
+        risk_reward: "1:2",
+        position_sizing: {
+          account_size_usd: 70,
+          max_loss_usd: 10.5,
+          max_loss_percent: 15,
+          suggested_lot: 0.01,
+          estimated_loss_if_sl_hit: 20,
+          position_sizing_explanation: "",
+        },
+      }),
+    );
+
+    expect(result.decision).toBe("NO_TRADE");
+    expect(result.order_type).toBe("MARKET");
+    expect(result.trade_validation_failures?.join(" ")).toContain("order_type");
+  });
+
+  it("keeps a consistent MARKET buy order", () => {
+    const result = new TradeValidationService().validate(
+      recommendation({
+        decision: "TRADE",
+        direction: "BUY",
+        order_type: "MARKET",
+        confidence: 80,
+        entry_zone: { from: 4300, to: 4300 },
+        stop_loss: 4280,
+        take_profit: 4340,
+        risk_reward: "1:2",
+        position_sizing: {
+          account_size_usd: 70,
+          max_loss_usd: 10.5,
+          max_loss_percent: 15,
+          suggested_lot: 0.01,
+          estimated_loss_if_sl_hit: 20,
+          position_sizing_explanation: "",
+        },
+      }),
+    );
+
+    expect(result.decision).toBe("TRADE");
+    expect(result.order_type).toBe("MARKET");
   });
 });

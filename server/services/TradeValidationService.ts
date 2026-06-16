@@ -39,6 +39,7 @@ export class TradeValidationService {
       ...recommendation,
       decision: "NO_TRADE",
       direction: "NONE",
+      order_type: "MARKET",
       entry_zone: null,
       stop_loss: null,
       take_profit: null,
@@ -135,6 +136,7 @@ export class TradeValidationService {
       ...recommendation,
       decision: "NO_TRADE",
       direction: "NONE",
+      order_type: "MARKET",
       entry_zone: null,
       stop_loss: null,
       take_profit: null,
@@ -284,6 +286,58 @@ export class TradeValidationService {
       ) {
         reasons.push("SELL có take_profit lớn hơn hoặc bằng entry");
       }
+    }
+
+    reasons.push(...this.orderTypeReasons(recommendation, selectedSymbol, entry));
+
+    return reasons;
+  }
+
+  private orderTypeReasons(
+    recommendation: AiTradeRecommendation,
+    selectedSymbol: PayloadSymbol | undefined,
+    entry: number,
+  ): string[] {
+    if (recommendation.decision !== "TRADE") return [];
+
+    const reasons: string[] = [];
+    const { order_type: orderType, direction } = recommendation;
+
+    const expectedDirection: Record<
+      Exclude<typeof orderType, "MARKET">,
+      "BUY" | "SELL"
+    > = {
+      BUY_LIMIT: "BUY",
+      BUY_STOP: "BUY",
+      SELL_LIMIT: "SELL",
+      SELL_STOP: "SELL",
+    };
+
+    if (orderType !== "MARKET" && expectedDirection[orderType] !== direction) {
+      reasons.push(
+        `order_type ${orderType} không khớp direction ${direction}`,
+      );
+    }
+
+    const currentPrice = selectedSymbol?.market.price;
+    if (!isFinitePositive(currentPrice) || !isFinitePositive(entry)) {
+      return reasons;
+    }
+
+    // Dung sai nhỏ để entry sát giá hiện tại không bị bắt lỗi nhầm vị trí.
+    const tolerance = Math.max(currentPrice * 0.0002, 0.05);
+
+    if (orderType === "BUY_LIMIT" && entry > currentPrice + tolerance) {
+      reasons.push("BUY_LIMIT nhưng entry_zone nằm trên giá hiện tại");
+    }
+    if (orderType === "SELL_LIMIT" && entry < currentPrice - tolerance) {
+      reasons.push("SELL_LIMIT nhưng entry_zone nằm dưới giá hiện tại");
+    }
+    if (orderType === "BUY_STOP" && entry < currentPrice - tolerance) {
+      reasons.push("BUY_STOP nhưng entry_zone nằm dưới giá hiện tại");
+    }
+    if (orderType === "SELL_STOP" && entry > currentPrice + tolerance) {
+      reasons.push("SELL_STOP nhưng entry_zone nằm trên giá hiện tại");
     }
 
     return reasons;

@@ -3,6 +3,10 @@
     <h3>Kế hoạch Entry / SL / TP</h3>
     <p class="muted">{{ result.entry_plan }}</p>
     <div class="kv">
+      <div v-if="result.decision === 'TRADE'" class="kv-row">
+        <span>Loại lệnh</span>
+        <strong>{{ orderTypeLabel(result.order_type, result.direction) }}</strong>
+      </div>
       <div class="kv-row">
         <span>Vùng entry đề xuất</span>
         <strong>{{ formatEntryZone }}</strong>
@@ -51,9 +55,28 @@
 </template>
 
 <script setup lang="ts">
-import type { AiTradeRecommendation } from "~/types/ai";
+import type { AiTradeRecommendation, OrderType } from "~/types/ai";
+import type { TradeDirection } from "~/types/trading";
 
 const props = defineProps<{ result: AiTradeRecommendation }>();
+
+function orderTypeLabel(
+  orderType: OrderType,
+  direction: TradeDirection,
+): string {
+  if (orderType === "MARKET") {
+    if (direction === "BUY") return "BUY (vào ngay tại giá thị trường)";
+    if (direction === "SELL") return "SELL (vào ngay tại giá thị trường)";
+    return "Vào ngay tại giá thị trường";
+  }
+  const labels: Record<Exclude<OrderType, "MARKET">, string> = {
+    BUY_LIMIT: "BUY LIMIT (đặt chờ mua dưới giá)",
+    SELL_LIMIT: "SELL LIMIT (đặt chờ bán trên giá)",
+    BUY_STOP: "BUY STOP (đặt chờ mua trên giá)",
+    SELL_STOP: "SELL STOP (đặt chờ bán dưới giá)",
+  };
+  return labels[orderType];
+}
 
 const formatEntryZone = computed(() =>
   props.result.entry_zone

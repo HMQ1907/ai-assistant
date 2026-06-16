@@ -1,9 +1,17 @@
 import type { TradeDecision, TradeDirection } from "./trading";
 
+export type OrderType =
+  | "MARKET"
+  | "BUY_LIMIT"
+  | "SELL_LIMIT"
+  | "BUY_STOP"
+  | "SELL_STOP";
+
 export interface AiTradeRecommendation {
   decision: TradeDecision;
   symbol: "XAUUSD";
   direction: TradeDirection;
+  order_type: OrderType;
   confidence: number;
   entry_zone: {
     from: number;

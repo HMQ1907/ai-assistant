@@ -17,6 +17,7 @@
           <th>Exit thực tế</th>
           <th>P/L</th>
           <th>Ghi chú</th>
+          <th>Lệnh MT5</th>
           <th>Thao tác</th>
         </tr>
       </thead>
@@ -102,6 +103,11 @@
               @input="setNote(record.id, $event)"
             >
           </td>
+          <td data-label="Lệnh MT5">
+            <span :class="['order-pill', orderStateClass(record.order_state)]">
+              {{ orderStateLabel(record.order_state) }}
+            </span>
+          </td>
           <td data-label="Thao tác" class="actions-cell">
             <div class="row-actions">
               <button
@@ -118,6 +124,24 @@
                 @click="reviewOrder(record)"
               >
                 {{ checkingId === record.id ? "Đang kiểm tra..." : "Check lại lệnh" }}
+              </button>
+              <button
+                v-if="canPlace(record)"
+                class="action-button action-button-trade"
+                type="button"
+                :disabled="orderBusyId === record.id"
+                @click="placeOrder(record)"
+              >
+                {{ orderBusyId === record.id ? "Đang đặt..." : "Đặt lệnh" }}
+              </button>
+              <button
+                v-if="canCancel(record)"
+                class="action-button action-button-danger"
+                type="button"
+                :disabled="orderBusyId === record.id"
+                @click="cancelOrder(record)"
+              >
+                {{ orderBusyId === record.id ? "Đang hủy..." : "Hủy lệnh" }}
               </button>
               <button
                 class="action-button action-button-primary"
@@ -227,6 +251,7 @@
 import type { AiOrderReview } from "~/types/ai";
 import type {
   AnalysisHistoryRecord,
+  OrderState,
   ResultStatus,
   TradeDirection,
 } from "~/types/trading";
@@ -257,6 +282,7 @@ type Draft = {
 const drafts = reactive<Record<string, Draft>>({});
 const copiedId = ref("");
 const checkingId = ref("");
+const orderBusyId = ref("");
 const reviewResult = ref<AiOrderReview | null>(null);
 const reviewError = ref("");
 
@@ -320,6 +346,88 @@ async function reviewOrder(record: AnalysisHistoryRecord): Promise<void> {
   } finally {
     checkingId.value = "";
   }
+}
+
+function canPlace(record: AnalysisHistoryRecord): boolean {
+  return (
+    record.decision === "TRADE" &&
+    record.direction !== "NONE" &&
+    record.order_state === "NONE"
+  );
+}
+
+function canCancel(record: AnalysisHistoryRecord): boolean {
+  return record.order_state === "PENDING" || record.order_state === "FILLED";
+}
+
+async function placeOrder(record: AnalysisHistoryRecord): Promise<void> {
+  const confirmed = window.confirm(
+    `Đặt lệnh THẬT trên tài khoản MT5 đang đăng nhập cho ${record.symbol} ${record.direction}?\nĐây là tiền thật. Hãy kiểm tra lại giá và spread trước khi xác nhận.`,
+  );
+  if (!confirmed) return;
+
+  orderBusyId.value = record.id;
+  reviewError.value = "";
+  try {
+    const response = await $fetch<{ record: AnalysisHistoryRecord }>(
+      `/api/history/${record.id}/order`,
+      { method: "POST" },
+    );
+    emit("updated", response.record);
+  } catch (error) {
+    reviewError.value = errorMessage(error, "Không đặt được lệnh.");
+  } finally {
+    orderBusyId.value = "";
+  }
+}
+
+async function cancelOrder(record: AnalysisHistoryRecord): Promise<void> {
+  const action =
+    record.order_state === "FILLED" ? "ĐÓNG vị thế đang mở" : "HỦY lệnh chờ";
+  const confirmed = window.confirm(
+    `Bạn chắc chắn muốn ${action} (ticket ${record.mt5_ticket}) trên MT5?`,
+  );
+  if (!confirmed) return;
+
+  orderBusyId.value = record.id;
+  reviewError.value = "";
+  try {
+    const response = await $fetch<{ record: AnalysisHistoryRecord }>(
+      `/api/history/${record.id}/order`,
+      { method: "DELETE" },
+    );
+    emit("updated", response.record);
+  } catch (error) {
+    reviewError.value = errorMessage(error, "Không hủy/đóng được lệnh.");
+  } finally {
+    orderBusyId.value = "";
+  }
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  if (error && typeof error === "object" && "data" in error) {
+    const data = (error as { data?: { message?: string } }).data;
+    if (data?.message) return data.message;
+  }
+  return error instanceof Error ? error.message : fallback;
+}
+
+function orderStateLabel(value: OrderState): string {
+  const labels: Record<OrderState, string> = {
+    NONE: "Chưa đặt",
+    PENDING: "Lệnh chờ",
+    FILLED: "Đang mở",
+    CANCELLED: "Đã hủy",
+    CLOSED: "Đã đóng",
+  };
+  return labels[value];
+}
+
+function orderStateClass(value: OrderState): string {
+  if (value === "PENDING") return "pending";
+  if (value === "FILLED") return "filled";
+  if (value === "CANCELLED" || value === "CLOSED") return "done";
+  return "none";
 }
 
 function setStatus(id: string, event: Event): void {
@@ -456,7 +564,7 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
 }
 
 .history-table {
-  min-width: 1120px;
+  min-width: 1224px;
   table-layout: fixed;
 }
 
@@ -522,6 +630,10 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
 }
 
 .history-table th:nth-child(12) {
+  width: 104px;
+}
+
+.history-table th:nth-child(13) {
   width: 236px;
 }
 
@@ -608,6 +720,55 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
 
 .action-button-primary:hover {
   background: #2772c4;
+}
+
+.action-button-trade {
+  background: #1f7a4d;
+  border-color: #2f9c66;
+}
+
+.action-button-trade:hover:not(:disabled) {
+  background: #259159;
+}
+
+.action-button-danger {
+  background: #8d2f37;
+  border-color: #b34049;
+}
+
+.action-button-danger:hover:not(:disabled) {
+  background: #a5363f;
+}
+
+.order-pill {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  min-height: 30px;
+  padding: 4px 10px;
+}
+
+.order-pill.pending {
+  border-color: rgba(245, 158, 11, 0.6);
+  color: #fbbf24;
+}
+
+.order-pill.filled {
+  border-color: rgba(54, 197, 138, 0.72);
+  color: var(--green);
+}
+
+.order-pill.done {
+  border-color: #66717c;
+  color: var(--muted);
+}
+
+.order-pill.none {
+  border-color: #46505b;
+  color: var(--muted);
 }
 
 .direction-pill {
