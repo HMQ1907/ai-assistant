@@ -50,7 +50,7 @@ function recommendation(
     best_case_scenario: "",
     worst_case_scenario: "",
     pre_entry_checklist: [],
-    no_trade_reason: "Không có setup.",
+    no_trade_reason: "No valid setup.",
     next_check_suggestion: "",
     risky_trade: null,
     disclaimer: "",
@@ -86,18 +86,21 @@ function payload(): AnalysisPayload {
 
 describe("trade validation", () => {
   it("does not validate entry/sl/tp for a deliberate NO_TRADE", () => {
-    const result = new TradeValidationService().validate(recommendation(), payload());
+    const result = new TradeValidationService().validate(
+      recommendation(),
+      payload(),
+    );
     expect(result.decision).toBe("NO_TRADE");
     expect(result.entry_zone).toBeNull();
     expect(result.invalid_conditions).toEqual([]);
   });
 
-  it("forces TRADE above max risk to NO_TRADE", () => {
+  it("keeps a technically valid TRADE despite low confidence and account sizing", () => {
     const result = new TradeValidationService().validate(
       recommendation({
         decision: "TRADE",
         direction: "BUY",
-        confidence: 80,
+        confidence: 55,
         entry_zone: { from: 4300, to: 4300 },
         stop_loss: 4280,
         take_profit: 4340,
@@ -111,12 +114,34 @@ describe("trade validation", () => {
           position_sizing_explanation: "",
         },
       }),
-      payload(),
+    );
+
+    expect(result.decision).toBe("TRADE");
+    expect(result.confidence).toBe(55);
+  });
+
+  it("still rejects a technically poor risk reward", () => {
+    const result = new TradeValidationService().validate(
+      recommendation({
+        decision: "TRADE",
+        direction: "BUY",
+        confidence: 80,
+        entry_zone: { from: 4300, to: 4300 },
+        stop_loss: 4280,
+        take_profit: 4320,
+        risk_reward: "1:1",
+        position_sizing: {
+          account_size_usd: 70,
+          max_loss_usd: 10.5,
+          max_loss_percent: 15,
+          suggested_lot: 0.01,
+          estimated_loss_if_sl_hit: 20,
+          position_sizing_explanation: "",
+        },
+      }),
     );
 
     expect(result.decision).toBe("NO_TRADE");
-    expect(result.trade_validation_failures?.join(" ")).toContain(
-      "vượt giới hạn",
-    );
+    expect(result.trade_validation_failures?.join(" ")).toContain("risk_reward");
   });
 });
