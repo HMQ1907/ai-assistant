@@ -26,6 +26,15 @@ ORDER_TYPES = {
     "SELL_STOP": (mt5.ORDER_TYPE_SELL_STOP, True),
 }
 
+ORDER_TYPE_NAMES = {
+    mt5.ORDER_TYPE_BUY: ("MARKET_BUY", "BUY"),
+    mt5.ORDER_TYPE_SELL: ("MARKET_SELL", "SELL"),
+    mt5.ORDER_TYPE_BUY_LIMIT: ("BUY_LIMIT", "BUY"),
+    mt5.ORDER_TYPE_SELL_LIMIT: ("SELL_LIMIT", "SELL"),
+    mt5.ORDER_TYPE_BUY_STOP: ("BUY_STOP", "BUY"),
+    mt5.ORDER_TYPE_SELL_STOP: ("SELL_STOP", "SELL"),
+}
+
 
 class PlaceOrderRequest(BaseModel):
     symbol: str = "XAUUSDm"
@@ -53,6 +62,23 @@ def ensure_mt5():
         )
 
 
+def ensure_trading_enabled():
+    terminal = mt5.terminal_info()
+    if terminal is None:
+        raise HTTPException(
+            status_code=500,
+            detail=f"MT5 terminal_info failed: {mt5.last_error()}",
+        )
+    if not terminal.trade_allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "MT5 dang tat AutoTrading/Algo Trading. "
+                "Hay bat nut Algo Trading/AutoTrading trong MT5 roi dat lenh lai."
+            ),
+        )
+
+
 def rate_to_candle(rate):
     return {
         "time": datetime.fromtimestamp(int(rate["time"]), timezone.utc).isoformat(),
@@ -61,6 +87,46 @@ def rate_to_candle(rate):
         "low": float(rate["low"]),
         "close": float(rate["close"]),
         "volume": float(rate["tick_volume"]),
+    }
+
+
+def timestamp_to_iso(value):
+    return datetime.fromtimestamp(int(value), timezone.utc).isoformat()
+
+
+def serialize_pending_order(order):
+    order_type, direction = ORDER_TYPE_NAMES.get(order.type, (str(order.type), "BUY"))
+    return {
+        "ticket": int(order.ticket),
+        "state": "PENDING",
+        "symbol": order.symbol,
+        "type": order_type,
+        "direction": direction,
+        "volume": float(getattr(order, "volume_current", order.volume_initial)),
+        "price_open": float(order.price_open),
+        "stop_loss": float(order.sl) if order.sl else None,
+        "take_profit": float(order.tp) if order.tp else None,
+        "profit": None,
+        "opened_at": timestamp_to_iso(order.time_setup),
+        "comment": getattr(order, "comment", "") or "",
+    }
+
+
+def serialize_position(position):
+    order_type, direction = ORDER_TYPE_NAMES.get(position.type, (str(position.type), "BUY"))
+    return {
+        "ticket": int(position.ticket),
+        "state": "FILLED",
+        "symbol": position.symbol,
+        "type": order_type,
+        "direction": direction,
+        "volume": float(position.volume),
+        "price_open": float(position.price_open),
+        "stop_loss": float(position.sl) if position.sl else None,
+        "take_profit": float(position.tp) if position.tp else None,
+        "profit": float(position.profit),
+        "opened_at": timestamp_to_iso(position.time),
+        "comment": getattr(position, "comment", "") or "",
     }
 
 
@@ -85,10 +151,16 @@ def health():
     with mt5_lock:
         ensure_mt5()
         account = mt5.account_info()
+        terminal = mt5.terminal_info()
         if account is None:
             raise HTTPException(
                 status_code=500,
                 detail=f"MT5 account not connected: {mt5.last_error()}",
+            )
+        if terminal is None:
+            raise HTTPException(
+                status_code=500,
+                detail=f"MT5 terminal_info failed: {mt5.last_error()}",
             )
 
         return {
@@ -97,6 +169,7 @@ def health():
             "server": account.server,
             "company": account.company,
             "currency": account.currency,
+            "trade_allowed": bool(terminal.trade_allowed),
         }
 
 
@@ -179,6 +252,7 @@ def place_order(req: PlaceOrderRequest):
 
     with mt5_lock:
         ensure_mt5()
+        ensure_trading_enabled()
         info, tick = _prepare_symbol(req.symbol)
 
         if is_pending:
@@ -217,7 +291,10 @@ def place_order(req: PlaceOrderRequest):
                 status_code=500,
                 detail=f"order_send returned None: {mt5.last_error()}",
             )
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
+        success_retcodes = {mt5.TRADE_RETCODE_DONE}
+        if is_pending:
+            success_retcodes.add(mt5.TRADE_RETCODE_PLACED)
+        if result.retcode not in success_retcodes:
             raise HTTPException(
                 status_code=400,
                 detail=f"order_send failed retcode={result.retcode}: {result.comment}",
@@ -248,10 +325,34 @@ def get_order(ticket: int, symbol: str = "XAUUSDm"):
         return {"ok": True, "ticket": ticket, "state": "CLOSED_OR_UNKNOWN"}
 
 
+@app.get("/orders")
+def orders(symbol: str = "XAUUSDm"):
+    with mt5_lock:
+        ensure_mt5()
+        if not mt5.symbol_select(symbol, True):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Cannot select symbol {symbol}: {mt5.last_error()}",
+            )
+
+        pending = mt5.orders_get(symbol=symbol) or ()
+        positions = mt5.positions_get(symbol=symbol) or ()
+
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "orders": [
+                *[serialize_pending_order(order) for order in pending],
+                *[serialize_position(position) for position in positions],
+            ],
+        }
+
+
 @app.post("/order/cancel")
 def cancel_order(req: CancelOrderRequest):
     with mt5_lock:
         ensure_mt5()
+        ensure_trading_enabled()
 
         # Lệnh chờ chưa khớp -> remove.
         pending = mt5.orders_get(ticket=req.ticket)

@@ -5,7 +5,12 @@ import type {
   AiOrderReviewResult,
   AiTradeRecommendation,
 } from "../../types/ai";
-import type { AnalysisHistoryRecord, AnalysisPayload } from "../../types/trading";
+import type {
+  ActiveMt5Order,
+  AnalysisHistoryRecord,
+  AnalysisPayload,
+} from "../../types/trading";
+import { buildActiveOrderReviewPrompt } from "../prompts/active-order-review.prompt";
 import { buildOrderReviewPrompt } from "../prompts/order-review.prompt";
 import { buildTradingAnalysisPrompt } from "../prompts/trading-analysis.prompt";
 import { extractJsonObject } from "../utils/jsonParser";
@@ -198,6 +203,20 @@ export class AiAnalysisService {
     return { raw, parsed: this.parseOrderReview(raw, input) };
   }
 
+  async reviewActiveOrder(input: {
+    order: ActiveMt5Order;
+    latestPayload: AnalysisPayload;
+    matchingHistory: AnalysisHistoryRecord | null;
+  }): Promise<AiOrderReviewResult> {
+    if (!this.options.apiKey) {
+      throw new Error("Chưa cấu hình Evolink API key.");
+    }
+
+    const prompt = buildActiveOrderReviewPrompt(input);
+    const raw = await this.callWithRetry(prompt);
+    return { raw, parsed: this.parseActiveOrderReview(raw, input) };
+  }
+
   private async callWithRetry(prompt: string): Promise<string> {
     let lastError: unknown;
     for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -307,6 +326,67 @@ export class AiAnalysisService {
       return buildFallbackOrderReview(input.history, input.latestPayload, reason);
     }
   }
+
+  private parseActiveOrderReview(
+    raw: string,
+    input: {
+      order: ActiveMt5Order;
+      latestPayload: AnalysisPayload;
+    },
+  ): AiOrderReview {
+    try {
+      const extracted = extractJsonObject(raw);
+      return orderReviewSchema.parse(extracted);
+    } catch (error) {
+      const reason =
+        error instanceof Error
+          ? `AI trả JSON không hợp lệ: ${error.message}`
+          : "AI trả JSON không hợp lệ.";
+      return buildFallbackActiveOrderReview(
+        input.order,
+        input.latestPayload,
+        reason,
+      );
+    }
+  }
+}
+
+function buildFallbackActiveOrderReview(
+  order: ActiveMt5Order,
+  payload: AnalysisPayload,
+  reason: string,
+): AiOrderReview {
+  return {
+    symbol: "XAUUSD",
+    reviewed_history_id: String(order.ticket),
+    current_price: payload.symbols[0]?.market.price ?? 0,
+    order_status_assessment:
+      order.state === "FILLED" ? "LIKELY_FILLED" : "LIKELY_NOT_FILLED",
+    recommended_action: "WAIT",
+    confidence: 0,
+    summary: "Không xác thực được phản hồi AI khi check lệnh đang active.",
+    fill_assessment:
+      order.state === "FILLED"
+        ? "Lệnh đang là vị thế mở trên MT5."
+        : "Lệnh đang là lệnh chờ trên MT5.",
+    action_reason: reason,
+    stop_loss_plan: {
+      keep_current: true,
+      suggested_stop_loss: null,
+      reason: "Không dời SL khi phản hồi AI không hợp lệ.",
+    },
+    take_profit_plan: {
+      keep_current: true,
+      suggested_take_profit: null,
+      reason: "Không dời TP khi phản hồi AI không hợp lệ.",
+    },
+    cancellation_conditions: ["Chạy lại check lệnh khi AI trả JSON hợp lệ."],
+    risk_warnings: [reason],
+    next_check_minutes: 15,
+    checklist: ["Kiểm tra trực tiếp trạng thái lệnh trên Exness/MT5."],
+    disclaimer:
+      "Đây là gợi ý phân tích từ AI, không phải lời khuyên tài chính. Người dùng tự chịu trách nhiệm với quyết định giao dịch.",
+  };
 }
 
 function buildFallbackOrderReview(

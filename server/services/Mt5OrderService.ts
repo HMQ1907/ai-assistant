@@ -1,5 +1,9 @@
 import type { OrderType } from "../../types/ai";
-import type { OrderState, TradeDirection } from "../../types/trading";
+import type {
+  ActiveMt5Order,
+  OrderState,
+  TradeDirection,
+} from "../../types/trading";
 
 export interface PlaceOrderInput {
   direction: Exclude<TradeDirection, "NONE">;
@@ -36,6 +40,12 @@ interface BridgeCancelResponse {
   ok: boolean;
   ticket: number;
   state: string;
+}
+
+interface BridgeActiveOrdersResponse {
+  ok: boolean;
+  symbol: string;
+  orders: ActiveMt5Order[];
 }
 
 // Chuyển (direction + order_type của AI) sang order_type mà bridge hiểu.
@@ -102,6 +112,31 @@ export class Mt5OrderService {
       ticket: body.ticket,
       state: body.state === "CANCELLED" ? "CANCELLED" : "CLOSED",
     };
+  }
+
+  async getActiveOrders(): Promise<ActiveMt5Order[]> {
+    const url = new URL("/orders", this.options.bridgeUrl);
+    url.searchParams.set("symbol", this.options.symbol);
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(this.options.timeoutMs ?? 20_000),
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "unknown error";
+      throw new Error(
+        `Không kết nối được MT5 bridge tại ${this.options.bridgeUrl}: ${reason}`,
+      );
+    }
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(
+        `MT5 bridge trả HTTP ${response.status}${text ? `: ${text.slice(0, 300)}` : ""}`,
+      );
+    }
+    const body = (await response.json()) as BridgeActiveOrdersResponse;
+    return body.orders;
   }
 
   private async call<T>(path: string, payload: unknown): Promise<T> {

@@ -308,6 +308,24 @@ export interface AnalysisHistoryRecord {
   placed_at: string | null;
 }
 
+export type ActiveMt5OrderState = "PENDING" | "FILLED";
+export type ActiveMt5OrderDirection = "BUY" | "SELL";
+
+export interface ActiveMt5Order {
+  ticket: number;
+  state: ActiveMt5OrderState;
+  symbol: string;
+  type: string;
+  direction: ActiveMt5OrderDirection;
+  volume: number;
+  price_open: number;
+  stop_loss: number | null;
+  take_profit: number | null;
+  profit: number | null;
+  opened_at: string;
+  comment: string;
+}
+
 export interface SymbolPerformance {
   symbol: string;
   trades: number;
