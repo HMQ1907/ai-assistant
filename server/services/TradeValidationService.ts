@@ -1,5 +1,5 @@
 import type { AiTradeRecommendation, RiskyTradeScenario } from "../../types/ai";
-import type { AnalysisPayload } from "../../types/trading";
+import type { AnalysisPayload, SymbolCode } from "../../types/trading";
 import { tradingRules } from "../config/tradingRules";
 import { parseRiskReward } from "../utils/risk";
 
@@ -16,8 +16,9 @@ export class TradeValidationService {
     const reasons = this.findInvalidReasons(recommendation, payload);
 
     if (payload) {
+      const symbol = selectedSymbolCode(payload, recommendation);
       const selectedSymbol = payload.symbols.find(
-        (item) => item.market.symbol === "XAUUSD",
+        (item) => item.market.symbol === symbol,
       );
       if (selectedSymbol) {
         recommendation.current_price = selectedSymbol.market.price;
@@ -68,68 +69,18 @@ export class TradeValidationService {
     recommendation.position_sizing.max_loss_usd = payload.maxLossUsdPerTrade;
     recommendation.position_sizing.max_loss_percent =
       payload.maxLossPercentPerTrade;
-
-    if (recommendation.decision !== "TRADE") {
-      recommendation.position_sizing.suggested_lot = null;
-      recommendation.position_sizing.estimated_loss_if_sl_hit = null;
-      return;
-    }
-
-    const entry = this.averageEntry(recommendation);
-    const stopLoss = recommendation.stop_loss;
-    if (!isFinitePositive(entry) || !isFinitePositive(stopLoss)) {
-      recommendation.position_sizing.suggested_lot = null;
-      recommendation.position_sizing.estimated_loss_if_sl_hit = null;
-      return;
-    }
-
-    const distance = Math.abs(entry - stopLoss);
-    if (distance <= 0) {
-      recommendation.position_sizing.suggested_lot = null;
-      recommendation.position_sizing.estimated_loss_if_sl_hit = null;
-      return;
-    }
-
-    const maxLossUsd = payload.maxLossUsdPerTrade;
-    const riskMultiplier = confidenceRiskMultiplier(recommendation.confidence);
-    const targetLossUsd = maxLossUsd * riskMultiplier;
-    const rawLot =
-      targetLossUsd / (distance * tradingRules.xauUsdOuncesPerLot);
-    const lot = floorToStep(rawLot, tradingRules.lotStep);
-    const minLotLoss =
-      tradingRules.minLot * distance * tradingRules.xauUsdOuncesPerLot;
-    const suggestedLot =
-      lot >= tradingRules.minLot
-        ? lot
-        : minLotLoss <= maxLossUsd
-          ? tradingRules.minLot
-          : null;
-    const estimatedLoss =
-      suggestedLot === null
-        ? null
-        : Number(
-            (
-              suggestedLot *
-              distance *
-              tradingRules.xauUsdOuncesPerLot
-            ).toFixed(2),
-          );
-
-    recommendation.position_sizing.suggested_lot = suggestedLot;
-    recommendation.position_sizing.estimated_loss_if_sl_hit = estimatedLoss;
+    recommendation.position_sizing.suggested_lot = null;
+    recommendation.position_sizing.estimated_loss_if_sl_hit = null;
     recommendation.position_sizing.position_sizing_explanation =
-      suggestedLot !== null && suggestedLot > 0
-        ? `Lot gợi ý: ${suggestedLot.toFixed(2)} lot. Công thức XAUUSD: lot * khoảng cách Entry-SL (${distance.toFixed(2)} USD) * 100 oz = khoảng $${estimatedLoss} nếu chạm SL. Giới hạn lỗ hiện tại là ${payload.maxLossPercentPerTrade}% vốn ($${maxLossUsd}).`
-        : `Không gợi ý lot vì với khoảng cách Entry-SL ${distance.toFixed(2)} USD, lot tối thiểu ${tradingRules.minLot.toFixed(2)} có thể không phù hợp với giới hạn lỗ hoặc setup chưa đủ điều kiện.`;
+      "Khong tinh lot trong che do nay. Tap trung vao chat luong tin hieu, entry, SL, TP, risk_reward va xac suat win; nguoi dung tu quan tri khoi luong thu cong.";
   }
-
   private normalizeNoTrade(
     recommendation: AiTradeRecommendation,
     payload?: AnalysisPayload,
   ): AiTradeRecommendation {
     if (payload) {
       recommendation.current_price =
-        payload.symbols.find((item) => item.market.symbol === "XAUUSD")?.market
+        payload.symbols.find((item) => item.market.symbol === selectedSymbolCode(payload, recommendation))?.market
           .price ?? recommendation.current_price;
     }
     return {
@@ -166,11 +117,12 @@ export class TradeValidationService {
     const reasons: string[] = [];
     const entry = this.averageEntry(recommendation);
     const riskReward = parseRiskReward(recommendation.risk_reward ?? "");
+    const expectedSymbol = selectedSymbolCode(payload, recommendation);
     const selectedSymbol = payload?.symbols.find(
-      (item) => item.market.symbol === "XAUUSD",
+      (item) => item.market.symbol === expectedSymbol,
     );
-    if (recommendation.symbol !== "XAUUSD") {
-      reasons.push("AI trả symbol khác XAUUSD");
+    if (recommendation.symbol !== expectedSymbol) {
+      reasons.push(`AI trả symbol khác ${expectedSymbol}`);
     }
 
     if (riskReward < tradingRules.minRiskReward) {
@@ -179,16 +131,39 @@ export class TradeValidationService {
       );
     }
 
+    if (recommendation.confidence < tradingRules.minConfidence) {
+      reasons.push(
+        `confidence ${recommendation.confidence}% thấp hơn ngưỡng ${tradingRules.minConfidence}%`,
+      );
+    }
+
     if (payload?.dataQuality === "LOW") {
       reasons.push("data_quality tổng thể là LOW");
     }
 
     if (payload && !selectedSymbol) {
-      reasons.push("không có dữ liệu realtime hợp lệ cho XAUUSD");
+      reasons.push(`không có dữ liệu realtime hợp lệ cho ${expectedSymbol}`);
     }
 
     if (selectedSymbol?.market.data_quality === "LOW") {
-      reasons.push("XAUUSD có data_quality LOW");
+      reasons.push(`${expectedSymbol} có data_quality LOW`);
+    }
+
+    if (selectedSymbol) {
+      if (!selectedSymbol.market.quoteTimestampReliable) {
+        reasons.push(`timestamp quote ${expectedSymbol} không đáng tin cậy`);
+      }
+      if (
+        selectedSymbol.market.quoteAgeSeconds === null ||
+        selectedSymbol.market.quoteAgeSeconds > tradingRules.maxQuoteAgeSeconds
+      ) {
+        reasons.push(
+          `quote ${expectedSymbol} quá cũ hoặc không xác định tuổi quote (${selectedSymbol.market.quoteAgeSeconds ?? "unknown"}s)`,
+        );
+      }
+      if (selectedSymbol.market.bidAskStatus !== "AVAILABLE") {
+        reasons.push(`${expectedSymbol} thiếu bid/ask/spread thật để kiểm tra điều kiện khớp lệnh`);
+      }
     }
 
     if (selectedSymbol && selectedSymbol.market.spread !== null) {
@@ -198,13 +173,13 @@ export class TradeValidationService {
         100;
       if (spreadPercent > tradingRules.maxSpreadPercent) {
         reasons.push(
-          `XAUUSD có spread ${spreadPercent.toFixed(4)}% cao hơn ngưỡng ${tradingRules.maxSpreadPercent}%`,
+          `${expectedSymbol} có spread ${spreadPercent.toFixed(4)}% cao hơn ngưỡng ${tradingRules.maxSpreadPercent}%`,
         );
       }
     }
 
     if (selectedSymbol && selectedSymbol.market.price <= 0) {
-      reasons.push("XAUUSD không có giá realtime hợp lệ");
+      reasons.push(`${expectedSymbol} không có giá realtime hợp lệ`);
     }
 
     if (
@@ -325,7 +300,10 @@ export class TradeValidationService {
     }
 
     // Dung sai nhỏ để entry sát giá hiện tại không bị bắt lỗi nhầm vị trí.
-    const tolerance = Math.max(currentPrice * 0.0002, 0.05);
+    const tolerance = Math.max(
+      currentPrice * 0.0002,
+      selectedSymbol?.market.symbol === "EURUSD" ? 0.00005 : 0.05,
+    );
 
     if (orderType === "BUY_LIMIT" && entry > currentPrice + tolerance) {
       reasons.push("BUY_LIMIT nhưng entry_zone nằm trên giá hiện tại");
@@ -358,7 +336,7 @@ export class TradeValidationService {
     payload?: AnalysisPayload,
   ): void {
     const selectedSymbol = payload?.symbols.find(
-      (item) => item.market.symbol === "XAUUSD",
+      (item) => item.market.symbol === selectedSymbolCode(payload, recommendation),
     );
     if (
       !selectedSymbol ||
@@ -468,6 +446,13 @@ function isFinitePositive(value: number | null | undefined): value is number {
 
 type PayloadSymbol = AnalysisPayload["symbols"][number];
 
+function selectedSymbolCode(
+  payload: AnalysisPayload | undefined,
+  recommendation: AiTradeRecommendation,
+): SymbolCode {
+  return payload?.symbols[0]?.market.symbol ?? recommendation.symbol;
+}
+
 function canAnalyzeWithoutBidAsk(symbol: PayloadSymbol): boolean {
   if (symbol.market.bidAskStatus === "AVAILABLE") return false;
   if (symbol.market.data_quality === "LOW") return false;
@@ -508,9 +493,43 @@ function buildRiskyTradeFromRejectedRecommendation(
     ).toFixed(6),
   );
   const currentPrice =
-    payload?.symbols.find((item) => item.market.symbol === "XAUUSD")?.market
+    payload?.symbols.find((item) => item.market.symbol === selectedSymbolCode(payload, recommendation))?.market
       .price ?? recommendation.current_price;
   const distance = Math.abs(entry - recommendation.stop_loss);
+  if (recommendation.symbol !== "XAUUSD") {
+    return {
+      enabled: true,
+      title: "Trade mạo hiểm",
+      direction: recommendation.direction,
+      order_type: inferOrderType(recommendation.direction, entry, currentPrice),
+      estimated_win_probability: Math.max(
+        0,
+        Math.min(100, recommendation.confidence),
+      ),
+      entry_zone: recommendation.entry_zone,
+      stop_loss: recommendation.stop_loss,
+      take_profit: recommendation.take_profit,
+      risk_reward: recommendation.risk_reward ?? "Không rõ",
+      suggested_lot: null,
+      estimated_loss_if_sl_hit: null,
+      reason:
+        "Setup này bị validation chính ép NO_TRADE, nhưng vẫn được giữ lại như kịch bản mạo hiểm có điều kiện để người dùng tự cân nhắc thủ công.",
+      entry_conditions: recommendation.pre_entry_checklist.length
+        ? recommendation.pre_entry_checklist
+        : [
+            "Chỉ cân nhắc khi giá chạm vùng entry và có nến xác nhận trên M5/M15.",
+            "Kiểm tra spread thực tế trên sàn trước khi đặt lệnh.",
+          ],
+      cancel_conditions: recommendation.invalid_conditions.length
+        ? recommendation.invalid_conditions
+        : [
+            "Hủy kèo nếu giá phá vùng vô hiệu trước khi khớp entry.",
+            "Hủy kèo nếu H1/H4 đổi cấu trúc ngược lại setup.",
+          ],
+      warning:
+        "Đây là trade mạo hiểm do AI đánh giá lại từ setup bị validation từ chối, không phải khuyến nghị chính.",
+    };
+  }
   const minLotLoss = Number(
     (
       tradingRules.minLot *
@@ -597,3 +616,4 @@ function sanitizeAiValidationFailures(failures: string[]): string[] {
     ),
   );
 }
+

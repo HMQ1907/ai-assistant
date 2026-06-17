@@ -28,17 +28,18 @@ const riskRewardSchema = z.preprocess(
 
 const recommendationSchema = z.object({
   decision: z.enum(["TRADE", "NO_TRADE"]),
-  symbol: z.literal("XAUUSD"),
+  symbol: z.enum(["XAUUSD", "EURUSD"]),
   direction: z.enum(["BUY", "SELL", "NONE"]),
   order_type: z
     .enum(["MARKET", "BUY_LIMIT", "SELL_LIMIT", "BUY_STOP", "SELL_STOP"])
     .default("MARKET"),
   confidence: z.number().min(0).max(100),
+  estimated_win_probability: z.number().min(0).max(100).optional(),
   entry_zone: entryZoneSchema,
   stop_loss: z.number().nullable(),
-  stop_loss_reason: z.string(),
+  stop_loss_reason: z.preprocess(normalizeNullableString, z.string()),
   take_profit: z.number().nullable(),
-  take_profit_reason: z.string(),
+  take_profit_reason: z.preprocess(normalizeNullableString, z.string()),
   risk_reward: riskRewardSchema,
   expected_holding_time: z.string().nullable(),
   position_sizing: z.object({
@@ -102,7 +103,7 @@ const recommendationSchema = z.object({
 });
 
 const orderReviewSchema = z.object({
-  symbol: z.literal("XAUUSD"),
+  symbol: z.enum(["XAUUSD", "EURUSD"]),
   reviewed_history_id: z.string(),
   current_price: z.number(),
   order_status_assessment: z.enum([
@@ -159,6 +160,10 @@ function normalizeEntryZone(value: unknown): unknown {
 function normalizeRiskReward(value: unknown): unknown {
   if (typeof value !== "number" || !Number.isFinite(value)) return value;
   return `1:${value}`;
+}
+
+function normalizeNullableString(value: unknown): unknown {
+  return value === null ? "" : value;
 }
 
 export class AiAnalysisService {
@@ -255,7 +260,7 @@ export class AiAnalysisService {
             {
               role: "system",
               content:
-                "Return strict JSON only. You analyze XAUUSD only. All user-facing content must be written in Vietnamese. Only enum values and symbols may remain in English.",
+                "Return strict JSON only. Analyze only the requested symbol in the payload. All user-facing content must be written in Vietnamese. Only enum values and symbols may remain in English.",
             },
             { role: "user", content: prompt },
           ],
@@ -298,7 +303,12 @@ export class AiAnalysisService {
   ): AiTradeRecommendation {
     try {
       const extracted = extractJsonObject(raw);
-      return recommendationSchema.parse(extracted);
+      const parsed = recommendationSchema.parse(extracted);
+      return {
+        ...parsed,
+        estimated_win_probability:
+          parsed.estimated_win_probability ?? parsed.confidence,
+      };
     } catch (error) {
       const reason =
         error instanceof Error
@@ -356,8 +366,9 @@ function buildFallbackActiveOrderReview(
   payload: AnalysisPayload,
   reason: string,
 ): AiOrderReview {
+  const symbol = payload.symbols[0]?.market.symbol ?? "XAUUSD";
   return {
-    symbol: "XAUUSD",
+    symbol,
     reviewed_history_id: String(order.ticket),
     current_price: payload.symbols[0]?.market.price ?? 0,
     order_status_assessment:
@@ -394,8 +405,9 @@ function buildFallbackOrderReview(
   payload: AnalysisPayload,
   reason: string,
 ): AiOrderReview {
+  const symbol = payload.symbols[0]?.market.symbol ?? history.symbol;
   return {
-    symbol: "XAUUSD",
+    symbol: symbol === "EURUSD" ? "EURUSD" : "XAUUSD",
     reviewed_history_id: history.id,
     current_price: payload.symbols[0]?.market.price ?? 0,
     order_status_assessment: "UNCLEAR",
@@ -437,12 +449,14 @@ function buildNoTradeRecommendation(
   payload: AnalysisPayload,
   reason: string,
 ): AiTradeRecommendation {
+  const symbol = payload.symbols[0]?.market.symbol ?? "XAUUSD";
   return {
     decision: "NO_TRADE",
-    symbol: "XAUUSD",
+    symbol,
     direction: "NONE",
     order_type: "MARKET",
     confidence: 0,
+    estimated_win_probability: 0,
     entry_zone: null,
     stop_loss: null,
     stop_loss_reason: "Không có stop loss vì phản hồi AI không hợp lệ.",

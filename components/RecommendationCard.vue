@@ -5,7 +5,7 @@
         <span :class="['badge', result.decision === 'TRADE' ? 'trade' : 'no-trade']">
           {{ decisionLabel(result.decision) }}
         </span>
-        <strong>XAUUSD / {{ directionLabel(result.direction) }}</strong>
+        <strong>{{ result.symbol }} / {{ directionLabel(result.direction) }}</strong>
       </div>
 
       <div class="price-strip">
@@ -28,13 +28,13 @@
           <strong>{{ formatNumber(currentMarket?.spread) }}</strong>
         </div>
         <div>
-          <span>Độ tin cậy</span>
-          <strong>{{ result.confidence }}%</strong>
+          <span>% win keo</span>
+          <strong>{{ winProbability }}%</strong>
         </div>
       </div>
 
       <p>{{ result.summary }}</p>
-      <ConfidenceBar :value="result.confidence" />
+      <ConfidenceBar :value="winProbability" />
       <p class="muted">{{ result.disclaimer }}</p>
     </div>
 
@@ -272,11 +272,16 @@ const props = defineProps<{
 
 const currentSymbol = computed(() =>
   props.history?.request_payload.symbols.find(
-    (item) => item.market.symbol === "XAUUSD",
+    (item) => item.market.symbol === props.result.symbol,
   ),
 );
 const currentMarket = computed(() => currentSymbol.value?.market);
 const currentIndicators = computed(() => currentSymbol.value?.indicators);
+const winProbability = computed(() =>
+  Number.isFinite(props.result.estimated_win_probability)
+    ? (props.result.estimated_win_probability ?? props.result.confidence)
+    : props.result.confidence,
+);
 const bidAskStatusLabel = computed(() => {
   const status = currentMarket.value?.bidAskStatus;
   if (status === "AVAILABLE") return "Có bid/ask thật";
@@ -518,3 +523,5 @@ function formatUsd(value: number | null | undefined): string {
   }
 }
 </style>
+
+

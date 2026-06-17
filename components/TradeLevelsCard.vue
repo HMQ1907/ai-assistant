@@ -1,55 +1,42 @@
 <template>
   <section class="card">
-    <h3>Kế hoạch Entry / SL / TP</h3>
+    <h3>Entry / SL / TP</h3>
     <p class="muted">{{ result.entry_plan }}</p>
     <div class="kv">
       <div v-if="result.decision === 'TRADE'" class="kv-row">
-        <span>Loại lệnh</span>
+        <span>Loai lenh</span>
         <strong>{{ orderTypeLabel(result.order_type, result.direction) }}</strong>
       </div>
       <div class="kv-row">
-        <span>Vùng entry đề xuất</span>
+        <span>% win keo</span>
+        <strong>{{ winProbability }}%</strong>
+      </div>
+      <div class="kv-row">
+        <span>Vung entry de xuat</span>
         <strong>{{ formatEntryZone }}</strong>
       </div>
       <div class="kv-row">
-        <span>Stop loss</span><strong>{{ formatLevel(result.stop_loss) }}</strong>
+        <span>Stop loss</span>
+        <strong>{{ formatLevel(result.stop_loss) }}</strong>
       </div>
       <p class="muted">
-        {{ result.stop_loss_reason || "Không có SL vì chưa có setup giao dịch hợp lệ." }}
+        {{ result.stop_loss_reason || "Khong co SL vi chua co setup giao dich hop le." }}
       </p>
       <div class="kv-row">
-        <span>Take profit</span><strong>{{ formatLevel(result.take_profit) }}</strong>
+        <span>Take profit</span>
+        <strong>{{ formatLevel(result.take_profit) }}</strong>
       </div>
       <p class="muted">
-        {{ result.take_profit_reason || "Không có TP vì chưa có setup giao dịch hợp lệ." }}
+        {{ result.take_profit_reason || "Khong co TP vi chua co setup giao dich hop le." }}
       </p>
       <div class="kv-row">
-        <span>Risk reward</span><strong>{{ result.risk_reward ?? "Không áp dụng" }}</strong>
+        <span>Risk reward</span>
+        <strong>{{ result.risk_reward ?? "Khong ap dung" }}</strong>
       </div>
       <div class="kv-row">
-        <span>Lot gợi ý</span>
-        <strong>{{ formatLot(result.position_sizing.suggested_lot) }}</strong>
+        <span>Thoi gian giu du kien</span>
+        <strong>{{ result.expected_holding_time ?? "Khong ap dung" }}</strong>
       </div>
-      <div class="kv-row">
-        <span>Thời gian giữ dự kiến</span>
-        <strong>{{ result.expected_holding_time ?? "Không áp dụng" }}</strong>
-      </div>
-      <div class="kv-row">
-        <span>Vốn hiện tại</span>
-        <strong>${{ result.position_sizing.account_size_usd }}</strong>
-      </div>
-      <div class="kv-row">
-        <span>Giới hạn lỗ tối đa</span>
-        <strong>
-          ${{ result.position_sizing.max_loss_usd }}
-          ({{ result.position_sizing.max_loss_percent }}%)
-        </strong>
-      </div>
-      <div class="kv-row">
-        <span>Lỗ ước tính nếu chạm SL</span>
-        <strong>{{ formatUsd(result.position_sizing.estimated_loss_if_sl_hit) }}</strong>
-      </div>
-      <p class="muted">{{ result.position_sizing.position_sizing_explanation }}</p>
     </div>
   </section>
 </template>
@@ -60,20 +47,26 @@ import type { TradeDirection } from "~/types/trading";
 
 const props = defineProps<{ result: AiTradeRecommendation }>();
 
+const winProbability = computed(() =>
+  Number.isFinite(props.result.estimated_win_probability)
+    ? props.result.estimated_win_probability
+    : props.result.confidence,
+);
+
 function orderTypeLabel(
   orderType: OrderType,
   direction: TradeDirection,
 ): string {
   if (orderType === "MARKET") {
-    if (direction === "BUY") return "BUY (vào ngay tại giá thị trường)";
-    if (direction === "SELL") return "SELL (vào ngay tại giá thị trường)";
-    return "Vào ngay tại giá thị trường";
+    if (direction === "BUY") return "BUY market";
+    if (direction === "SELL") return "SELL market";
+    return "Market";
   }
   const labels: Record<Exclude<OrderType, "MARKET">, string> = {
-    BUY_LIMIT: "BUY LIMIT (đặt chờ mua dưới giá)",
-    SELL_LIMIT: "SELL LIMIT (đặt chờ bán trên giá)",
-    BUY_STOP: "BUY STOP (đặt chờ mua trên giá)",
-    SELL_STOP: "SELL STOP (đặt chờ bán dưới giá)",
+    BUY_LIMIT: "BUY LIMIT",
+    SELL_LIMIT: "SELL LIMIT",
+    BUY_STOP: "BUY STOP",
+    SELL_STOP: "SELL STOP",
   };
   return labels[orderType];
 }
@@ -81,24 +74,12 @@ function orderTypeLabel(
 const formatEntryZone = computed(() =>
   props.result.entry_zone
     ? `${formatLevel(props.result.entry_zone.from)} - ${formatLevel(props.result.entry_zone.to)}`
-    : "Không áp dụng",
+    : "Khong ap dung",
 );
 
 function formatLevel(value: number | null): string {
   return value !== null && Number.isFinite(value) && value > 0
-    ? value.toFixed(2)
-    : "Không áp dụng";
-}
-
-function formatLot(value: number | null): string {
-  return value !== null && Number.isFinite(value) && value > 0
-    ? `${value.toFixed(2)} lot`
-    : "Không vào lệnh";
-}
-
-function formatUsd(value: number | null): string {
-  return value !== null && Number.isFinite(value)
-    ? `$${value.toFixed(2)}`
-    : "Không áp dụng";
+    ? value.toFixed(props.result.symbol === "EURUSD" ? 5 : 2)
+    : "Khong ap dung";
 }
 </script>

@@ -42,6 +42,7 @@ const timeframeDurationMs: Record<Timeframe, number> = {
 
 const twelveDataSymbols: Record<SymbolCode, string> = {
   XAUUSD: "XAU/USD",
+  EURUSD: "EUR/USD",
 };
 
 interface TimeSeriesResult {
@@ -407,7 +408,7 @@ function removeIncompleteCandles(
 
 function combineCollectionQuality(snapshots: MarketSnapshot[]): DataQuality {
   if (snapshots.some((snapshot) => snapshot.data_quality === "LOW")) {
-    return "MEDIUM";
+    return "LOW";
   }
   if (snapshots.some((snapshot) => snapshot.data_quality === "MEDIUM")) {
     return "MEDIUM";
@@ -507,15 +508,15 @@ function aggregateMarketQuality(input: {
 }): DataQuality {
   if (
     input.criticalErrors.length > 0 ||
+    !input.quoteTimestampReliable ||
+    input.quoteAgeSeconds === null ||
+    input.quoteAgeSeconds > input.maxQuoteAgeSeconds ||
     Object.values(input.timeframeQuality).some((item) => item.quality === "LOW")
   ) {
     return "LOW";
   }
   if (
     input.bidAskStatus !== "AVAILABLE" ||
-    !input.quoteTimestampReliable ||
-    (input.quoteAgeSeconds !== null &&
-      input.quoteAgeSeconds > input.maxQuoteAgeSeconds) ||
     Object.values(input.timeframeQuality).some(
       (item) => item.quality === "MEDIUM",
     )

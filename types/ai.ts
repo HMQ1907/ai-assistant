@@ -1,4 +1,4 @@
-import type { TradeDecision, TradeDirection } from "./trading";
+import type { SymbolCode, TradeDecision, TradeDirection } from "./trading";
 
 export type OrderType =
   | "MARKET"
@@ -9,10 +9,11 @@ export type OrderType =
 
 export interface AiTradeRecommendation {
   decision: TradeDecision;
-  symbol: "XAUUSD";
+  symbol: SymbolCode;
   direction: TradeDirection;
   order_type: OrderType;
   confidence: number;
+  estimated_win_probability?: number;
   entry_zone: {
     from: number;
     to: number;
@@ -86,7 +87,7 @@ export type OrderReviewStatus =
   | "UNCLEAR";
 
 export interface AiOrderReview {
-  symbol: "XAUUSD";
+  symbol: SymbolCode;
   reviewed_history_id: string;
   current_price: number;
   order_status_assessment: OrderReviewStatus;

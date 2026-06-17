@@ -10,6 +10,7 @@ import { OpportunityPayloadBuilder } from "../services/OpportunityPayloadBuilder
 import { SupabaseService } from "../services/SupabaseService";
 
 const analyzeRequestSchema = z.object({
+  symbol: z.enum(["XAUUSD", "EURUSD"]).default("XAUUSD"),
   accountSizeUsd: z
     .number()
     .positive()
@@ -22,12 +23,14 @@ export default defineEventHandler(async (event) => {
     const body = await readBody<unknown>(event);
     const input = analyzeRequestSchema.parse(body ?? {});
     const config = useRuntimeConfig();
+    const mt5Symbol =
+      input.symbol === "EURUSD" ? config.mt5EurUsdSymbol : config.mt5Symbol;
     const marketService = new MarketDataService({
       providerName: config.marketDataProvider,
       apiKey: config.marketDataApiKey,
       baseUrl: config.marketDataBaseUrl,
       mt5BridgeUrl: config.mt5BridgeUrl,
-      mt5Symbol: config.mt5Symbol,
+      mt5Symbol,
       maxQuoteAgeSeconds: config.maxQuoteAgeSeconds,
       debug: config.marketDataDebug,
     });
@@ -52,7 +55,7 @@ export default defineEventHandler(async (event) => {
       }).getClient(),
     );
 
-    const market = await marketService.collectAll();
+    const market = await marketService.collectAll([input.symbol]);
     const indicators = indicatorService.calculateMany(market.snapshots);
     const news = await newsService.collect();
     const payload = payloadBuilder.build(

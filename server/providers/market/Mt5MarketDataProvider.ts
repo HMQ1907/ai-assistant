@@ -84,7 +84,7 @@ export class Mt5MarketDataProvider implements MarketDataProvider {
     const response = await this.fetchSnapshot();
     this.assertSymbol(symbol, response.symbol);
     if (!isFinitePositive(response.price)) {
-      throw new Error("MT5 bridge khong tra gia XAUUSD hop le.");
+      throw new Error(`MT5 bridge khong tra gia ${symbol} hop le.`);
     }
     return {
       symbol,
@@ -243,7 +243,7 @@ export class Mt5MarketDataProvider implements MarketDataProvider {
   }
 
   private assertSymbol(symbol: SymbolCode, providerSymbol: string): void {
-    if (symbol !== "XAUUSD" || providerSymbol !== this.options.symbol) {
+    if (providerSymbol !== this.options.symbol) {
       throw new Error(
         `MT5 bridge tra symbol ${providerSymbol}, mong doi ${this.options.symbol} cho ${symbol}.`,
       );
@@ -283,13 +283,13 @@ function aggregateMarketQuality(input: {
 }): DataQuality {
   if (
     input.criticalErrors.length > 0 ||
+    input.quoteAgeSeconds === null ||
+    input.quoteAgeSeconds > input.maxQuoteAgeSeconds ||
     Object.values(input.timeframeQuality).some((item) => item.quality === "LOW")
   ) {
     return "LOW";
   }
   if (
-    input.quoteAgeSeconds === null ||
-    input.quoteAgeSeconds > input.maxQuoteAgeSeconds ||
     Object.values(input.timeframeQuality).some(
       (item) => item.quality === "MEDIUM",
     )

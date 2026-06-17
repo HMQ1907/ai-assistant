@@ -1,4 +1,4 @@
-export const SYMBOLS = ["XAUUSD"] as const;
+export const SYMBOLS = ["XAUUSD", "EURUSD"] as const;
 
 export const TIMEFRAMES = ["M5", "M15", "H1", "H4"] as const;
 

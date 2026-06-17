@@ -6,6 +6,7 @@ import type {
   MarketPayloadSnapshot,
   MarketSnapshot,
   NewsSnapshot,
+  SymbolCode,
   Timeframe,
   TimeframeCandleSummary,
 } from "../../types/trading";
@@ -21,12 +22,15 @@ export class OpportunityPayloadBuilder {
     news: NewsSnapshot,
     accountSizeUsd: number,
   ): AnalysisPayload {
-    const dataWarnings = [...market.warnings, ...news.warnings];
+    const selectedSymbols = market.snapshots.map((snapshot) => snapshot.symbol);
+    const filteredNews = filterNewsForSymbols(news, selectedSymbols);
+    const dataWarnings = [...market.warnings, ...filteredNews.warnings];
     const dataQuality = combineQuality(
       market.dataQuality,
-      news.status === "AVAILABLE" ? "HIGH" : "MEDIUM",
+      filteredNews.status === "AVAILABLE" ? "HIGH" : "MEDIUM",
     );
     const maxLossUsdPerTrade = calculateMaxLossUsd(accountSizeUsd);
+    const symbolList = selectedSymbols.join(", ");
 
     return {
       generatedAt: new Date().toISOString(),
@@ -34,12 +38,12 @@ export class OpportunityPayloadBuilder {
       maxLossUsdPerTrade,
       maxLossPercentPerTrade: tradingRules.maxLossPercentPerTrade,
       marketDataProvider: market.provider,
-      newsProvider: news.provider,
+      newsProvider: filteredNews.provider,
       dataQuality,
       dataWarnings,
       marketDataTimestamp: market.timestamp,
-      newsDataTimestamp: news.updatedAt,
-      newsDataStatus: news.status,
+      newsDataTimestamp: filteredNews.updatedAt,
+      newsDataStatus: filteredNews.status,
       symbols: market.snapshots.map((snapshot) => {
         const indicator = indicators.find(
           (item) => item.symbol === snapshot.symbol,
@@ -52,28 +56,57 @@ export class OpportunityPayloadBuilder {
           indicators: indicator,
         };
       }),
-      news,
+      news: filteredNews,
       rules: [
+        `Requested analysis symbol(s): ${symbolList}. Analyze only these symbol(s).`,
         "Hệ thống chỉ là AI Trading Assistant cho giao dịch thủ công XAUUSD. Không đặt lệnh.",
         "Chỉ phân tích XAUUSD. Không quét hoặc chọn symbol khác.",
-        "Phong cách giao dịch có thể mạo hiểm hơn nhưng vẫn phải có setup rõ ràng và quản trị rủi ro.",
+        "Phong cách giao dịch phải thận trọng. Chỉ TRADE khi setup rõ, dữ liệu mới và điều kiện khớp lệnh đáng tin cậy.",
         `Vốn hiện tại là ${accountSizeUsd} USD.`,
         `Mức lỗ tham khảo mỗi giao dịch là ${tradingRules.maxLossPercentPerTrade}% vốn, tương đương ${maxLossUsdPerTrade} USD; đây không phải điều kiện để quyết định TRADE hay NO_TRADE.`,
-        "Confidence chỉ là thông tin tham khảo, không phải điều kiện cứng để ép NO_TRADE.",
+        `Nếu confidence < ${tradingRules.minConfidence}%, trả NO_TRADE.`,
         `Nếu risk_reward < 1:${tradingRules.minRiskReward}, trả NO_TRADE.`,
         "Vốn, lot và estimated_loss_if_sl_hit chỉ mang tính tham khảo; không được dùng để phủ quyết một setup kỹ thuật hợp lệ. Người dùng tự quản trị vốn và khối lượng.",
         "Không giao dịch khi data_quality LOW, thiếu giá realtime, thiếu candle, hoặc spread quá cao.",
-        "Thiếu bid/ask/spread không phải lý do NO_TRADE khi data_quality từ MEDIUM trở lên và candle/indicator đủ điều kiện. Chỉ xem đây là yếu tố rủi ro và nhắc người dùng tự kiểm tra spread trên sàn trước khi vào lệnh.",
+        "Thiếu bid/ask/spread thật là lý do NO_TRADE vì không đủ điều kiện kiểm tra khớp lệnh tiền thật.",
+        `Nếu quoteAgeSeconds null hoặc vượt ${tradingRules.maxQuoteAgeSeconds}s, trả NO_TRADE.`,
         "Nếu news_data_status là UNAVAILABLE, phải giảm độ tin cậy và chỉ TRADE khi setup kỹ thuật rất rõ.",
         "EMA H1/H4 là chỉ báo trễ, không được dùng làm lý do bắt buộc BUY/SELL khi nến H1/M15 đã đóng và phá cấu trúc theo hướng ngược lại.",
         "Không SELL vào động lượng tăng đang mở rộng và không BUY vào động lượng giảm đang mở rộng. Khi có dấu hiệu chuyển pha mạnh, phải chờ pullback/retest hoặc trả NO_TRADE.",
-        "Một setup pullback/retest rõ ràng được phép trả TRADE với vùng entry chờ, điều kiện xác nhận và điều kiện hủy kèo; không bắt buộc giá phải đang nằm trong vùng entry.",
+        "Setup pullback/retest chỉ được trả TRADE khi bối cảnh đa khung rõ ràng, quote mới, bid/ask/spread thật có sẵn, và điều kiện hủy kèo cụ thể.",
         "All user-facing content MUST be written in Vietnamese. Only enum values may remain in English.",
         "Không khuyến nghị martingale, DCA lỗ, all-in, tăng khối lượng sau khi thua, copy trade hoặc auto trade.",
         `Thời gian giữ lệnh dự kiến không vượt quá ${tradingRules.maxHoldingMinutes} phút.`,
       ],
     };
   }
+}
+
+function filterNewsForSymbols(
+  news: NewsSnapshot,
+  symbols: SymbolCode[],
+): NewsSnapshot {
+  const symbolSet = new Set<SymbolCode>(symbols);
+  const items = news.items.filter((item) =>
+    item.symbols.some((symbol) => symbolSet.has(symbol)),
+  );
+  return {
+    ...news,
+    items,
+    status:
+      items.length > 0
+        ? "AVAILABLE"
+        : news.status === "UNAVAILABLE"
+          ? "UNAVAILABLE"
+          : "NO_RELEVANT_DATA",
+    warnings:
+      items.length > 0
+        ? news.warnings
+        : [
+            ...news.warnings,
+            `Khong co tin tuc moi duoc gan truc tiep cho ${symbols.join(", ")}.`,
+          ],
+  };
 }
 
 function toMarketPayloadSnapshot(

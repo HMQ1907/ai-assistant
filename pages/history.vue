@@ -63,7 +63,7 @@ function isAiTradeRecommendation(
   if (!value || typeof value !== "object") return false;
   const record = value as Partial<AiTradeRecommendation>;
   return (
-    record.symbol === "XAUUSD" &&
+    (record.symbol === "XAUUSD" || record.symbol === "EURUSD") &&
     (record.decision === "TRADE" || record.decision === "NO_TRADE") &&
     typeof record.summary === "string" &&
     typeof record.position_sizing === "object"

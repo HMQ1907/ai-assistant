@@ -96,7 +96,7 @@ describe("trade validation", () => {
     expect(result.invalid_conditions).toEqual([]);
   });
 
-  it("keeps a technically valid TRADE despite low confidence and account sizing", () => {
+  it("rejects a technically valid TRADE when confidence is too low", () => {
     const result = new TradeValidationService().validate(
       recommendation({
         decision: "TRADE",
@@ -117,8 +117,8 @@ describe("trade validation", () => {
       }),
     );
 
-    expect(result.decision).toBe("TRADE");
-    expect(result.confidence).toBe(55);
+    expect(result.decision).toBe("NO_TRADE");
+    expect(result.trade_validation_failures?.join(" ")).toContain("confidence");
   });
 
   it("still rejects a technically poor risk reward", () => {

@@ -2,15 +2,16 @@
   <main class="page">
     <div class="toolbar">
       <div class="heading">
-        <h1>AI XAUUSD Trading Assistant</h1>
+        <h1>AI EURUSD Trading Assistant</h1>
         <p>
-          Phân tích XAUUSD bằng dữ liệu thị trường thật và tin tức thật. Công cụ
-          chỉ đưa gợi ý giao dịch thủ công, không đặt lệnh.
+          Phan tich EURUSD bang du lieu thi truong that va tin tuc that. Man
+          hinh nay uu tien phan tich huong, entry, SL va TP; suggested lot duoc
+          khoa cho toi khi cau hinh pip value broker.
         </p>
       </div>
       <div class="action-panel">
         <label>
-          <span>Vốn hiện tại (USD)</span>
+          <span>Von hien tai (USD)</span>
           <input
             v-model.number="accountSizeUsd"
             class="input capital-input"
@@ -21,22 +22,20 @@
         </label>
         <AnalyzeButton
           :loading="loading"
-          label="Hien thi goi y XAUUSD"
+          label="Hien thi goi y EURUSD"
           @analyze="analyze"
         />
       </div>
     </div>
 
     <div v-if="error" class="card">
-      <strong>Phân tích thất bại</strong>
+      <strong>Phan tich that bai</strong>
       <p class="muted">{{ error }}</p>
     </div>
 
     <div v-if="loading" class="card">
-      <strong>
-        Đang lấy dữ liệu XAUUSD, tin tức và gửi AI phân tích...
-      </strong>
-      <p class="muted">Quá trình này có thể mất 60-120 giây.</p>
+      <strong>Dang lay du lieu EURUSD, tin tuc va gui AI phan tich...</strong>
+      <p class="muted">Qua trinh nay co the mat 60-120 giay.</p>
     </div>
 
     <RecommendationCard
@@ -60,6 +59,7 @@
 import type { AiTradeRecommendation } from "~/types/ai";
 import type { AnalysisHistoryRecord } from "~/types/trading";
 
+const symbol = "EURUSD";
 const loading = ref(false);
 const error = ref("");
 const result = ref<AiTradeRecommendation | null>(null);
@@ -85,18 +85,18 @@ async function analyze(): Promise<void> {
       method: "POST",
       body: {
         accountSizeUsd: normalizeAccountSize(accountSizeUsd.value),
-        symbol: "XAUUSD",
+        symbol,
       },
     });
     result.value = response.result;
     history.value = [
       response.history,
       ...history.value.filter((record) => record.id !== response.history.id),
-    ];
+    ].filter((record) => record.symbol === symbol);
     await refreshLatestPrice();
   } catch (caught) {
     error.value =
-      caught instanceof Error ? caught.message : "Lỗi không xác định";
+      caught instanceof Error ? caught.message : "Loi khong xac dinh";
   } finally {
     loading.value = false;
   }
@@ -106,7 +106,7 @@ async function refreshLatestPrice(): Promise<void> {
   latestPriceLoading.value = true;
   try {
     const response = await $fetch<{ price: number }>("/api/market/price", {
-      query: { symbol: "XAUUSD", timestamp: Date.now() },
+      query: { symbol, timestamp: Date.now() },
     });
     latestPrice.value = response.price;
   } catch {
@@ -133,6 +133,7 @@ function replaceHistoryRecord(record: AnalysisHistoryRecord): void {
 }
 
 .action-panel {
+  color: #9fb4cc;
   display: grid;
   gap: 10px;
   justify-items: end;
@@ -141,10 +142,9 @@ function replaceHistoryRecord(record: AnalysisHistoryRecord): void {
 
 .action-panel label {
   display: grid;
+  font-size: 13px;
   gap: 6px;
   width: 100%;
-  color: #9fb4cc;
-  font-size: 13px;
 }
 
 .capital-input {
@@ -152,7 +152,6 @@ function replaceHistoryRecord(record: AnalysisHistoryRecord): void {
 }
 
 @media (max-width: 760px) {
-  /* Ô vốn + nút phân tích nằm cùng hàng cho gọn, nút chiếm phần lớn để dễ bấm */
   .action-panel {
     align-items: end;
     grid-template-columns: minmax(110px, 0.8fr) 1.2fr;
