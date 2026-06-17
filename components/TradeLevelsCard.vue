@@ -44,6 +44,7 @@
 <script setup lang="ts">
 import type { AiTradeRecommendation, OrderType } from "~/types/ai";
 import type { TradeDirection } from "~/types/trading";
+import { priceDecimals } from "~/utils/display";
 
 const props = defineProps<{ result: AiTradeRecommendation }>();
 
@@ -79,7 +80,7 @@ const formatEntryZone = computed(() =>
 
 function formatLevel(value: number | null): string {
   return value !== null && Number.isFinite(value) && value > 0
-    ? value.toFixed(props.result.symbol === "EURUSD" ? 5 : 2)
+    ? value.toFixed(priceDecimals(props.result.symbol))
     : "Khong ap dung";
 }
 </script>

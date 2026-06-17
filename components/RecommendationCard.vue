@@ -261,6 +261,7 @@ import {
   dataQualityLabel,
   decisionLabel,
   directionLabel,
+  formatPrice as formatPriceForSymbol,
 } from "~/utils/display";
 
 const props = defineProps<{
@@ -356,10 +357,7 @@ function newsStatusLabel(value: string): string {
 }
 
 function formatPrice(value: number | null | undefined): string {
-  if (value === null || value === undefined || !Number.isFinite(value)) {
-    return "Không rõ";
-  }
-  return value.toFixed(2);
+  return formatPriceForSymbol(value, props.result.symbol);
 }
 
 function formatNumber(value: number | null | undefined): string {

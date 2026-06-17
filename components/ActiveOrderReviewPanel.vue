@@ -36,7 +36,7 @@
         <div class="order-grid">
           <div>
             <span>Entry</span>
-            <strong>{{ formatPrice(item.order.price_open) }}</strong>
+            <strong>{{ formatPrice(item.order.price_open, item.order.symbol) }}</strong>
           </div>
           <div>
             <span>Volume</span>
@@ -44,11 +44,11 @@
           </div>
           <div>
             <span>SL hiện tại</span>
-            <strong>{{ formatNullablePrice(item.order.stop_loss) }}</strong>
+            <strong>{{ formatNullablePrice(item.order.stop_loss, item.order.symbol) }}</strong>
           </div>
           <div>
             <span>TP hiện tại</span>
-            <strong>{{ formatNullablePrice(item.order.take_profit) }}</strong>
+            <strong>{{ formatNullablePrice(item.order.take_profit, item.order.symbol) }}</strong>
           </div>
           <div>
             <span>P/L</span>
@@ -73,7 +73,7 @@
               {{
                 item.review.stop_loss_plan.suggested_stop_loss === null
                   ? "Giữ nguyên"
-                  : `Đề xuất: ${formatPrice(item.review.stop_loss_plan.suggested_stop_loss)}`
+                  : `Đề xuất: ${formatPrice(item.review.stop_loss_plan.suggested_stop_loss, item.order.symbol)}`
               }}
             </strong>
           </section>
@@ -84,7 +84,7 @@
               {{
                 item.review.take_profit_plan.suggested_take_profit === null
                   ? "Giữ nguyên"
-                  : `Đề xuất: ${formatPrice(item.review.take_profit_plan.suggested_take_profit)}`
+                  : `Đề xuất: ${formatPrice(item.review.take_profit_plan.suggested_take_profit, item.order.symbol)}`
               }}
             </strong>
           </section>
@@ -121,6 +121,7 @@
 <script setup lang="ts">
 import type { AiOrderReview } from "~/types/ai";
 import type { ActiveMt5Order } from "~/types/trading";
+import { formatPrice as formatPriceForSymbol } from "~/utils/display";
 
 interface ActiveOrderReviewItem {
   order: ActiveMt5Order;
@@ -176,12 +177,14 @@ function actionClass(value: AiOrderReview["recommended_action"]): string {
   return "neutral";
 }
 
-function formatPrice(value: number): string {
-  return Number.isFinite(value) ? value.toFixed(2) : "Không rõ";
+function formatPrice(value: number, symbol?: string | null): string {
+  return formatPriceForSymbol(value, symbol);
 }
 
-function formatNullablePrice(value: number | null): string {
-  return value === null || !Number.isFinite(value) ? "Không có" : value.toFixed(2);
+function formatNullablePrice(value: number | null, symbol?: string | null): string {
+  return value === null || !Number.isFinite(value)
+    ? "Không có"
+    : formatPriceForSymbol(value, symbol);
 }
 
 function formatProfit(value: number | null): string {

@@ -255,7 +255,11 @@ import type {
   ResultStatus,
   TradeDirection,
 } from "~/types/trading";
-import { decisionLabel, statusLabel } from "~/utils/display";
+import {
+  decisionLabel,
+  formatPrice as formatPriceForSymbol,
+  statusLabel,
+} from "~/utils/display";
 
 const props = defineProps<{ records: AnalysisHistoryRecord[] }>();
 const emit = defineEmits<{
@@ -284,6 +288,7 @@ const copiedId = ref("");
 const checkingId = ref("");
 const orderBusyId = ref("");
 const reviewResult = ref<AiOrderReview | null>(null);
+const reviewSymbol = ref<string | null>(null);
 const reviewError = ref("");
 
 watch(
@@ -323,6 +328,7 @@ async function copyId(id: string): Promise<void> {
 async function reviewOrder(record: AnalysisHistoryRecord): Promise<void> {
   checkingId.value = record.id;
   reviewResult.value = null;
+  reviewSymbol.value = record.symbol;
   reviewError.value = "";
   try {
     const draft = drafts[record.id] ?? {
@@ -545,10 +551,7 @@ function reviewStatusLabel(
 }
 
 function formatPrice(value: number | null | undefined): string {
-  if (value === null || value === undefined || !Number.isFinite(value)) {
-    return "Không rõ";
-  }
-  return value.toFixed(2);
+  return formatPriceForSymbol(value, reviewSymbol.value);
 }
 
 const listOrDash = (items: string[]) => (items.length ? items : ["Không có."]);
