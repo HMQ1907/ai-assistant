@@ -6,8 +6,8 @@
         <nav class="nav">
           <NuxtLink to="/">XAUUSD</NuxtLink>
           <NuxtLink to="/eurusd">EURUSD</NuxtLink>
-          <NuxtLink to="/history">Lich su</NuxtLink>
-          <NuxtLink to="/stats">Thong ke</NuxtLink>
+          <NuxtLink to="/history">Lịch sử</NuxtLink>
+          <NuxtLink to="/stats">Thống kê</NuxtLink>
         </nav>
       </div>
     </header>

@@ -1,12 +1,12 @@
 <template>
   <button class="button" :disabled="loading" @click="$emit('analyze')">
-    {{ loading ? "Dang phan tich..." : label }}
+    {{ loading ? "Đang phân tích..." : label }}
   </button>
 </template>
 
 <script setup lang="ts">
 withDefaults(defineProps<{ loading: boolean; label?: string }>(), {
-  label: "Hien thi goi y XAUUSD",
+  label: "Hiển thị gợi ý XAUUSD",
 });
 defineEmits<{ analyze: [] }>();
 </script>

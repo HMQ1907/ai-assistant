@@ -21,7 +21,7 @@
         </label>
         <AnalyzeButton
           :loading="loading"
-          label="Hien thi goi y XAUUSD"
+          label="Hiển thị gợi ý XAUUSD"
           @analyze="analyze"
         />
       </div>

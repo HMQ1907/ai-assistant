@@ -4,54 +4,33 @@
       <div class="heading">
         <h1>AI EURUSD Trading Assistant</h1>
         <p>
-          Phan tich EURUSD bang du lieu thi truong that va tin tuc that. Man
-          hinh nay uu tien phan tich huong, entry, SL va TP; suggested lot duoc
-          khoa cho toi khi cau hinh pip value broker.
+          Phân tích EURUSD bằng dữ liệu thị trường thật và tin tức thật. Công cụ
+          chỉ đưa gợi ý giao dịch thủ công, không đặt lệnh.
         </p>
       </div>
       <div class="action-panel">
         <label>
-          <span>Von hien tai (USD)</span>
-          <input
-            v-model.number="accountSizeUsd"
-            class="input capital-input"
-            min="1"
-            step="1"
-            type="number"
-          />
+          <span>Vốn hiện tại (USD)</span>
+          <input v-model.number="accountSizeUsd" class="input capital-input" min="1" step="1" type="number" />
         </label>
-        <AnalyzeButton
-          :loading="loading"
-          label="Hien thi goi y EURUSD"
-          @analyze="analyze"
-        />
+        <AnalyzeButton :loading="loading" label="Hiển thị gợi ý EURUSD" @analyze="analyze" />
       </div>
     </div>
 
     <div v-if="error" class="card">
-      <strong>Phan tich that bai</strong>
+      <strong>Phân tích thất bại</strong>
       <p class="muted">{{ error }}</p>
     </div>
 
     <div v-if="loading" class="card">
-      <strong>Dang lay du lieu EURUSD, tin tuc va gui AI phan tich...</strong>
-      <p class="muted">Qua trinh nay co the mat 60-120 giay.</p>
+      <strong>Đang lấy dữ liệu EURUSD, tin tức và gửi AI phân tích...</strong>
+      <p class="muted">Quá trình này có thể mất 60-120 giây.</p>
     </div>
 
-    <RecommendationCard
-      v-if="result"
-      :history="latestHistory"
-      :latest-price="latestPrice"
-      :latest-price-loading="latestPriceLoading"
-      :result="result"
-    />
+    <RecommendationCard v-if="result" :history="latestHistory" :latest-price="latestPrice"
+      :latest-price-loading="latestPriceLoading" :result="result" />
 
-    <AnalysisHistoryTable
-      v-if="hasAnalyzed"
-      :records="history"
-      class="history-block"
-      @updated="replaceHistoryRecord"
-    />
+    <AnalysisHistoryTable v-if="hasAnalyzed" :records="history" class="history-block" @updated="replaceHistoryRecord" />
   </main>
 </template>
 
@@ -96,7 +75,7 @@ async function analyze(): Promise<void> {
     await refreshLatestPrice();
   } catch (caught) {
     error.value =
-      caught instanceof Error ? caught.message : "Loi khong xac dinh";
+      caught instanceof Error ? caught.message : "Lỗi không xác định";
   } finally {
     loading.value = false;
   }
