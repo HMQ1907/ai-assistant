@@ -217,7 +217,7 @@
             </div>
             <div>
               <span>Độ tin cậy</span>
-              <strong>{{ scenario.confidence }}%</strong>
+              <strong>{{ scenarioConfidenceLabel(scenario) }}</strong>
             </div>
             <div>
               <span>Entry</span>
@@ -642,6 +642,10 @@ function actionClass(value: AiOrderReview["recommended_action"]): string {
 
 function scenarioLabel(value: AiOrderScenarioReview["scenario"]): string {
   return value === "RISKY_TRADE" ? "Kịch bản phụ" : "Kịch bản chính";
+}
+
+function scenarioConfidenceLabel(scenario: AiOrderScenarioReview): string {
+  return scenario.available ? `${scenario.confidence}%` : "Không áp dụng";
 }
 
 function reviewStatusLabel(

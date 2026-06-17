@@ -26,6 +26,7 @@ export function buildOrderReviewPrompt(input: OrderReviewPromptInput): string {
         "Review BOTH scenarios when present: the main recommendation and ai_result.risky_trade. Do not ignore risky_trade.",
         "Return scenario_reviews with one item for MAIN_RECOMMENDATION and one item for RISKY_TRADE when risky_trade exists and enabled is true.",
         "If the main recommendation is NO_TRADE or has no valid entry/SL/TP, still include MAIN_RECOMMENDATION with available=false and explain that there is no executable main order to manage.",
+        "For any scenario with available=false, set confidence to 0 and use entry_zone=null, stop_loss=null, take_profit=null. Do not assign a high confidence to a scenario that has no executable order.",
         "For RISKY_TRADE, use ai_result.risky_trade.entry_zone, stop_loss, take_profit, order_type, entry_conditions and cancel_conditions as the exact scenario being checked.",
         "The top-level recommended_action should summarize the safest overall action across both scenarios; scenario_reviews must contain the separate action for each scenario.",
         "If actual_order_placed_at is supplied, use it as the real Exness order placement time. Compare latest candles after that timestamp to judge whether entry was touched, whether cancellation conditions happened before fill, and whether the setup is still valid.",
@@ -72,7 +73,8 @@ export function buildOrderReviewPrompt(input: OrderReviewPromptInput): string {
               "LIKELY_NOT_FILLED | LIKELY_FILLED | ALREADY_INVALIDATED | UNCLEAR",
             recommended_action:
               "KEEP_ORDER | CANCEL_ORDER | MOVE_SL | MOVE_TP | MOVE_SL_TP | WAIT | CLOSE_MANUALLY | TRADE_COMPLETED",
-            confidence: "number from 0 to 100",
+            confidence:
+              "number from 0 to 100; must be 0 when available is false",
             summary: "Vietnamese scenario-specific summary",
             fill_assessment: "Vietnamese scenario-specific fill assessment",
             action_reason: "Vietnamese scenario-specific action reason",

@@ -13,9 +13,18 @@ const bodySchema = z.object({
   actual_entry: z.number().nullable().optional(),
   actual_exit: z.number().nullable().optional(),
   actual_profit_loss: z.number().nullable().optional(),
-  actual_order_placed_at: z.string().datetime().nullable().optional(),
+  actual_order_placed_at: z
+    .preprocess(normalizeOptionalDateTime, z.string().nullable())
+    .optional(),
   user_note: z.string().max(2000).optional(),
 });
+
+function normalizeOptionalDateTime(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value !== "string") return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
 
 export default defineEventHandler(async (event) => {
   try {

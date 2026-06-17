@@ -13,9 +13,18 @@ const reviewRequestSchema = z.object({
   actual_entry: z.number().nullable().default(null),
   actual_exit: z.number().nullable().default(null),
   actual_profit_loss: z.number().nullable().default(null),
-  actual_order_placed_at: z.string().datetime().nullable().default(null),
+  actual_order_placed_at: z
+    .preprocess(normalizeOptionalDateTime, z.string().nullable())
+    .default(null),
   user_note: z.string().default(""),
 });
+
+function normalizeOptionalDateTime(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value !== "string") return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
 
 export default defineEventHandler(async (event) => {
   try {
