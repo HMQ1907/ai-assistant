@@ -15,7 +15,7 @@
           <th>Kết quả</th>
           <th>Entry thực tế</th>
           <th>Exit thực tế</th>
-          <th>P/L</th>
+          <th>Thời gian đặt lệnh</th>
           <th>Ghi chú</th>
           <th>Lệnh MT5</th>
           <th>Thao tác</th>
@@ -80,19 +80,12 @@
               @input="setNumber(record.id, 'actual_exit', $event)"
             >
           </td>
-          <td data-label="P/L">
+          <td data-label="Thời gian đặt lệnh">
             <input
-              :value="
-                numberDraft(
-                  record.id,
-                  'actual_profit_loss',
-                  record.actual_profit_loss,
-                )
-              "
-              class="input compact"
-              type="number"
-              step="0.01"
-              @input="setNumber(record.id, 'actual_profit_loss', $event)"
+              :value="dateTimeDraft(record.id, record.actual_order_placed_at)"
+              class="input datetime-input"
+              type="datetime-local"
+              @input="setDateTime(record.id, $event)"
             >
           </td>
           <td data-label="Ghi chú">
@@ -197,6 +190,78 @@
         <strong>Lý do hành động:</strong> {{ reviewResult.action_reason }}
       </p>
 
+      <div v-if="reviewResult.scenario_reviews?.length" class="scenario-review-list">
+        <article
+          v-for="scenario in reviewResult.scenario_reviews"
+          :key="scenario.scenario"
+          class="scenario-review-card"
+        >
+          <div class="scenario-review-head">
+            <div>
+              <p class="review-eyebrow">{{ scenarioLabel(scenario.scenario) }}</p>
+              <h4>{{ scenario.title }}</h4>
+            </div>
+            <strong :class="['action-pill', actionClass(scenario.recommended_action)]">
+              {{ actionLabel(scenario.recommended_action) }}
+            </strong>
+          </div>
+
+          <div class="review-grid compact-review-grid">
+            <div>
+              <span>Trạng thái</span>
+              <strong>{{ scenario.available ? "Có kịch bản" : "Không khả dụng" }}</strong>
+            </div>
+            <div>
+              <span>Khả năng khớp</span>
+              <strong>{{ reviewStatusLabel(scenario.order_status_assessment) }}</strong>
+            </div>
+            <div>
+              <span>Độ tin cậy</span>
+              <strong>{{ scenario.confidence }}%</strong>
+            </div>
+            <div>
+              <span>Entry</span>
+              <strong>{{ formatEntryZone(scenario.entry_zone) }}</strong>
+            </div>
+            <div>
+              <span>SL</span>
+              <strong>{{ formatPrice(scenario.stop_loss) }}</strong>
+            </div>
+            <div>
+              <span>TP</span>
+              <strong>{{ formatPrice(scenario.take_profit) }}</strong>
+            </div>
+          </div>
+
+          <p>{{ scenario.summary }}</p>
+          <p class="muted">
+            <strong>Khớp lệnh:</strong> {{ scenario.fill_assessment }}
+          </p>
+          <p class="muted">
+            <strong>Hành động:</strong> {{ scenario.action_reason }}
+          </p>
+
+          <div class="grid two">
+            <section>
+              <h5>Điều kiện hủy</h5>
+              <ul class="list">
+                <li v-for="item in listOrDash(scenario.cancellation_conditions)" :key="item">
+                  {{ item }}
+                </li>
+              </ul>
+            </section>
+            <section>
+              <h5>Checklist</h5>
+              <ul class="list">
+                <li v-for="item in listOrDash(scenario.checklist)" :key="item">
+                  {{ item }}
+                </li>
+              </ul>
+            </section>
+          </div>
+        </article>
+      </div>
+
       <div class="grid two">
         <section>
           <h4>Stop loss</h4>
@@ -248,7 +313,7 @@
 </template>
 
 <script setup lang="ts">
-import type { AiOrderReview } from "~/types/ai";
+import type { AiOrderReview, AiOrderScenarioReview } from "~/types/ai";
 import type {
   AnalysisHistoryRecord,
   OrderState,
@@ -280,6 +345,7 @@ type Draft = {
   actual_entry: number | null;
   actual_exit: number | null;
   actual_profit_loss: number | null;
+  actual_order_placed_at: string | null;
   user_note: string;
 };
 
@@ -300,6 +366,7 @@ watch(
         actual_entry: record.actual_entry,
         actual_exit: record.actual_exit,
         actual_profit_loss: record.actual_profit_loss,
+        actual_order_placed_at: record.actual_order_placed_at,
         user_note: record.user_note,
       };
     }
@@ -336,6 +403,7 @@ async function reviewOrder(record: AnalysisHistoryRecord): Promise<void> {
       actual_entry: record.actual_entry,
       actual_exit: record.actual_exit,
       actual_profit_loss: record.actual_profit_loss,
+      actual_order_placed_at: record.actual_order_placed_at,
       user_note: record.user_note,
     };
     const response = await $fetch<{ review: AiOrderReview }>(
@@ -469,6 +537,12 @@ function setNumber(
   }
 }
 
+function setDateTime(id: string, event: Event): void {
+  const target = event.target as HTMLInputElement | null;
+  drafts[id] ??= emptyDraft("PENDING");
+  drafts[id].actual_order_placed_at = toIsoDateTime(target?.value ?? "");
+}
+
 function numberDraft(
   id: string,
   key: "actual_entry" | "actual_exit" | "actual_profit_loss",
@@ -478,14 +552,33 @@ function numberDraft(
   return value === null ? "" : String(value);
 }
 
+function dateTimeDraft(id: string, defaultValue: string | null): string {
+  return toLocalDateTimeInput(drafts[id]?.actual_order_placed_at ?? defaultValue);
+}
+
 function emptyDraft(status: ResultStatus): Draft {
   return {
     result_status: status,
     actual_entry: null,
     actual_exit: null,
     actual_profit_loss: null,
+    actual_order_placed_at: null,
     user_note: "",
   };
+}
+
+function toIsoDateTime(value: string): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function toLocalDateTimeInput(value: string | null): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const offsetMs = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
 }
 
 function isResultStatus(value: string | undefined): value is ResultStatus {
@@ -538,6 +631,19 @@ function actionLabel(value: AiOrderReview["recommended_action"]): string {
   return labels[value];
 }
 
+function actionClass(value: AiOrderReview["recommended_action"]): string {
+  if (value === "CANCEL_ORDER" || value === "CLOSE_MANUALLY") return "danger";
+  if (value === "MOVE_SL" || value === "MOVE_TP" || value === "MOVE_SL_TP") {
+    return "warning";
+  }
+  if (value === "TRADE_COMPLETED") return "done";
+  return "neutral";
+}
+
+function scenarioLabel(value: AiOrderScenarioReview["scenario"]): string {
+  return value === "RISKY_TRADE" ? "Kịch bản phụ" : "Kịch bản chính";
+}
+
 function reviewStatusLabel(
   value: AiOrderReview["order_status_assessment"],
 ): string {
@@ -552,6 +658,11 @@ function reviewStatusLabel(
 
 function formatPrice(value: number | null | undefined): string {
   return formatPriceForSymbol(value, reviewSymbol.value);
+}
+
+function formatEntryZone(value: AiOrderScenarioReview["entry_zone"]): string {
+  if (!value) return "Không rõ";
+  return `${formatPrice(value.from)} - ${formatPrice(value.to)}`;
 }
 
 const listOrDash = (items: string[]) => (items.length ? items : ["Không có."]);
@@ -623,9 +734,12 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
 }
 
 .history-table th:nth-child(8),
-.history-table th:nth-child(9),
-.history-table th:nth-child(10) {
+.history-table th:nth-child(9) {
   width: 116px;
+}
+
+.history-table th:nth-child(10) {
+  width: 178px;
 }
 
 .history-table th:nth-child(11) {
@@ -655,6 +769,10 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
 
 .note-input {
   min-width: 82px;
+}
+
+.datetime-input {
+  min-width: 160px;
 }
 
 .result-select {
@@ -849,6 +967,64 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
 
 .review-grid strong {
   overflow-wrap: anywhere;
+}
+
+.scenario-review-list {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.scenario-review-card {
+  background: rgba(10, 15, 20, 0.34);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.scenario-review-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.scenario-review-head h4 {
+  margin: 0;
+}
+
+.compact-review-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.action-pill {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+
+.action-pill.neutral {
+  color: #b8d7ff;
+}
+
+.action-pill.warning {
+  border-color: rgba(245, 158, 11, 0.58);
+  color: #fbbf24;
+}
+
+.action-pill.danger {
+  border-color: rgba(248, 113, 113, 0.62);
+  color: var(--red);
+}
+
+.action-pill.done {
+  border-color: rgba(54, 197, 138, 0.66);
+  color: var(--green);
 }
 
 .review-error {

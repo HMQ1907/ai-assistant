@@ -110,12 +110,34 @@ export interface AiOrderReview {
   risk_warnings: string[];
   next_check_minutes: number;
   checklist: string[];
+  scenario_reviews?: AiOrderScenarioReview[];
   disclaimer: string;
 }
 
 export interface AiOrderReviewResult {
   raw: string;
   parsed: AiOrderReview;
+}
+
+export interface AiOrderScenarioReview {
+  scenario: "MAIN_RECOMMENDATION" | "RISKY_TRADE";
+  title: string;
+  available: boolean;
+  order_status_assessment: OrderReviewStatus;
+  recommended_action: OrderReviewAction;
+  confidence: number;
+  summary: string;
+  fill_assessment: string;
+  action_reason: string;
+  entry_zone: {
+    from: number;
+    to: number;
+  } | null;
+  stop_loss: number | null;
+  take_profit: number | null;
+  cancellation_conditions: string[];
+  risk_warnings: string[];
+  checklist: string[];
 }
 
 export interface RiskyTradeScenario {

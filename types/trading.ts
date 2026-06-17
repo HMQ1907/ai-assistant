@@ -295,6 +295,7 @@ export interface AnalysisHistoryRecord {
   actual_entry: number | null;
   actual_exit: number | null;
   actual_profit_loss: number | null;
+  actual_order_placed_at: string | null;
   user_note: string;
   market_data_provider: string;
   news_provider: string;

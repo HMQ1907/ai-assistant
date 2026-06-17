@@ -140,6 +140,42 @@ const orderReviewSchema = z.object({
   risk_warnings: z.array(z.string()),
   next_check_minutes: z.number().min(1).max(240),
   checklist: z.array(z.string()),
+  scenario_reviews: z
+    .array(
+      z.object({
+        scenario: z.enum(["MAIN_RECOMMENDATION", "RISKY_TRADE"]),
+        title: z.string(),
+        available: z.boolean(),
+        order_status_assessment: z.enum([
+          "LIKELY_NOT_FILLED",
+          "LIKELY_FILLED",
+          "ALREADY_INVALIDATED",
+          "UNCLEAR",
+        ]),
+        recommended_action: z.enum([
+          "KEEP_ORDER",
+          "CANCEL_ORDER",
+          "MOVE_SL",
+          "MOVE_TP",
+          "MOVE_SL_TP",
+          "WAIT",
+          "CLOSE_MANUALLY",
+          "TRADE_COMPLETED",
+        ]),
+        confidence: z.number().min(0).max(100),
+        summary: z.string(),
+        fill_assessment: z.string(),
+        action_reason: z.string(),
+        entry_zone: entryZoneSchema,
+        stop_loss: z.number().nullable(),
+        take_profit: z.number().nullable(),
+        cancellation_conditions: z.array(z.string()),
+        risk_warnings: z.array(z.string()),
+        checklist: z.array(z.string()),
+      }),
+    )
+    .optional()
+    .default([]),
   disclaimer: z.string(),
 });
 
@@ -196,6 +232,7 @@ export class AiAnalysisService {
     actualEntry: number | null;
     actualExit: number | null;
     actualProfitLoss: number | null;
+    actualOrderPlacedAt: string | null;
     userNote: string;
     resultStatus: string;
   }): Promise<AiOrderReviewResult> {

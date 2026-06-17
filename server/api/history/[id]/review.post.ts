@@ -13,6 +13,7 @@ const reviewRequestSchema = z.object({
   actual_entry: z.number().nullable().default(null),
   actual_exit: z.number().nullable().default(null),
   actual_profit_loss: z.number().nullable().default(null),
+  actual_order_placed_at: z.string().datetime().nullable().default(null),
   user_note: z.string().default(""),
 });
 
@@ -75,6 +76,7 @@ export default defineEventHandler(async (event) => {
       actualEntry: input.actual_entry,
       actualExit: input.actual_exit,
       actualProfitLoss: input.actual_profit_loss,
+      actualOrderPlacedAt: input.actual_order_placed_at,
       userNote: input.user_note,
       resultStatus: input.result_status,
     });

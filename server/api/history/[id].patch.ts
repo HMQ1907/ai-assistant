@@ -13,6 +13,7 @@ const bodySchema = z.object({
   actual_entry: z.number().nullable().optional(),
   actual_exit: z.number().nullable().optional(),
   actual_profit_loss: z.number().nullable().optional(),
+  actual_order_placed_at: z.string().datetime().nullable().optional(),
   user_note: z.string().max(2000).optional(),
 });
 
@@ -29,6 +30,8 @@ export default defineEventHandler(async (event) => {
     if (body.actual_exit !== undefined) update.actual_exit = body.actual_exit;
     if (body.actual_profit_loss !== undefined)
       update.actual_profit_loss = body.actual_profit_loss;
+    if (body.actual_order_placed_at !== undefined)
+      update.actual_order_placed_at = body.actual_order_placed_at;
     if (body.user_note !== undefined) update.user_note = body.user_note;
     const config = useRuntimeConfig();
     return await new AnalysisHistoryService(

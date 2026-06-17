@@ -38,6 +38,7 @@ interface AnalysisHistoryRow {
   actual_entry: number | null;
   actual_exit: number | null;
   actual_profit_loss: number | null;
+  actual_order_placed_at: string | null;
   user_note: string | null;
   market_data_provider: string | null;
   news_provider: string | null;
@@ -56,6 +57,7 @@ export interface HistoryUpdateInput {
   actual_entry?: number | null;
   actual_exit?: number | null;
   actual_profit_loss?: number | null;
+  actual_order_placed_at?: string | null;
   user_note?: string;
 }
 
@@ -85,6 +87,7 @@ export class AnalysisHistoryService {
         actual_entry: null,
         actual_exit: null,
         actual_profit_loss: null,
+        actual_order_placed_at: null,
         user_note: "",
         market_data_provider: input.requestPayload.marketDataProvider,
         news_provider: input.requestPayload.newsProvider,
@@ -139,6 +142,8 @@ export class AnalysisHistoryService {
     if (input.actual_exit !== undefined) patch.actual_exit = input.actual_exit;
     if (input.actual_profit_loss !== undefined)
       patch.actual_profit_loss = input.actual_profit_loss;
+    if (input.actual_order_placed_at !== undefined)
+      patch.actual_order_placed_at = input.actual_order_placed_at;
     if (input.user_note !== undefined) patch.user_note = input.user_note;
     if (
       patch.result_status === "PENDING" &&
@@ -279,6 +284,7 @@ function toRecord(row: unknown): AnalysisHistoryRecord {
     actual_entry: nullableNumber(value.actual_entry),
     actual_exit: nullableNumber(value.actual_exit),
     actual_profit_loss: nullableNumber(value.actual_profit_loss),
+    actual_order_placed_at: value.actual_order_placed_at ?? null,
     user_note: value.user_note ?? "",
     market_data_provider: value.market_data_provider ?? "",
     news_provider: value.news_provider ?? "",

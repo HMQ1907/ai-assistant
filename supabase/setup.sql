@@ -21,6 +21,7 @@ create table if not exists analysis_history (
   actual_entry numeric,
   actual_exit numeric,
   actual_profit_loss numeric,
+  actual_order_placed_at timestamptz,
   user_note text,
   market_data_provider text,
   news_provider text,
@@ -38,7 +39,8 @@ alter table analysis_history
   add column if not exists data_quality text,
   add column if not exists data_warnings jsonb default '[]'::jsonb,
   add column if not exists market_data_timestamp timestamptz,
-  add column if not exists news_data_timestamp timestamptz;
+  add column if not exists news_data_timestamp timestamptz,
+  add column if not exists actual_order_placed_at timestamptz;
 
 alter table analysis_history
   drop column if exists skipped_symbols;
