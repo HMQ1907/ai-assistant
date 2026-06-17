@@ -59,10 +59,10 @@ export function buildTradingAnalysisPrompt(payload: AnalysisPayload): string {
         suggested_lot: null,
         estimated_loss_if_sl_hit: null,
         position_sizing_explanation:
-          "Khong tinh lot. Tap trung vao tin hieu, entry, SL, TP, RR va xac suat win.",
+          "Vietnamese explanation of position sizing (lot is not calculated here).",
       },
       current_price: 0,
-      market_context: `Gia ${symbol} hien tai, bid/ask/spread, ho tro/khang cu gan nhat va trang thai M5/M15/H1/H4.`,
+      market_context: `Vietnamese description of current ${symbol} price, bid/ask/spread, nearest support/resistance and M5/M15/H1/H4 state.`,
       trade_reason: "",
       entry_plan: "",
       summary: "",
@@ -92,7 +92,7 @@ export function buildTradingAnalysisPrompt(payload: AnalysisPayload): string {
       next_check_suggestion: "",
       risky_trade: {
         enabled: true,
-        title: "Trade mao hiem",
+        title: "Vietnamese title for the risky scenario",
         direction: "BUY | SELL",
         order_type: "BUY_LIMIT | SELL_LIMIT | BUY_STOP | SELL_STOP",
         estimated_win_probability: 0,
@@ -108,7 +108,7 @@ export function buildTradingAnalysisPrompt(payload: AnalysisPayload): string {
         warning: "",
       },
       disclaimer:
-        "Day la goi y phan tich tu AI, khong phai loi khuyen tai chinh. Nguoi dung tu chiu trach nhiem voi quyet dinh giao dich.",
+        "Vietnamese disclaimer that this is AI analysis, not financial advice, and the user bears responsibility for trading decisions.",
     }),
     `Normalized ${symbol} analysis payload:`,
     JSON.stringify(payload),
