@@ -130,6 +130,10 @@
           <strong>{{ result.risky_trade.risk_reward }}</strong>
         </div>
         <div>
+          <span>Hủy nếu chưa khớp sau</span>
+          <strong>{{ result.risky_trade.cancel_after_minutes ?? 30 }} phút</strong>
+        </div>
+        <div>
           <span>Lot gợi ý</span>
           <strong>{{ formatLot(result.risky_trade.suggested_lot) }}</strong>
         </div>

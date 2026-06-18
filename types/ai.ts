@@ -24,6 +24,7 @@ export interface AiTradeRecommendation {
   take_profit_reason: string;
   risk_reward: string | null;
   expected_holding_time: string | null;
+  cancel_after_minutes?: number | null;
   position_sizing: {
     account_size_usd: number;
     max_loss_usd: number;
@@ -153,6 +154,7 @@ export interface RiskyTradeScenario {
   stop_loss: number;
   take_profit: number;
   risk_reward: string;
+  cancel_after_minutes?: number;
   suggested_lot: number | null;
   estimated_loss_if_sl_hit: number | null;
   reason: string;

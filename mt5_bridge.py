@@ -43,6 +43,7 @@ class PlaceOrderRequest(BaseModel):
     price: Optional[float] = None
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
+    expiration_minutes: Optional[int] = None
     deviation: int = 30
     comment: str = "ai-assistant"
 
@@ -280,6 +281,16 @@ def place_order(req: PlaceOrderRequest):
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,
         }
+        if is_pending and req.expiration_minutes is not None:
+            if req.expiration_minutes <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="expiration_minutes must be > 0.",
+                )
+            request["type_time"] = mt5.ORDER_TIME_SPECIFIED
+            request["expiration"] = int(datetime.now(timezone.utc).timestamp()) + int(
+                req.expiration_minutes
+            ) * 60
         if req.stop_loss is not None:
             request["sl"] = float(req.stop_loss)
         if req.take_profit is not None:

@@ -46,6 +46,7 @@ export class TradeValidationService {
       take_profit: null,
       risk_reward: null,
       expected_holding_time: null,
+      cancel_after_minutes: null,
       position_sizing: {
         ...recommendation.position_sizing,
         suggested_lot: null,
@@ -93,6 +94,7 @@ export class TradeValidationService {
       take_profit: null,
       risk_reward: null,
       expected_holding_time: null,
+      cancel_after_minutes: null,
       invalid_conditions: Array.from(new Set(recommendation.invalid_conditions)),
       no_trade_reasons:
         recommendation.no_trade_reasons?.length
@@ -510,6 +512,7 @@ function buildRiskyTradeFromRejectedRecommendation(
       stop_loss: recommendation.stop_loss,
       take_profit: recommendation.take_profit,
       risk_reward: recommendation.risk_reward ?? "Không rõ",
+      cancel_after_minutes: recommendation.cancel_after_minutes ?? 30,
       suggested_lot: null,
       estimated_loss_if_sl_hit: null,
       reason:
@@ -557,6 +560,7 @@ function buildRiskyTradeFromRejectedRecommendation(
     stop_loss: recommendation.stop_loss,
     take_profit: recommendation.take_profit,
     risk_reward: recommendation.risk_reward ?? "Không rõ",
+    cancel_after_minutes: recommendation.cancel_after_minutes ?? 30,
     suggested_lot: suggestedLot,
     estimated_loss_if_sl_hit:
       suggestedLot === null

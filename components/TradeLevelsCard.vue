@@ -37,6 +37,10 @@
         <span>Thời gian giữ dự kiến</span>
         <strong>{{ result.expected_holding_time ?? "Không áp dụng" }}</strong>
       </div>
+      <div v-if="result.decision === 'TRADE' && result.order_type !== 'MARKET'" class="kv-row">
+        <span>Hủy nếu chưa khớp sau</span>
+        <strong>{{ result.cancel_after_minutes ?? 30 }} phút</strong>
+      </div>
     </div>
   </section>
 </template>

@@ -12,6 +12,8 @@ export interface PlaceOrderInput {
   price: number | null;
   stopLoss: number | null;
   takeProfit: number | null;
+  expirationMinutes?: number | null;
+  comment?: string;
 }
 
 export interface PlaceOrderResult {
@@ -92,6 +94,8 @@ export class Mt5OrderService {
       price: input.price,
       stop_loss: input.stopLoss,
       take_profit: input.takeProfit,
+      expiration_minutes: isPending ? input.expirationMinutes ?? null : null,
+      comment: input.comment ?? "ai-assistant",
     });
 
     return {

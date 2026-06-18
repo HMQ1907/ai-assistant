@@ -35,7 +35,7 @@ export default defineEventHandler(async (event) => {
 
     const orderService = new Mt5OrderService({
       bridgeUrl: config.mt5BridgeUrl,
-      symbol: config.mt5Symbol,
+      symbol: history.symbol === "EURUSD" ? config.mt5EurUsdSymbol : config.mt5Symbol,
     });
 
     const cancelled = await orderService.cancelOrder(history.mt5_ticket);

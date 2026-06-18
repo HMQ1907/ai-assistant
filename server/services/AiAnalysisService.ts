@@ -26,13 +26,18 @@ const riskRewardSchema = z.preprocess(
   z.string().nullable(),
 );
 
+const orderTypeSchema = z.preprocess(
+  normalizeOrderType,
+  z
+    .enum(["MARKET", "BUY_LIMIT", "SELL_LIMIT", "BUY_STOP", "SELL_STOP"])
+    .default("MARKET"),
+);
+
 const recommendationSchema = z.object({
   decision: z.enum(["TRADE", "NO_TRADE"]),
   symbol: z.enum(["XAUUSD", "EURUSD"]),
   direction: z.enum(["BUY", "SELL", "NONE"]),
-  order_type: z
-    .enum(["MARKET", "BUY_LIMIT", "SELL_LIMIT", "BUY_STOP", "SELL_STOP"])
-    .default("MARKET"),
+  order_type: orderTypeSchema,
   confidence: z.number().min(0).max(100),
   estimated_win_probability: z.number().min(0).max(100).optional(),
   entry_zone: entryZoneSchema,
@@ -42,6 +47,7 @@ const recommendationSchema = z.object({
   take_profit_reason: z.preprocess(normalizeNullableString, z.string()),
   risk_reward: riskRewardSchema,
   expected_holding_time: z.string().nullable(),
+  cancel_after_minutes: z.number().int().min(1).max(240).nullable().default(null),
   position_sizing: z.object({
     account_size_usd: z.number(),
     max_loss_usd: z.number(),
@@ -90,6 +96,7 @@ const recommendationSchema = z.object({
       stop_loss: z.number(),
       take_profit: z.number(),
       risk_reward: z.preprocess(normalizeRiskReward, z.string()),
+      cancel_after_minutes: z.number().int().min(1).max(240).default(30),
       suggested_lot: z.number().nullable(),
       estimated_loss_if_sl_hit: z.number().nullable(),
       reason: z.string(),
@@ -200,6 +207,12 @@ function normalizeRiskReward(value: unknown): unknown {
 
 function normalizeNullableString(value: unknown): unknown {
   return value === null ? "" : value;
+}
+
+function normalizeOrderType(value: unknown): unknown {
+  return value === null || value === undefined || value === "" || value === "NONE"
+    ? "MARKET"
+    : value;
 }
 
 export class AiAnalysisService {
@@ -501,6 +514,7 @@ function buildNoTradeRecommendation(
     take_profit_reason: "Không có take profit vì phản hồi AI không hợp lệ.",
     risk_reward: null,
     expected_holding_time: null,
+    cancel_after_minutes: null,
     position_sizing: {
       account_size_usd: payload.accountSizeUsd,
       max_loss_usd: payload.maxLossUsdPerTrade,

@@ -119,13 +119,22 @@
                 {{ checkingId === record.id ? "Đang kiểm tra..." : "Check lại lệnh" }}
               </button>
               <button
-                v-if="canPlace(record)"
+                v-if="canPlaceMain(record)"
                 class="action-button action-button-trade"
                 type="button"
                 :disabled="orderBusyId === record.id"
-                @click="placeOrder(record)"
+                @click="placeOrder(record, 'MAIN')"
               >
-                {{ orderBusyId === record.id ? "Đang đặt..." : "Đặt lệnh" }}
+                {{ orderBusyId === record.id ? "Đang đặt..." : "Đặt chính" }}
+              </button>
+              <button
+                v-if="canPlaceRisky(record)"
+                class="action-button action-button-warning"
+                type="button"
+                :disabled="orderBusyId === record.id"
+                @click="placeOrder(record, 'RISKY')"
+              >
+                {{ orderBusyId === record.id ? "Đang đặt..." : "Đặt phụ" }}
               </button>
               <button
                 v-if="canCancel(record)"
@@ -313,7 +322,11 @@
 </template>
 
 <script setup lang="ts">
-import type { AiOrderReview, AiOrderScenarioReview } from "~/types/ai";
+import type {
+  AiOrderReview,
+  AiOrderScenarioReview,
+  AiTradeRecommendation,
+} from "~/types/ai";
 import type {
   AnalysisHistoryRecord,
   OrderState,
@@ -422,7 +435,9 @@ async function reviewOrder(record: AnalysisHistoryRecord): Promise<void> {
   }
 }
 
-function canPlace(record: AnalysisHistoryRecord): boolean {
+type OrderScenario = "MAIN" | "RISKY";
+
+function canPlaceMain(record: AnalysisHistoryRecord): boolean {
   return (
     record.decision === "TRADE" &&
     record.direction !== "NONE" &&
@@ -430,13 +445,32 @@ function canPlace(record: AnalysisHistoryRecord): boolean {
   );
 }
 
+function canPlaceRisky(record: AnalysisHistoryRecord): boolean {
+  const parsed = asRecommendation(record.parsed_result);
+  return Boolean(parsed?.risky_trade?.enabled && record.order_state === "NONE");
+}
+
 function canCancel(record: AnalysisHistoryRecord): boolean {
   return record.order_state === "PENDING" || record.order_state === "FILLED";
 }
 
-async function placeOrder(record: AnalysisHistoryRecord): Promise<void> {
+async function placeOrder(
+  record: AnalysisHistoryRecord,
+  scenario: OrderScenario,
+): Promise<void> {
+  const parsed = asRecommendation(record.parsed_result);
+  const winProbability =
+    scenario === "RISKY"
+      ? parsed?.risky_trade?.estimated_win_probability
+      : parsed?.estimated_win_probability ?? record.confidence;
+  const volume = lotFromWinProbability(winProbability);
+  if (volume === null) {
+    window.alert("%win kèo dưới 55%, app sẽ không tự đặt lệnh MT5.");
+    return;
+  }
+  const scenarioLabel = scenario === "RISKY" ? "kịch bản phụ" : "kịch bản chính";
   const confirmed = window.confirm(
-    `Đặt lệnh THẬT trên tài khoản MT5 đang đăng nhập cho ${record.symbol} ${record.direction}?\nĐây là tiền thật. Hãy kiểm tra lại giá và spread trước khi xác nhận.`,
+    `Đặt lệnh THẬT theo ${scenarioLabel} trên tài khoản MT5 đang đăng nhập cho ${record.symbol}?\nLot tự tính: ${volume.toFixed(2)} lot theo %win ${winProbability ?? "không rõ"}%.\nĐây là tiền thật. Hãy kiểm tra lại giá và spread trước khi xác nhận.`,
   );
   if (!confirmed) return;
 
@@ -445,7 +479,7 @@ async function placeOrder(record: AnalysisHistoryRecord): Promise<void> {
   try {
     const response = await $fetch<{ record: AnalysisHistoryRecord }>(
       `/api/history/${record.id}/order`,
-      { method: "POST" },
+      { method: "POST", body: { scenario } },
     );
     emit("updated", response.record);
   } catch (error) {
@@ -535,6 +569,18 @@ function setNumber(
   ) {
     drafts[id].result_status = inferStatusFromProfitLoss(value);
   }
+}
+
+function asRecommendation(value: unknown): AiTradeRecommendation | null {
+  if (!value || typeof value !== "object") return null;
+  return value as AiTradeRecommendation;
+}
+
+function lotFromWinProbability(value: number | null | undefined): number | null {
+  if (value === null || value === undefined || !Number.isFinite(value) || value < 55) {
+    return null;
+  }
+  return value > 65 ? 0.02 : 0.01;
 }
 
 function setDateTime(id: string, event: Event): void {
@@ -854,6 +900,15 @@ const listOrDash = (items: string[]) => (items.length ? items : ["Không có."])
 
 .action-button-trade:hover:not(:disabled) {
   background: #259159;
+}
+
+.action-button-warning {
+  background: #8a5a12;
+  border-color: #b7791f;
+}
+
+.action-button-warning:hover:not(:disabled) {
+  background: #a66a15;
 }
 
 .action-button-danger {

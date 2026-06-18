@@ -1,5 +1,10 @@
 import { createError, getRouterParam, readBody } from "h3";
 import { z } from "zod";
+import type {
+  AiOrderReview,
+  AiOrderScenarioReview,
+  AiTradeRecommendation,
+} from "../../../../types/ai";
 import { AiAnalysisService } from "../../../services/AiAnalysisService";
 import { AnalysisHistoryService } from "../../../services/AnalysisHistoryService";
 import { IndicatorService } from "../../../services/IndicatorService";
@@ -90,7 +95,14 @@ export default defineEventHandler(async (event) => {
       resultStatus: input.result_status,
     });
 
-    return { review: review.parsed, raw: review.raw, latestPayload: payload };
+    return {
+      review: promoteRiskyScenarioWhenMainIsNoTrade(
+        history.parsed_result,
+        review.parsed,
+      ),
+      raw: review.raw,
+      latestPayload: payload,
+    };
   } catch (error) {
     throw createError({
       statusCode: 500,
@@ -99,3 +111,69 @@ export default defineEventHandler(async (event) => {
     });
   }
 });
+
+function promoteRiskyScenarioWhenMainIsNoTrade(
+  parsedResult: unknown,
+  review: AiOrderReview,
+): AiOrderReview {
+  const recommendation = asRecommendation(parsedResult);
+  if (
+    recommendation?.decision !== "NO_TRADE" ||
+    !recommendation.risky_trade?.enabled
+  ) {
+    return review;
+  }
+
+  const riskyReview = review.scenario_reviews?.find(
+    (item) => item.scenario === "RISKY_TRADE" && item.available,
+  );
+  if (!riskyReview) return review;
+
+  return {
+    ...review,
+    order_status_assessment: riskyReview.order_status_assessment,
+    recommended_action: riskyReview.recommended_action,
+    confidence: riskyReview.confidence,
+    summary: `Đang ưu tiên check kịch bản phụ vì khuyến nghị chính là NO_TRADE. ${riskyReview.summary}`,
+    fill_assessment: riskyReview.fill_assessment,
+    action_reason: riskyReview.action_reason,
+    stop_loss_plan: scenarioStopLossPlan(riskyReview),
+    take_profit_plan: scenarioTakeProfitPlan(riskyReview),
+    cancellation_conditions: riskyReview.cancellation_conditions,
+    risk_warnings: riskyReview.risk_warnings,
+    checklist: riskyReview.checklist,
+  };
+}
+
+function scenarioStopLossPlan(scenario: AiOrderScenarioReview): AiOrderReview["stop_loss_plan"] {
+  return {
+    keep_current: true,
+    suggested_stop_loss: scenario.stop_loss,
+    reason:
+      scenario.stop_loss === null
+        ? "Kịch bản phụ không có stop loss hợp lệ để đề xuất."
+        : "Ưu tiên dùng stop loss của kịch bản phụ khi quản lý lệnh này.",
+  };
+}
+
+function scenarioTakeProfitPlan(
+  scenario: AiOrderScenarioReview,
+): AiOrderReview["take_profit_plan"] {
+  return {
+    keep_current: true,
+    suggested_take_profit: scenario.take_profit,
+    reason:
+      scenario.take_profit === null
+        ? "Kịch bản phụ không có take profit hợp lệ để đề xuất."
+        : "Ưu tiên dùng take profit của kịch bản phụ khi quản lý lệnh này.",
+  };
+}
+
+function asRecommendation(value: unknown): AiTradeRecommendation | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<AiTradeRecommendation>;
+  if (candidate.decision !== "TRADE" && candidate.decision !== "NO_TRADE") {
+    return null;
+  }
+  return value as AiTradeRecommendation;
+}
