@@ -1,4 +1,7 @@
-import type { AnalysisHistoryRecord, AnalysisPayload } from "../../types/trading";
+import type {
+  AnalysisHistoryRecord,
+  AnalysisPayload,
+} from "../../types/trading";
 
 export interface OrderReviewPromptInput {
   history: AnalysisHistoryRecord;
@@ -12,10 +15,10 @@ export interface OrderReviewPromptInput {
 }
 
 export function buildOrderReviewPrompt(input: OrderReviewPromptInput): string {
+  const symbol = input.history.symbol === "EURUSD" ? "EURUSD" : "XAUUSD";
   return JSON.stringify(
     {
-      task:
-        "Review an existing manual XAUUSD trade recommendation using the latest market data. Determine whether the pending order was likely filled, invalidated, should remain unchanged, should be cancelled, whether SL or TP should be adjusted, or whether an already-open position should be closed manually.",
+      task: `Review an existing manual ${symbol} trade recommendation using the latest market data. Determine whether the pending order was likely filled, invalidated, should remain unchanged, should be cancelled, whether SL or TP should be adjusted, or whether an already-open position should be closed manually.`,
       mandatory_rules: [
         "This is a read-only trading assistant. Never place, modify, cancel, or execute any order.",
         "Return one strict JSON object only. Do not use Markdown or add text outside JSON.",
@@ -39,7 +42,7 @@ export function buildOrderReviewPrompt(input: OrderReviewPromptInput): string {
         "When evidence is insufficient, select WAIT or KEEP_ORDER and clearly state what must be checked manually on Exness.",
       ],
       output_schema: {
-        symbol: "XAUUSD",
+        symbol: symbol,
         reviewed_history_id: input.history.id,
         current_price: 0,
         order_status_assessment:

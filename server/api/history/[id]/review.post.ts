@@ -5,6 +5,7 @@ import type {
   AiOrderScenarioReview,
   AiTradeRecommendation,
 } from "../../../../types/ai";
+import type { SymbolCode } from "../../../../types/trading";
 import { AiAnalysisService } from "../../../services/AiAnalysisService";
 import { AnalysisHistoryService } from "../../../services/AnalysisHistoryService";
 import { IndicatorService } from "../../../services/IndicatorService";
@@ -50,13 +51,14 @@ export default defineEventHandler(async (event) => {
     }).getClient();
     const historyService = new AnalysisHistoryService(supabase);
     const history = await historyService.getById(id);
+    const symbol = history.symbol === "EURUSD" ? "EURUSD" : "XAUUSD";
 
     const marketService = new MarketDataService({
       providerName: config.marketDataProvider,
       apiKey: config.marketDataApiKey,
       baseUrl: config.marketDataBaseUrl,
       mt5BridgeUrl: config.mt5BridgeUrl,
-      mt5Symbol: config.mt5Symbol,
+      mt5Symbol: mt5SymbolFor(config, symbol),
       maxQuoteAgeSeconds: config.maxQuoteAgeSeconds,
       debug: config.marketDataDebug,
     });
@@ -75,7 +77,7 @@ export default defineEventHandler(async (event) => {
       timeoutMs: config.aiTimeoutMs,
     });
 
-    const market = await marketService.collectAll();
+    const market = await marketService.collectAll([symbol]);
     const indicators = indicatorService.calculateMany(market.snapshots);
     const news = await newsService.collect();
     const payload = payloadBuilder.build(
@@ -176,4 +178,11 @@ function asRecommendation(value: unknown): AiTradeRecommendation | null {
     return null;
   }
   return value as AiTradeRecommendation;
+}
+
+function mt5SymbolFor(
+  config: ReturnType<typeof useRuntimeConfig>,
+  symbol: SymbolCode,
+): string {
+  return symbol === "EURUSD" ? config.mt5EurUsdSymbol : config.mt5Symbol;
 }
