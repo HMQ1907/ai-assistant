@@ -85,6 +85,80 @@ function payload(): AnalysisPayload {
   };
 }
 
+function payloadWithXauMarket(price = 4175, atrM15 = 11): AnalysisPayload {
+  return {
+    ...payload(),
+    symbols: [
+      {
+        market: {
+          symbol: "XAUUSD",
+          price,
+          bid: price,
+          ask: price + 0.25,
+          spread: 0.25,
+          bidAskStatus: "AVAILABLE",
+          data_quality: "HIGH",
+          data_warnings: [],
+          informational_diagnostics: [],
+          critical_errors: [],
+          updated_at: "2026-06-09T00:00:00Z",
+          provider: "test",
+          providerFetchedAt: "2026-06-09T00:00:00Z",
+          providerQuoteTime: "2026-06-09T00:00:00Z",
+          quoteAgeSeconds: 1,
+          quoteTimestampReliable: true,
+          recent_candles: { M5: [], M15: [], H1: [], H4: [] },
+          candle_summary: {
+            M5: summary("M5", price),
+            M15: summary("M15", price),
+            H1: summary("H1", price),
+            H4: summary("H4", price),
+          },
+          candle_patterns: { M5: [], M15: [], H1: [], H4: [] },
+          candle_diagnostics: {
+            M5: diagnostics(),
+            M15: diagnostics(),
+            H1: diagnostics(),
+            H4: diagnostics(),
+          },
+          timeframe_quality: {
+            M5: timeframeQuality("M5"),
+            M15: timeframeQuality("M15"),
+            H1: timeframeQuality("H1"),
+            H4: timeframeQuality("H4"),
+          },
+        },
+        indicators: {
+          symbol: "XAUUSD",
+          ema20: null,
+          ema50: null,
+          ema200: null,
+          rsi14: null,
+          macd: { macd: null, signal: null, histogram: null },
+          atr14: atrM15,
+          nearestSupport: null,
+          nearestResistance: null,
+          swingHigh: price + 20,
+          swingLow: price - 20,
+          trendM15: "SIDEWAY_OR_MIXED",
+          trendH1: "SIDEWAY_OR_MIXED",
+          structureTrendM15: "SIDEWAY_OR_MIXED",
+          structureTrendH1: "SIDEWAY_OR_MIXED",
+          momentumScore: 50,
+          volatilityScore: 50,
+          timeframeAlignment: "mixed",
+          timeframes: {
+            M5: timeframeIndicator("M5", price, 50, 5),
+            M15: timeframeIndicator("M15", price, 50, atrM15),
+            H1: timeframeIndicator("H1", price, 50, atrM15 * 2),
+            H4: timeframeIndicator("H4", price, 50, atrM15 * 4),
+          },
+        },
+      },
+    ],
+  };
+}
+
 describe("trade validation", () => {
   it("does not validate entry/sl/tp for a deliberate NO_TRADE", () => {
     const result = new TradeValidationService().validate(
@@ -198,4 +272,149 @@ describe("trade validation", () => {
     expect(result.decision).toBe("TRADE");
     expect(result.order_type).toBe("MARKET");
   });
+
+  it("rejects a pending entry when price is not rotating back toward that zone", () => {
+    const result = new TradeValidationService().validate(
+      recommendation({
+        decision: "TRADE",
+        direction: "SELL",
+        order_type: "SELL_LIMIT",
+        confidence: 80,
+        entry_zone: { from: 4187, to: 4190 },
+        stop_loss: 4196.5,
+        take_profit: 4171,
+        risk_reward: "1:2",
+      }),
+      payloadWithXauMarket(4175, 11),
+    );
+
+    expect(result.decision).toBe("NO_TRADE");
+    expect(result.trade_validation_failures?.join(" ")).toContain(
+      "chưa cho thấy giá đang hồi/rotate",
+    );
+  });
+
+  it("keeps a farther pending entry when recent candles rotate toward that zone", () => {
+    const testPayload = payloadWithXauMarket(4175, 11);
+    testPayload.symbols[0]!.market.recent_candles.M5 = [
+      candle(4169, 4170, 4168, 4169.5),
+      candle(4169.5, 4173, 4169, 4172),
+      candle(4172, 4176, 4171, 4175),
+      candle(4175, 4180, 4174, 4179),
+    ];
+
+    const result = new TradeValidationService().validate(
+      recommendation({
+        decision: "TRADE",
+        direction: "SELL",
+        order_type: "SELL_LIMIT",
+        confidence: 80,
+        entry_zone: { from: 4187, to: 4190 },
+        stop_loss: 4196.5,
+        take_profit: 4171,
+        risk_reward: "1:2",
+      }),
+      testPayload,
+    );
+
+    expect(result.decision).toBe("TRADE");
+  });
 });
+
+function summary(timeframe: "M5" | "M15" | "H1" | "H4", price: number) {
+  return {
+    timeframe,
+    candleCount: 350,
+    firstCandleTime: "2026-06-08T00:00:00Z",
+    lastCandleTime: "2026-06-09T00:00:00Z",
+    open: price,
+    high: price + 10,
+    low: price - 10,
+    close: price,
+    averageRange: 5,
+    averageBody: 2,
+    filteredOutCandles: 0,
+  };
+}
+
+function diagnostics() {
+  return {
+    requestedCount: 350,
+    receivedCount: 350,
+    validCount: 350,
+    filteredCount: 0,
+    reasons: {},
+    firstRawCandleTime: "2026-06-08T00:00:00Z",
+    lastRawCandleTime: "2026-06-09T00:00:00Z",
+    firstValidCandleTime: "2026-06-08T00:00:00Z",
+    lastValidCandleTime: "2026-06-09T00:00:00Z",
+    indicatorDataSufficient: true,
+  };
+}
+
+function timeframeQuality(timeframe: "M5" | "M15" | "H1" | "H4") {
+  return {
+    timeframe,
+    quality: "HIGH" as const,
+    validCandleCount: 350,
+    requiredCandleCount: 200,
+    invalidRatio: 0,
+    indicatorReadiness: {
+      ema20: true,
+      ema50: true,
+      ema200: true,
+      rsi14: true,
+      atr14: true,
+      macd: true,
+    },
+    reasons: [],
+  };
+}
+
+function timeframeIndicator(
+  timeframe: "M5" | "M15" | "H1" | "H4",
+  price: number,
+  momentumScore: number,
+  atr14: number,
+) {
+  return {
+    timeframe,
+    ema20: price,
+    ema50: price,
+    ema200: price,
+    rsi14: 50,
+    macd: { macd: 0, signal: 0, histogram: 0 },
+    atr14,
+    readiness: {
+      ema20: true,
+      ema50: true,
+      ema200: true,
+      rsi14: true,
+      atr14: true,
+      macd: true,
+    },
+    trend: "SIDEWAY_OR_MIXED" as const,
+    structureTrend: "SIDEWAY_OR_MIXED" as const,
+    momentumScore,
+    volatilityScore: 50,
+    marketStructure: {
+      nearestSupport: price - 10,
+      nearestResistance: price + 10,
+      swingHigh: price + 20,
+      swingLow: price - 20,
+      supportLevels: [],
+      resistanceLevels: [],
+    },
+  };
+}
+
+function candle(open: number, high: number, low: number, close: number) {
+  return {
+    time: "2026-06-09T00:00:00Z",
+    open,
+    high,
+    low,
+    close,
+    volume: 100,
+  };
+}

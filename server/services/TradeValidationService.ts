@@ -266,6 +266,12 @@ export class TradeValidationService {
     }
 
     reasons.push(...this.orderTypeReasons(recommendation, selectedSymbol, entry));
+    const entryInteractionReason = pendingEntryInteractionReason(
+      recommendation,
+      selectedSymbol,
+      entry,
+    );
+    if (entryInteractionReason) reasons.push(entryInteractionReason);
 
     return reasons;
   }
@@ -444,6 +450,87 @@ function floorToStep(value: number, step: number): number {
 
 function isFinitePositive(value: number | null | undefined): value is number {
   return value !== null && value !== undefined && Number.isFinite(value) && value > 0;
+}
+
+function pendingEntryInteractionReason(
+  recommendation: AiTradeRecommendation,
+  symbol: PayloadSymbol | undefined,
+  entry: number,
+): string | null {
+  if (
+    !symbol ||
+    recommendation.decision !== "TRADE" ||
+    recommendation.order_type === "MARKET" ||
+    !isFinitePositive(entry) ||
+    !isFinitePositive(symbol.market.price)
+  ) {
+    return null;
+  }
+
+  const currentPrice = symbol.market.price;
+  const distance = Math.abs(entry - currentPrice);
+  const percentLimit =
+    currentPrice * (tradingRules.maxPendingEntryDistancePercent / 100);
+  const atrM15 = symbol.indicators.timeframes.M15.atr14;
+  const atrLimit = isFinitePositive(atrM15)
+    ? atrM15 * tradingRules.maxPendingEntryAtrMultiplier
+    : null;
+  const allowedDistance =
+    atrLimit === null ? percentLimit : Math.min(percentLimit, atrLimit);
+
+  if (distance <= allowedDistance) return null;
+  if (hasRecentRotationTowardEntry(symbol, entry)) return null;
+
+  const entryDistancePercent = (distance / currentPrice) * 100;
+  const allowedDistanceText = allowedDistance.toFixed(
+    currentPrice >= 100 ? 2 : 5,
+  );
+  return (
+    `entry_zone của ${recommendation.order_type} cách giá hiện tại ` +
+    `${distance.toFixed(currentPrice >= 100 ? 2 : 5)} ` +
+    `(${entryDistancePercent.toFixed(3)}%), xa hơn ngưỡng thực tế ${allowedDistanceText}; ` +
+    "recent M5/M15 chưa cho thấy giá đang hồi/rotate về vùng entry nên xác suất tương tác vùng này chưa đủ tin cậy cho TRADE chính"
+  );
+}
+
+function hasRecentRotationTowardEntry(
+  symbol: PayloadSymbol,
+  entry: number,
+): boolean {
+  const currentPrice = symbol.market.price;
+  const needsPullbackUp = entry > currentPrice;
+  return (
+    timeframeRotatesToward(symbol.market.recent_candles.M5, needsPullbackUp) ||
+    timeframeRotatesToward(symbol.market.recent_candles.M15, needsPullbackUp)
+  );
+}
+
+function timeframeRotatesToward(
+  candles: PayloadSymbol["market"]["recent_candles"]["M5"],
+  upward: boolean,
+): boolean {
+  const recent = candles.slice(-4);
+  if (recent.length < 3) return false;
+
+  const first = recent[0];
+  const latest = recent.at(-1);
+  const previous = recent.at(-2);
+  if (!first || !latest || !previous) return false;
+
+  const directionalCloses = recent.slice(1).filter((candle, index) => {
+    const prior = recent[index];
+    if (!prior) return false;
+    return upward ? candle.close > prior.close : candle.close < prior.close;
+  }).length;
+
+  const latestDirection = upward
+    ? latest.close > previous.close && latest.high >= previous.high
+    : latest.close < previous.close && latest.low <= previous.low;
+  const closerThanStart = upward
+    ? latest.close > first.close
+    : latest.close < first.close;
+
+  return latestDirection && closerThanStart && directionalCloses >= 2;
 }
 
 type PayloadSymbol = AnalysisPayload["symbols"][number];

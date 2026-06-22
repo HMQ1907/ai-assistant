@@ -30,6 +30,25 @@ export default defineNuxtConfig({
     newsMaxAgeHours: Number(process.env.NEWS_MAX_AGE_HOURS || 48),
     supabaseUrl: process.env.SUPABASE_URL || "",
     supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || "",
+    telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "",
+    telegramChatId: process.env.TELEGRAM_CHAT_ID || "",
+    tradeScannerEnabled: process.env.TRADE_SCANNER_ENABLED === "true",
+    tradeScannerTimezone: process.env.TRADE_SCANNER_TIMEZONE || "Asia/Saigon",
+    tradeScannerWindows: process.env.TRADE_SCANNER_WINDOWS || "",
+    tradeScannerStartHour: Number(process.env.TRADE_SCANNER_START_HOUR || 19),
+    tradeScannerEndHour: Number(process.env.TRADE_SCANNER_END_HOUR || 23),
+    tradeScannerIntervalMinutes: Number(
+      process.env.TRADE_SCANNER_INTERVAL_MINUTES || 15,
+    ),
+    tradeScannerMinConfidence: Number(
+      process.env.TRADE_SCANNER_MIN_CONFIDENCE || 75,
+    ),
+    tradeScannerMinRiskReward: Number(
+      process.env.TRADE_SCANNER_MIN_RISK_REWARD || 1.5,
+    ),
+    tradeScannerMinWinProbability: Number(
+      process.env.TRADE_SCANNER_MIN_WIN_PROBABILITY || 65,
+    ),
   },
   typescript: {
     strict: true,

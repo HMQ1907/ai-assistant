@@ -7,6 +7,8 @@ export const tradingRules = {
   maxHoldingMinutes: 60,
   maxSpreadPercent: 0.08,
   maxQuoteAgeSeconds: 180,
+  maxPendingEntryDistancePercent: 0.3,
+  maxPendingEntryAtrMultiplier: 1,
   minLot: 0.01,
   lotStep: 0.01,
   xauUsdOuncesPerLot: 100,

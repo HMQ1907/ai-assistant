@@ -1,18 +1,6 @@
 import { createError, getRouterParam, readBody } from "h3";
 import { z } from "zod";
-import type {
-  AiOrderReview,
-  AiOrderScenarioReview,
-  AiTradeRecommendation,
-} from "../../../../types/ai";
-import type { SymbolCode } from "../../../../types/trading";
-import { AiAnalysisService } from "../../../services/AiAnalysisService";
-import { AnalysisHistoryService } from "../../../services/AnalysisHistoryService";
-import { IndicatorService } from "../../../services/IndicatorService";
-import { MarketDataService } from "../../../services/MarketDataService";
-import { NewsService } from "../../../services/NewsService";
-import { OpportunityPayloadBuilder } from "../../../services/OpportunityPayloadBuilder";
-import { SupabaseService } from "../../../services/SupabaseService";
+import { runOrderReview } from "../../../services/OrderReviewRunner";
 
 const reviewRequestSchema = z.object({
   result_status: z.string().default("PENDING"),
@@ -44,66 +32,20 @@ export default defineEventHandler(async (event) => {
 
     const body = await readBody<unknown>(event);
     const input = reviewRequestSchema.parse(body ?? {});
-    const config = useRuntimeConfig();
-    const supabase = new SupabaseService({
-      url: config.supabaseUrl,
-      serviceRoleKey: config.supabaseServiceRoleKey,
-    }).getClient();
-    const historyService = new AnalysisHistoryService(supabase);
-    const history = await historyService.getById(id);
-    const symbol = history.symbol === "EURUSD" ? "EURUSD" : "XAUUSD";
-
-    const marketService = new MarketDataService({
-      providerName: config.marketDataProvider,
-      apiKey: config.marketDataApiKey,
-      baseUrl: config.marketDataBaseUrl,
-      mt5BridgeUrl: config.mt5BridgeUrl,
-      mt5Symbol: mt5SymbolFor(config, symbol),
-      maxQuoteAgeSeconds: config.maxQuoteAgeSeconds,
-      debug: config.marketDataDebug,
-    });
-    const indicatorService = new IndicatorService();
-    const newsService = new NewsService({
-      providerName: config.newsProvider,
-      apiKey: config.newsApiKey,
-      baseUrl: config.newsBaseUrl,
-      maxAgeHours: config.newsMaxAgeHours,
-    });
-    const payloadBuilder = new OpportunityPayloadBuilder();
-    const aiService = new AiAnalysisService({
-      apiKey: config.evolinkApiKey,
-      model: config.evolinkModel,
-      baseUrl: config.evolinkBaseUrl,
-      timeoutMs: config.aiTimeoutMs,
-    });
-
-    const market = await marketService.collectAll([symbol]);
-    const indicators = indicatorService.calculateMany(market.snapshots);
-    const news = await newsService.collect();
-    const payload = payloadBuilder.build(
-      market,
-      indicators,
-      news,
-      history.request_payload.accountSizeUsd,
-    );
-    const review = await aiService.reviewOrder({
-      history,
-      latestPayload: payload,
+    const output = await runOrderReview({
+      id,
+      resultStatus: input.result_status,
       actualEntry: input.actual_entry,
       actualExit: input.actual_exit,
       actualProfitLoss: input.actual_profit_loss,
       actualOrderPlacedAt: input.actual_order_placed_at,
       userNote: input.user_note,
-      resultStatus: input.result_status,
     });
 
     return {
-      review: promoteRiskyScenarioWhenMainIsNoTrade(
-        history.parsed_result,
-        review.parsed,
-      ),
-      raw: review.raw,
-      latestPayload: payload,
+      review: output.review,
+      raw: output.raw,
+      latestPayload: output.latestPayload,
     };
   } catch (error) {
     throw createError({
@@ -113,76 +55,3 @@ export default defineEventHandler(async (event) => {
     });
   }
 });
-
-function promoteRiskyScenarioWhenMainIsNoTrade(
-  parsedResult: unknown,
-  review: AiOrderReview,
-): AiOrderReview {
-  const recommendation = asRecommendation(parsedResult);
-  if (
-    recommendation?.decision !== "NO_TRADE" ||
-    !recommendation.risky_trade?.enabled
-  ) {
-    return review;
-  }
-
-  const riskyReview = review.scenario_reviews?.find(
-    (item) => item.scenario === "RISKY_TRADE" && item.available,
-  );
-  if (!riskyReview) return review;
-
-  return {
-    ...review,
-    order_status_assessment: riskyReview.order_status_assessment,
-    recommended_action: riskyReview.recommended_action,
-    confidence: riskyReview.confidence,
-    summary: `Đang ưu tiên check kịch bản phụ vì khuyến nghị chính là NO_TRADE. ${riskyReview.summary}`,
-    fill_assessment: riskyReview.fill_assessment,
-    action_reason: riskyReview.action_reason,
-    stop_loss_plan: scenarioStopLossPlan(riskyReview),
-    take_profit_plan: scenarioTakeProfitPlan(riskyReview),
-    cancellation_conditions: riskyReview.cancellation_conditions,
-    risk_warnings: riskyReview.risk_warnings,
-    checklist: riskyReview.checklist,
-  };
-}
-
-function scenarioStopLossPlan(scenario: AiOrderScenarioReview): AiOrderReview["stop_loss_plan"] {
-  return {
-    keep_current: true,
-    suggested_stop_loss: scenario.stop_loss,
-    reason:
-      scenario.stop_loss === null
-        ? "Kịch bản phụ không có stop loss hợp lệ để đề xuất."
-        : "Ưu tiên dùng stop loss của kịch bản phụ khi quản lý lệnh này.",
-  };
-}
-
-function scenarioTakeProfitPlan(
-  scenario: AiOrderScenarioReview,
-): AiOrderReview["take_profit_plan"] {
-  return {
-    keep_current: true,
-    suggested_take_profit: scenario.take_profit,
-    reason:
-      scenario.take_profit === null
-        ? "Kịch bản phụ không có take profit hợp lệ để đề xuất."
-        : "Ưu tiên dùng take profit của kịch bản phụ khi quản lý lệnh này.",
-  };
-}
-
-function asRecommendation(value: unknown): AiTradeRecommendation | null {
-  if (!value || typeof value !== "object") return null;
-  const candidate = value as Partial<AiTradeRecommendation>;
-  if (candidate.decision !== "TRADE" && candidate.decision !== "NO_TRADE") {
-    return null;
-  }
-  return value as AiTradeRecommendation;
-}
-
-function mt5SymbolFor(
-  config: ReturnType<typeof useRuntimeConfig>,
-  symbol: SymbolCode,
-): string {
-  return symbol === "EURUSD" ? config.mt5EurUsdSymbol : config.mt5Symbol;
-}
