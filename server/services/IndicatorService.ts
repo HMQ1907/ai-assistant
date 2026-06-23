@@ -29,7 +29,10 @@ export class IndicatorService {
       );
     }
 
-    const primary = timeframes.M15;
+    // Khung quyet dinh la H1 (intraday-swing). Cac field tom tat cap cao phan anh H1;
+    // M15 chi dung de canh diem vao, M5 chi de xac nhan khoanh khac bam lenh.
+    const primary = timeframes.H1;
+    const m15 = timeframes.M15;
     const h1 = timeframes.H1;
 
     return {
@@ -44,9 +47,9 @@ export class IndicatorService {
       nearestResistance: primary.marketStructure.nearestResistance,
       swingHigh: primary.marketStructure.swingHigh,
       swingLow: primary.marketStructure.swingLow,
-      trendM15: primary.trend,
+      trendM15: m15.trend,
       trendH1: h1.trend,
-      structureTrendM15: primary.structureTrend,
+      structureTrendM15: m15.structureTrend,
       structureTrendH1: h1.structureTrend,
       momentumScore: primary.momentumScore,
       volatilityScore: primary.volatilityScore,

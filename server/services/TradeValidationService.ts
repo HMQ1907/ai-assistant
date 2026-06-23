@@ -265,6 +265,13 @@ export class TradeValidationService {
       }
     }
 
+    const stopBufferReason = stopLossAtrBufferReason(
+      recommendation,
+      selectedSymbol,
+      entry,
+    );
+    if (stopBufferReason) reasons.push(stopBufferReason);
+
     reasons.push(...this.orderTypeReasons(recommendation, selectedSymbol, entry));
     const entryInteractionReason = pendingEntryInteractionReason(
       recommendation,
@@ -450,6 +457,36 @@ function floorToStep(value: number, step: number): number {
 
 function isFinitePositive(value: number | null | undefined): value is number {
   return value !== null && value !== undefined && Number.isFinite(value) && value > 0;
+}
+
+function stopLossAtrBufferReason(
+  recommendation: AiTradeRecommendation,
+  symbol: PayloadSymbol | undefined,
+  entry: number,
+): string | null {
+  if (
+    !symbol ||
+    recommendation.decision !== "TRADE" ||
+    recommendation.direction === "NONE" ||
+    !isFinitePositive(entry) ||
+    !isFinitePositive(recommendation.stop_loss)
+  ) {
+    return null;
+  }
+
+  const atrH1 = symbol.indicators.timeframes.H1.atr14;
+  if (!isFinitePositive(atrH1)) return null;
+
+  const distance = Math.abs(entry - recommendation.stop_loss);
+  const minDistance = atrH1 * tradingRules.minStopLossAtrMultiple;
+  if (distance >= minDistance) return null;
+
+  const digits = symbol.market.price >= 100 ? 2 : 5;
+  return (
+    `stop_loss chỉ cách entry ${distance.toFixed(digits)}, hẹp hơn mức tối thiểu ` +
+    `${minDistance.toFixed(digits)} (${tradingRules.minStopLossAtrMultiple}x ATR H1=${atrH1.toFixed(digits)}); ` +
+    "SL quá sát dễ bị noise/quét thanh khoản đánh bay, không được bóp SL để đạt risk_reward"
+  );
 }
 
 function pendingEntryInteractionReason(

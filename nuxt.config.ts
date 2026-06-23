@@ -49,6 +49,9 @@ export default defineNuxtConfig({
     tradeScannerMinWinProbability: Number(
       process.env.TRADE_SCANNER_MIN_WIN_PROBABILITY || 65,
     ),
+    tradeScannerDedupMinutes: Number(
+      process.env.TRADE_SCANNER_DEDUP_MINUTES || 45,
+    ),
   },
   typescript: {
     strict: true,

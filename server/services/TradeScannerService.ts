@@ -6,6 +6,8 @@ import { TelegramService } from "./TelegramService";
 
 export class TradeScannerService {
   private running = false;
+  private lastSignalSignature: string | null = null;
+  private lastSignalAt = 0;
 
   async scanOnce(): Promise<void> {
     if (this.running) return;
@@ -21,6 +23,11 @@ export class TradeScannerService {
       const reason = this.rejectReason(analysis.result);
       if (reason) {
         console.info(`[trade-scanner] silent: ${reason}`);
+        return;
+      }
+
+      if (this.isDuplicateSignal(analysis.result, config.tradeScannerDedupMinutes)) {
+        console.info("[trade-scanner] silent: duplicate of last setup within dedup window");
         return;
       }
 
@@ -70,6 +77,23 @@ export class TradeScannerService {
         telegramError instanceof Error ? telegramError.message : telegramError,
       );
     }
+  }
+
+  // Cung mot setup H1 song nhieu gio nen se hien ra o nhieu lan quet lien tiep.
+  // Chi bao mot lan trong cua so dedup; setup moi/doi (huong, entry, SL khac) thi bao lai.
+  private isDuplicateSignal(
+    recommendation: AiTradeRecommendation,
+    dedupMinutes: number,
+  ): boolean {
+    const signature = signalSignature(recommendation);
+    const now = Date.now();
+    const withinWindow =
+      this.lastSignalSignature === signature &&
+      now - this.lastSignalAt < dedupMinutes * 60_000;
+
+    this.lastSignalSignature = signature;
+    this.lastSignalAt = now;
+    return withinWindow;
   }
 
   private rejectReason(recommendation: AiTradeRecommendation): string | null {
@@ -137,6 +161,23 @@ export function isScannerSlot(date = new Date()): boolean {
   const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
   const second = Number(parts.find((part) => part.type === "second")?.value ?? 0);
   return second < 10 && minute % config.tradeScannerIntervalMinutes === 0;
+}
+
+function signalSignature(recommendation: AiTradeRecommendation): string {
+  const bucket = (value: number | null): string => {
+    if (value === null || !Number.isFinite(value)) return "x";
+    // Vang gom theo $1, cap nho (EURUSD) theo 0.0010 — chenh nho hon coi la cung setup.
+    return Math.abs(value) >= 100
+      ? String(Math.round(value))
+      : String(Math.round(value * 1000) / 1000);
+  };
+  return [
+    recommendation.direction,
+    recommendation.order_type,
+    bucket(recommendation.entry_zone?.from ?? null),
+    bucket(recommendation.entry_zone?.to ?? null),
+    bucket(recommendation.stop_loss),
+  ].join("|");
 }
 
 function formatTelegramAlert(recommendation: AiTradeRecommendation, historyId: string): string {

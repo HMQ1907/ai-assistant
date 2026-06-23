@@ -310,8 +310,9 @@ describe("trade validation", () => {
         order_type: "SELL_LIMIT",
         confidence: 80,
         entry_zone: { from: 4187, to: 4190 },
-        stop_loss: 4196.5,
-        take_profit: 4171,
+        // SL >= 0.8x ATR(H1)=22 cach entry 4188.5 (>= 17.6) de qua duoc gate dem ATR moi.
+        stop_loss: 4207,
+        take_profit: 4151,
         risk_reward: "1:2",
       }),
       testPayload,
