@@ -43,5 +43,5 @@ export default defineNitroPlugin((nitroApp) => {
     }
   });
 
-  console.info("[telegram-commands] enabled: /check <signal_id>");
+  console.info("[telegram-commands] enabled: /check or /check <signal_id>");
 });

@@ -1,4 +1,6 @@
 import type { AiOrderReview } from "../../types/ai";
+import type { ActiveMt5Order } from "../../types/trading";
+import { runActiveXauUsdOrderReviews } from "./ActiveOrderReviewRunner";
 import { runOrderReview } from "./OrderReviewRunner";
 import { TelegramService, type TelegramUpdate } from "./TelegramService";
 
@@ -41,6 +43,11 @@ export class TelegramCommandService {
     const command = parseCheckCommand(message.text);
     if (!command) return;
 
+    if (command.kind === "ACTIVE_XAUUSD") {
+      await this.reviewActiveXauUsdOrders(telegram);
+      return;
+    }
+
     await telegram.sendMessage(
       [
         "Đã nhận yêu cầu check lại tín hiệu.",
@@ -70,13 +77,90 @@ export class TelegramCommandService {
       );
     }
   }
+
+  private async reviewActiveXauUsdOrders(telegram: TelegramService): Promise<void> {
+    await telegram.sendMessage(
+      "Đã nhận /check. Mình đang đọc các pending order và position XAUUSD trực tiếp từ MT5, sau đó lấy dữ liệu thị trường mới nhất để AI review.",
+    );
+
+    try {
+      const output = await runActiveXauUsdOrderReviews();
+      if (output.reviews.length === 0) {
+        await telegram.sendMessage(
+          "Hiện không có pending order hoặc position XAUUSD nào đang active trên MT5.",
+        );
+        return;
+      }
+
+      await telegram.sendMessage(
+        `Tìm thấy ${output.reviews.length} lệnh/vị thế XAUUSD đang active. Bot sẽ gửi một bản review cho từng ticket.`,
+      );
+      for (const item of output.reviews) {
+        await telegram.sendMessage(
+          formatActiveOrderReviewTelegram(item.order, item.review),
+        );
+      }
+    } catch (error) {
+      await telegram.sendMessage(
+        [
+          "Không thể review các lệnh XAUUSD đang active.",
+          "",
+          `Lỗi: ${error instanceof Error ? error.message : String(error)}`,
+          "",
+          "Hãy kiểm tra MT5 terminal, npm run mt5:bridge, cấu hình Supabase/AI và kết nối mạng.",
+        ].join("\n"),
+      );
+    }
+  }
 }
 
-function parseCheckCommand(text: string): { id: string } | null {
+export type CheckCommand =
+  | { kind: "ACTIVE_XAUUSD" }
+  | { kind: "SIGNAL"; id: string };
+
+export function parseCheckCommand(text: string): CheckCommand | null {
   const trimmed = text.trim();
+  if (/^\/check(?:@\w+)?\s*$/i.test(trimmed)) {
+    return { kind: "ACTIVE_XAUUSD" };
+  }
   const match = trimmed.match(/^\/check(?:@\w+)?\s+["']?([0-9a-fA-F-]{8,})["']?\s*$/);
   if (!match?.[1]) return null;
-  return { id: match[1] };
+  return { kind: "SIGNAL", id: match[1] };
+}
+
+function formatActiveOrderReviewTelegram(
+  order: ActiveMt5Order,
+  review: AiOrderReview,
+): string {
+  const state = order.state === "PENDING" ? "PENDING ORDER" : "POSITION ĐÃ KHỚP";
+  return [
+    `Review XAUUSD #${order.ticket}`,
+    "",
+    `Trạng thái MT5: ${state}`,
+    `Loại: ${order.type} (${order.direction})`,
+    `Volume: ${order.volume}`,
+    `Entry: ${order.price_open}`,
+    `SL hiện tại: ${order.stop_loss ?? "Chưa đặt"}`,
+    `TP hiện tại: ${order.take_profit ?? "Chưa đặt"}`,
+    `Lợi nhuận hiện tại: ${order.profit ?? "Chưa áp dụng"}`,
+    `Giá XAUUSD lúc review: ${review.current_price}`,
+    "",
+    `Đề xuất: ${translateAction(review.recommended_action)}`,
+    `Độ tin cậy: ${review.confidence}%`,
+    `Tóm tắt: ${review.summary}`,
+    `Lý do: ${review.action_reason}`,
+    "",
+    `SL đề xuất: ${review.stop_loss_plan.suggested_stop_loss ?? "Giữ nguyên"}`,
+    `Lý do SL: ${review.stop_loss_plan.reason}`,
+    `TP đề xuất: ${review.take_profit_plan.suggested_take_profit ?? "Giữ nguyên"}`,
+    `Lý do TP: ${review.take_profit_plan.reason}`,
+    "",
+    "Rủi ro:",
+    ...listOrFallback(review.risk_warnings),
+    "",
+    `Nên kiểm tra lại sau: ${review.next_check_minutes} phút`,
+    "Bot chỉ review, không tự sửa/hủy/đóng lệnh.",
+  ].join("\n");
 }
 
 function formatOrderReviewTelegram(review: AiOrderReview, signalId: string): string {
