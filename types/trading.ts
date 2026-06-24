@@ -307,6 +307,56 @@ export interface AnalysisHistoryRecord {
   order_type: string | null;
   order_state: OrderState;
   placed_at: string | null;
+  auto_outcome: SignalAutoOutcome;
+  auto_filled: boolean;
+  auto_filled_at: string | null;
+  auto_first_hit: SignalFirstHit;
+  auto_mae: number | null;
+  auto_mfe: number | null;
+  auto_swept_then_reversed: boolean;
+  auto_resolved_at: string | null;
+  auto_evaluated_at: string | null;
+}
+
+// PENDING = chua khop va con trong cua so cho khop; NOT_FILLED = het han ma khong khop;
+// WIN/LOSS = da khop va TP/SL toi truoc; OPEN = da khop, chua cham SL/TP; EXPIRED = khop nhung
+// het cua so giu lenh ma khong cham SL/TP.
+export type SignalAutoOutcome =
+  | "PENDING"
+  | "NOT_FILLED"
+  | "WIN"
+  | "LOSS"
+  | "OPEN"
+  | "EXPIRED";
+
+export type SignalFirstHit = "SL" | "TP" | null;
+
+export interface SignalOutcomeEvaluation {
+  outcome: SignalAutoOutcome;
+  filled: boolean;
+  filledAt: string | null;
+  firstHit: SignalFirstHit;
+  mae: number | null;
+  mfe: number | null;
+  sweptThenReversed: boolean;
+  resolvedAt: string | null;
+}
+
+export interface ExecutionStats {
+  tracked: number;
+  filled: number;
+  notFilled: number;
+  fillRate: number;
+  wins: number;
+  losses: number;
+  open: number;
+  expired: number;
+  winRate: number;
+  sweptThenReversed: number;
+  sweptThenReversedRate: number;
+  avgMae: number;
+  avgMfe: number;
+  avgMaeToStopRatio: number;
 }
 
 export type ActiveMt5OrderState = "PENDING" | "FILLED";
@@ -353,4 +403,5 @@ export interface PerformanceStats extends PerformanceStatsSummary {
   tradeAnalyses: PerformanceStatsSummary;
   bestSymbols: SymbolPerformance[];
   worstSymbols: SymbolPerformance[];
+  execution: ExecutionStats;
 }

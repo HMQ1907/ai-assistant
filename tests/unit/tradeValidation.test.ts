@@ -294,6 +294,28 @@ describe("trade validation", () => {
     );
   });
 
+  it("rejects a BUY that goes against a clear H4 downtrend bias", () => {
+    const testPayload = payloadWithXauMarket(4175, 11);
+    testPayload.symbols[0]!.indicators.timeframes.H4.trend = "DOWNTREND";
+
+    const result = new TradeValidationService().validate(
+      recommendation({
+        decision: "TRADE",
+        direction: "BUY",
+        order_type: "MARKET",
+        confidence: 80,
+        entry_zone: { from: 4175, to: 4175 },
+        stop_loss: 4150,
+        take_profit: 4220,
+        risk_reward: "1:2",
+      }),
+      testPayload,
+    );
+
+    expect(result.decision).toBe("NO_TRADE");
+    expect(result.trade_validation_failures?.join(" ")).toContain("bias H4");
+  });
+
   it("keeps a farther pending entry when recent candles rotate toward that zone", () => {
     const testPayload = payloadWithXauMarket(4175, 11);
     testPayload.symbols[0]!.market.recent_candles.M5 = [

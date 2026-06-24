@@ -91,3 +91,33 @@ end $$;
 
 create index if not exists analysis_history_mt5_ticket_idx
   on analysis_history (mt5_ticket);
+
+-- Cot do luong tu dong: he thong tu doi chieu duong di gia (nen M5) sau moi tin hieu
+-- de biet entry co khop khong, SL/TP cai toi truoc, MAE/MFE, va co bi quet SL roi dao chieu khong.
+alter table analysis_history
+  add column if not exists auto_outcome text not null default 'PENDING',
+  add column if not exists auto_filled boolean not null default false,
+  add column if not exists auto_filled_at timestamptz,
+  add column if not exists auto_first_hit text,
+  add column if not exists auto_mae numeric,
+  add column if not exists auto_mfe numeric,
+  add column if not exists auto_swept_then_reversed boolean not null default false,
+  add column if not exists auto_resolved_at timestamptz,
+  add column if not exists auto_evaluated_at timestamptz;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'analysis_history_auto_outcome_check'
+      and conrelid = 'analysis_history'::regclass
+  ) then
+    alter table analysis_history
+      add constraint analysis_history_auto_outcome_check
+      check (auto_outcome in ('PENDING', 'NOT_FILLED', 'WIN', 'LOSS', 'OPEN', 'EXPIRED'));
+  end if;
+end $$;
+
+create index if not exists analysis_history_auto_outcome_idx
+  on analysis_history (auto_outcome);

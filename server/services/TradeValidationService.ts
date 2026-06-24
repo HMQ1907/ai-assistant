@@ -265,6 +265,9 @@ export class TradeValidationService {
       }
     }
 
+    const biasReason = h4BiasConflictReason(recommendation, selectedSymbol);
+    if (biasReason) reasons.push(biasReason);
+
     const stopBufferReason = stopLossAtrBufferReason(
       recommendation,
       selectedSymbol,
@@ -457,6 +460,33 @@ function floorToStep(value: number, step: number): number {
 
 function isFinitePositive(value: number | null | undefined): value is number {
   return value !== null && value !== undefined && Number.isFinite(value) && value > 0;
+}
+
+// Method buoc 1: chi trade thuan bias H4. Chan lenh nguoc han nhan H4 ro rang
+// (ca EMA trend lan structureTrend deu nguoc). H4 sideway/mixed thi cho qua.
+function h4BiasConflictReason(
+  recommendation: AiTradeRecommendation,
+  symbol: PayloadSymbol | undefined,
+): string | null {
+  if (
+    !symbol ||
+    recommendation.decision !== "TRADE" ||
+    recommendation.direction === "NONE"
+  ) {
+    return null;
+  }
+
+  const h4 = symbol.indicators.timeframes.H4;
+  const opposeForBuy = h4.trend === "DOWNTREND" || h4.structureTrend === "DOWNTREND";
+  const opposeForSell = h4.trend === "UPTREND" || h4.structureTrend === "UPTREND";
+
+  if (recommendation.direction === "BUY" && opposeForBuy) {
+    return "BUY ngược bias H4 (H4 đang giảm theo EMA hoặc cấu trúc); method chỉ cho trade thuận H4";
+  }
+  if (recommendation.direction === "SELL" && opposeForSell) {
+    return "SELL ngược bias H4 (H4 đang tăng theo EMA hoặc cấu trúc); method chỉ cho trade thuận H4";
+  }
+  return null;
 }
 
 function stopLossAtrBufferReason(

@@ -4,9 +4,13 @@ import type { AiTradeRecommendation } from "../../types/ai";
 import type {
   AnalysisHistoryRecord,
   AnalysisPayload,
+  ExecutionStats,
   OrderState,
   PerformanceStats,
   ResultStatus,
+  SignalAutoOutcome,
+  SignalFirstHit,
+  SignalOutcomeEvaluation,
   SymbolPerformance,
 } from "../../types/trading";
 
@@ -50,6 +54,15 @@ interface AnalysisHistoryRow {
   order_type: string | null;
   order_state: string | null;
   placed_at: string | null;
+  auto_outcome: string | null;
+  auto_filled: boolean | null;
+  auto_filled_at: string | null;
+  auto_first_hit: string | null;
+  auto_mae: number | null;
+  auto_mfe: number | null;
+  auto_swept_then_reversed: boolean | null;
+  auto_resolved_at: string | null;
+  auto_evaluated_at: string | null;
 }
 
 export interface HistoryUpdateInput {
@@ -199,6 +212,45 @@ export class AnalysisHistoryService {
     return toRecord(data);
   }
 
+  // Cac tin hieu TRADE con dang theo doi (chua ket thuc) trong 24h gan day,
+  // de tracker doi chieu gia va cap nhat ket qua thuc te.
+  async listTrackable(): Promise<AnalysisHistoryRecord[]> {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await this.supabase
+      .from(tableName)
+      .select("*")
+      .eq("decision", "TRADE")
+      .in("auto_outcome", ["PENDING", "OPEN"])
+      .gte("created_at", since)
+      .order("created_at", { ascending: true })
+      .limit(200);
+    if (error)
+      throw new Error(`Không tải được tín hiệu cần theo dõi: ${error.message}`);
+    return (data ?? []).map(toRecord);
+  }
+
+  async updateAutoOutcome(
+    id: string,
+    evaluation: SignalOutcomeEvaluation,
+  ): Promise<void> {
+    const { error } = await this.supabase
+      .from(tableName)
+      .update({
+        auto_outcome: evaluation.outcome,
+        auto_filled: evaluation.filled,
+        auto_filled_at: evaluation.filledAt,
+        auto_first_hit: evaluation.firstHit,
+        auto_mae: evaluation.mae,
+        auto_mfe: evaluation.mfe,
+        auto_swept_then_reversed: evaluation.sweptThenReversed,
+        auto_resolved_at: evaluation.resolvedAt,
+        auto_evaluated_at: new Date().toISOString(),
+      })
+      .eq("id", id);
+    if (error)
+      throw new Error(`Không cập nhật được kết quả tự động: ${error.message}`);
+  }
+
   async stats(): Promise<PerformanceStats> {
     const { data, error } = await this.supabase.from(tableName).select("*");
     if (error)
@@ -215,13 +267,65 @@ export class AnalysisHistoryService {
       tradeAnalyses,
       bestSymbols: symbolPerformance(tradeRecords, "best"),
       worstSymbols: symbolPerformance(tradeRecords, "worst"),
+      execution: executionStats(tradeRecords),
     };
   }
 }
 
+// Thong ke chat luong THUC THI tu du lieu tracker tu dong (khong phu thuoc nguoi dung nhap).
+function executionStats(records: AnalysisHistoryRecord[]): ExecutionStats {
+  const tracked = records.filter(
+    (record) => record.auto_outcome !== "PENDING",
+  );
+  const filled = tracked.filter((record) => record.auto_filled);
+  const notFilled = tracked.filter(
+    (record) => record.auto_outcome === "NOT_FILLED",
+  );
+  const wins = tracked.filter((record) => record.auto_outcome === "WIN");
+  const losses = tracked.filter((record) => record.auto_outcome === "LOSS");
+  const open = tracked.filter((record) => record.auto_outcome === "OPEN");
+  const expired = tracked.filter((record) => record.auto_outcome === "EXPIRED");
+  const swept = losses.filter((record) => record.auto_swept_then_reversed);
+
+  const maeValues = filled
+    .map((record) => record.auto_mae)
+    .filter((value): value is number => value !== null);
+  const mfeValues = filled
+    .map((record) => record.auto_mfe)
+    .filter((value): value is number => value !== null);
+  const maeToStopRatios = filled
+    .map((record) => {
+      const entryMid = (record.entry_from + record.entry_to) / 2;
+      const stopDistance = Math.abs(entryMid - record.stop_loss);
+      if (record.auto_mae === null || stopDistance <= 0) return null;
+      return record.auto_mae / stopDistance;
+    })
+    .filter((value): value is number => value !== null);
+
+  return {
+    tracked: tracked.length,
+    filled: filled.length,
+    notFilled: notFilled.length,
+    fillRate: percentage(filled.length, tracked.length),
+    wins: wins.length,
+    losses: losses.length,
+    open: open.length,
+    expired: expired.length,
+    winRate: percentage(wins.length, wins.length + losses.length),
+    sweptThenReversed: swept.length,
+    sweptThenReversedRate: percentage(swept.length, losses.length),
+    avgMae: average(maeValues),
+    avgMfe: average(mfeValues),
+    avgMaeToStopRatio: average(maeToStopRatios),
+  };
+}
+
 function summarizeRecords(
   records: AnalysisHistoryRecord[],
-): Omit<PerformanceStats, "allAnalyses" | "tradeAnalyses" | "bestSymbols" | "worstSymbols"> {
+): Omit<
+  PerformanceStats,
+  "allAnalyses" | "tradeAnalyses" | "bestSymbols" | "worstSymbols" | "execution"
+> {
     const recordsWithEffectiveStatus = records.map((record) => ({
       record,
       resultStatus: effectiveResultStatus(record),
@@ -301,7 +405,33 @@ function toRecord(row: unknown): AnalysisHistoryRecord {
     order_type: value.order_type ?? null,
     order_state: normalizeOrderState(value.order_state),
     placed_at: value.placed_at ?? null,
+    auto_outcome: normalizeAutoOutcome(value.auto_outcome),
+    auto_filled: value.auto_filled === true,
+    auto_filled_at: value.auto_filled_at ?? null,
+    auto_first_hit: normalizeFirstHit(value.auto_first_hit),
+    auto_mae: nullableNumber(value.auto_mae),
+    auto_mfe: nullableNumber(value.auto_mfe),
+    auto_swept_then_reversed: value.auto_swept_then_reversed === true,
+    auto_resolved_at: value.auto_resolved_at ?? null,
+    auto_evaluated_at: value.auto_evaluated_at ?? null,
   };
+}
+
+function normalizeAutoOutcome(value: string | null): SignalAutoOutcome {
+  if (
+    value === "NOT_FILLED" ||
+    value === "WIN" ||
+    value === "LOSS" ||
+    value === "OPEN" ||
+    value === "EXPIRED"
+  ) {
+    return value;
+  }
+  return "PENDING";
+}
+
+function normalizeFirstHit(value: string | null): SignalFirstHit {
+  return value === "SL" || value === "TP" ? value : null;
 }
 
 function normalizeOrderState(value: string | null): OrderState {

@@ -1,6 +1,9 @@
-import type { AiTradeRecommendation } from "../../types/ai";
+import type { AiOrderReview, AiTradeRecommendation, OrderReviewAction } from "../../types/ai";
+import type { ActiveMt5Order } from "../../types/trading";
 import { tradingRules } from "../config/tradingRules";
 import { parseRiskReward } from "../utils/risk";
+import { runActiveXauUsdOrderReviews } from "./ActiveOrderReviewRunner";
+import { Mt5OrderService } from "./Mt5OrderService";
 import { runTradingAnalysis } from "./TradingAnalysisRunner";
 import { TelegramService } from "./TelegramService";
 
@@ -8,6 +11,10 @@ export class TradeScannerService {
   private running = false;
   private lastSignalSignature: string | null = null;
   private lastSignalAt = 0;
+  // Focus mode: khi dang co lenh tren MT5, theo doi lenh do thay vi quet tin hieu moi.
+  private focusLastReviewAt = 0;
+  private focusNextCheckMin = 0;
+  private readonly focusSentSignatures = new Map<number, string>();
 
   async scanOnce(): Promise<void> {
     if (this.running) return;
@@ -15,6 +22,34 @@ export class TradeScannerService {
 
     try {
       const config = useRuntimeConfig();
+
+      // 1) Co lenh XAUUSD dang cho/dang mo tren MT5 chua? (probe re, khong goi AI)
+      let activeOrders: ActiveMt5Order[] = [];
+      try {
+        activeOrders = await new Mt5OrderService({
+          bridgeUrl: config.mt5BridgeUrl,
+          symbol: config.mt5Symbol,
+        }).getActiveOrders();
+      } catch (error) {
+        console.warn(
+          "[trade-scanner] focus probe failed, fallback to scan:",
+          error instanceof Error ? error.message : error,
+        );
+      }
+
+      // 2) Co lenh -> focus theo doi lenh do, KHONG quet tin hieu moi (chay ca ngoai khung gio).
+      if (activeOrders.length > 0) {
+        await this.monitorActiveOrders(config);
+        return;
+      }
+      this.resetFocus();
+
+      // 3) Khong co lenh: chi quet tim setup moi trong khung gio cho phep.
+      if (!isInsideTradeScannerWindow()) {
+        console.info("[trade-scanner] silent: ngoài khung giờ quét");
+        return;
+      }
+
       const analysis = await runTradingAnalysis({
         symbol: "XAUUSD",
         accountSizeUsd: config.accountSizeUsd,
@@ -77,6 +112,54 @@ export class TradeScannerService {
         telegramError instanceof Error ? telegramError.message : telegramError,
       );
     }
+  }
+
+  // Focus mode: review cac lenh dang active, day Telegram "nen lam gi tiep".
+  // Gian nhip goi AI theo next_check_minutes de tiet kiem quota.
+  private async monitorActiveOrders(config: {
+    telegramBotToken: string;
+    telegramChatId: string;
+  }): Promise<void> {
+    const now = Date.now();
+    if (
+      this.focusLastReviewAt > 0 &&
+      now - this.focusLastReviewAt < this.focusNextCheckMin * 60_000
+    ) {
+      console.info("[trade-scanner] focus: chưa tới giờ review lại lệnh");
+      return;
+    }
+
+    const { reviews } = await runActiveXauUsdOrderReviews();
+    if (reviews.length === 0) return;
+
+    this.focusLastReviewAt = now;
+    this.focusNextCheckMin = Math.max(
+      5,
+      Math.min(...reviews.map((item) => item.review.next_check_minutes || 15)),
+    );
+
+    const telegram = new TelegramService({
+      botToken: config.telegramBotToken,
+      chatId: config.telegramChatId,
+    });
+
+    for (const item of reviews) {
+      const signature = reviewSignature(item.review);
+      const actionable = isActionableReview(item.review.recommended_action);
+      // Khuyen nghi can hanh dong -> luon bao. Khong thi chi bao khi loi khuyen DOI.
+      if (!actionable && this.focusSentSignatures.get(item.order.ticket) === signature) {
+        continue;
+      }
+      this.focusSentSignatures.set(item.order.ticket, signature);
+      await telegram.sendMessage(formatActiveOrderAlert(item.order, item.review));
+    }
+    console.info(`[trade-scanner] focus: reviewed ${reviews.length} active order(s)`);
+  }
+
+  private resetFocus(): void {
+    this.focusLastReviewAt = 0;
+    this.focusNextCheckMin = 0;
+    this.focusSentSignatures.clear();
   }
 
   // Cung mot setup H1 song nhieu gio nen se hien ra o nhieu lan quet lien tiep.
@@ -161,6 +244,71 @@ export function isScannerSlot(date = new Date()): boolean {
   const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
   const second = Number(parts.find((part) => part.type === "second")?.value ?? 0);
   return second < 10 && minute % config.tradeScannerIntervalMinutes === 0;
+}
+
+const ACTION_LABEL: Record<OrderReviewAction, string> = {
+  KEEP_ORDER: "Giữ nguyên lệnh",
+  CANCEL_ORDER: "HỦY lệnh chờ",
+  MOVE_SL: "Dời Stop Loss",
+  MOVE_TP: "Dời Take Profit",
+  MOVE_SL_TP: "Dời cả SL và TP",
+  WAIT: "Chờ thêm",
+  CLOSE_MANUALLY: "ĐÓNG lệnh thủ công",
+  TRADE_COMPLETED: "Lệnh đã kết thúc",
+};
+
+const STATUS_LABEL: Record<string, string> = {
+  LIKELY_NOT_FILLED: "Nhiều khả năng chưa khớp",
+  LIKELY_FILLED: "Nhiều khả năng đã khớp",
+  ALREADY_INVALIDATED: "Setup đã bị vô hiệu",
+  UNCLEAR: "Chưa rõ",
+};
+
+function isActionableReview(action: OrderReviewAction): boolean {
+  return (
+    action === "CANCEL_ORDER" ||
+    action === "CLOSE_MANUALLY" ||
+    action === "MOVE_SL" ||
+    action === "MOVE_TP" ||
+    action === "MOVE_SL_TP" ||
+    action === "TRADE_COMPLETED"
+  );
+}
+
+function reviewSignature(review: AiOrderReview): string {
+  return [
+    review.recommended_action,
+    review.order_status_assessment,
+    review.stop_loss_plan.suggested_stop_loss ?? "x",
+    review.take_profit_plan.suggested_take_profit ?? "x",
+  ].join("|");
+}
+
+function formatActiveOrderAlert(order: ActiveMt5Order, review: AiOrderReview): string {
+  const lines = [
+    `XAUUSD theo dõi lệnh #${order.ticket}`,
+    "",
+    `${order.direction} ${order.type} @ ${order.price_open}`,
+    `Trạng thái: ${STATUS_LABEL[review.order_status_assessment] ?? review.order_status_assessment}`,
+    `Khuyến nghị: ${ACTION_LABEL[review.recommended_action] ?? review.recommended_action}`,
+    "",
+    review.action_reason || review.summary,
+  ];
+
+  if (!review.stop_loss_plan.keep_current && review.stop_loss_plan.suggested_stop_loss !== null) {
+    lines.push(`SL đề xuất: ${review.stop_loss_plan.suggested_stop_loss} (${review.stop_loss_plan.reason})`);
+  }
+  if (!review.take_profit_plan.keep_current && review.take_profit_plan.suggested_take_profit !== null) {
+    lines.push(`TP đề xuất: ${review.take_profit_plan.suggested_take_profit} (${review.take_profit_plan.reason})`);
+  }
+  if (review.cancellation_conditions.length > 0) {
+    lines.push("", "Điều kiện hủy:");
+    lines.push(...review.cancellation_conditions.map((item) => `- ${item}`));
+  }
+
+  lines.push("", `Check lại sau: ${review.next_check_minutes} phút`);
+  lines.push("Đây là theo dõi tự động lệnh bạn đang ôm, không phải lệnh tự động.");
+  return lines.join("\n");
 }
 
 function signalSignature(recommendation: AiTradeRecommendation): string {
