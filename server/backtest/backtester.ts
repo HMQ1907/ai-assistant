@@ -55,9 +55,10 @@ export interface BacktestResult {
  */
 export function runBacktest(
   symbol: string,
-  h1: Candle[],
-  h4: Candle[],
+  entryCandles: Candle[],
+  biasCandles: Candle[],
   config: BacktestConfig = defaultBacktestConfig,
+  intermediateCandles?: Candle[],
 ): BacktestResult {
   const trades: BacktestTrade[] = [];
   let open: {
@@ -70,10 +71,11 @@ export function runBacktest(
     risk: number;
   } | null = null;
 
-  let h4Idx = 0;
+  let biasIdx = 0;
+  let interIdx = 0;
 
-  for (let i = config.startIndex; i < h1.length; i += 1) {
-    const bar = h1[i];
+  for (let i = config.startIndex; i < entryCandles.length; i += 1) {
+    const bar = entryCandles[i];
     if (!bar) continue;
 
     if (open) {
@@ -105,12 +107,29 @@ export function runBacktest(
       continue;
     }
 
-    // Flat: căn H4 tới thời điểm nến H1 hiện tại rồi đánh giá tín hiệu.
-    while (h4Idx + 1 < h4.length && (h4[h4Idx + 1]?.time ?? "") <= bar.time) {
-      h4Idx += 1;
+    // Flat: căn bias (và intermediate) tới thời điểm nến entry hiện tại rồi đánh giá.
+    while (biasIdx + 1 < biasCandles.length && (biasCandles[biasIdx + 1]?.time ?? "") <= bar.time) {
+      biasIdx += 1;
     }
-    const h4Slice = h4.slice(0, h4Idx + 1);
-    const signal = evaluateRuleSignal(h1.slice(0, i + 1), h4Slice, config.strategy);
+    const biasSlice = biasCandles.slice(0, biasIdx + 1);
+
+    let interSlice: Candle[] | undefined;
+    if (intermediateCandles && intermediateCandles.length > 0) {
+      while (
+        interIdx + 1 < intermediateCandles.length &&
+        (intermediateCandles[interIdx + 1]?.time ?? "") <= bar.time
+      ) {
+        interIdx += 1;
+      }
+      interSlice = intermediateCandles.slice(0, interIdx + 1);
+    }
+
+    const signal = evaluateRuleSignal(
+      entryCandles.slice(0, i + 1),
+      biasSlice,
+      config.strategy,
+      interSlice,
+    );
     if (!signal) continue;
 
     const risk =
@@ -130,7 +149,7 @@ export function runBacktest(
     };
   }
 
-  return summarize(symbol, h1.length, trades);
+  return summarize(symbol, entryCandles.length, trades);
 }
 
 function resolveBar(

@@ -54,86 +54,102 @@ export interface RuleSignal {
   reason: string;
 }
 
+/**
+ * @param entry  Khung vào lệnh (H1, hoặc M15).
+ * @param bias   Khung xu hướng lớn (H4).
+ * @param intermediate  Khung trung gian phải đồng pha (vd H1 khi entry là M15). Tùy chọn.
+ */
 export function evaluateRuleSignal(
-  h1: Candle[],
-  h4: Candle[],
+  entry: Candle[],
+  bias: Candle[],
   config: RuleStrategyConfig = defaultRuleStrategyConfig,
+  intermediate?: Candle[],
 ): RuleSignal | null {
-  if (h1.length < 60 || h4.length < 200) return null;
+  if (entry.length < 60 || bias.length < 200) return null;
 
-  // Bước 1: BIAS H4.
-  const h4Bias =
+  // Bước 1: BIAS khung lớn.
+  const biasDir =
     config.biasMode === "STRUCTURE"
-      ? structureTrend(h4, 20)
-      : trend(h4.map((candle) => candle.close));
-  if (h4Bias !== "UPTREND" && h4Bias !== "DOWNTREND") return null;
+      ? structureTrend(bias, 20)
+      : trend(bias.map((candle) => candle.close));
+  if (biasDir !== "UPTREND" && biasDir !== "DOWNTREND") return null;
 
-  const closes = h1.map((candle) => candle.close);
+  // Khung trung gian (H1 khi entry là M15) phải đồng pha với bias.
+  if (intermediate && intermediate.length >= config.emaSlow) {
+    const ic = intermediate.map((candle) => candle.close);
+    const ief = ema(ic, config.emaFast);
+    const ies = ema(ic, config.emaSlow);
+    if (ief === null || ies === null) return null;
+    const aligned = biasDir === "UPTREND" ? ief > ies : ief < ies;
+    if (!aligned) return null;
+  }
+
+  const closes = entry.map((candle) => candle.close);
   const emaFast = ema(closes, config.emaFast);
   const emaSlow = ema(closes, config.emaSlow);
-  const atrH1 = atr(h1, config.atrPeriod);
-  if (emaFast === null || emaSlow === null || atrH1 === null || atrH1 <= 0) {
+  const atrV = atr(entry, config.atrPeriod);
+  if (emaFast === null || emaSlow === null || atrV === null || atrV <= 0) {
     return null;
   }
-  const rsiH1 = config.useRsiFilter ? rsi(closes) : null;
-  if (config.useRsiFilter && rsiH1 === null) return null;
+  const rsiV = config.useRsiFilter ? rsi(closes) : null;
+  if (config.useRsiFilter && rsiV === null) return null;
 
-  const last = h1.at(-1);
-  const prev = h1.at(-2);
+  const last = entry.at(-1);
+  const prev = entry.at(-2);
   if (!last || !prev) return null;
 
-  const buffer = atrH1 * config.atrBufferMult;
-  const window = h1.slice(-(config.pullbackLookback + 1), -1);
+  const buffer = atrV * config.atrBufferMult;
+  const window = entry.slice(-(config.pullbackLookback + 1), -1);
   const tol = config.pullbackTouchTolerancePct;
 
-  if (h4Bias === "UPTREND") {
-    const h1Up = emaFast > emaSlow;
+  if (biasDir === "UPTREND") {
+    const up = emaFast > emaSlow;
     const pulledBack = window.some((candle) => candle.low <= emaFast * (1 + tol));
     const confirmed =
       config.confirmMode === "ENGULFING"
         ? isBullishEngulfing(prev, last) && last.close > emaFast
         : last.close > last.open && last.close > emaFast && last.close > prev.high;
-    const rsiOk = !config.useRsiFilter || (rsiH1 !== null && rsiH1 < config.rsiMaxForBuy);
-    if (!h1Up || !pulledBack || !confirmed || !rsiOk) return null;
+    const rsiOk = !config.useRsiFilter || (rsiV !== null && rsiV < config.rsiMaxForBuy);
+    if (!up || !pulledBack || !confirmed || !rsiOk) return null;
 
     const swingLow = Math.min(
-      ...h1.slice(-config.swingLookback).map((candle) => candle.low),
+      ...entry.slice(-config.swingLookback).map((candle) => candle.low),
     );
-    const entry = last.close;
+    const px = last.close;
     const stopLoss = round(swingLow - buffer);
-    const risk = entry - stopLoss;
+    const risk = px - stopLoss;
     if (risk <= 0) return null;
     return {
       direction: "BUY",
-      entry: round(entry),
+      entry: round(px),
       stopLoss,
-      takeProfit: round(entry + config.rrTarget * risk),
-      reason: "H4 up + H1 pullback EMA + xác nhận tăng",
+      takeProfit: round(px + config.rrTarget * risk),
+      reason: "bias up + pullback EMA + xác nhận tăng",
     };
   }
 
-  const h1Down = emaFast < emaSlow;
+  const down = emaFast < emaSlow;
   const pulledBack = window.some((candle) => candle.high >= emaFast * (1 - tol));
   const confirmed =
     config.confirmMode === "ENGULFING"
       ? isBearishEngulfing(prev, last) && last.close < emaFast
       : last.close < last.open && last.close < emaFast && last.close < prev.low;
-  const rsiOk = !config.useRsiFilter || (rsiH1 !== null && rsiH1 > config.rsiMinForSell);
-  if (!h1Down || !pulledBack || !confirmed || !rsiOk) return null;
+  const rsiOk = !config.useRsiFilter || (rsiV !== null && rsiV > config.rsiMinForSell);
+  if (!down || !pulledBack || !confirmed || !rsiOk) return null;
 
   const swingHigh = Math.max(
-    ...h1.slice(-config.swingLookback).map((candle) => candle.high),
+    ...entry.slice(-config.swingLookback).map((candle) => candle.high),
   );
-  const entry = last.close;
+  const px = last.close;
   const stopLoss = round(swingHigh + buffer);
-  const risk = stopLoss - entry;
+  const risk = stopLoss - px;
   if (risk <= 0) return null;
   return {
     direction: "SELL",
-    entry: round(entry),
+    entry: round(px),
     stopLoss,
-    takeProfit: round(entry - config.rrTarget * risk),
-    reason: "H4 down + H1 pullback EMA + xác nhận giảm",
+    takeProfit: round(px - config.rrTarget * risk),
+    reason: "bias down + pullback EMA + xác nhận giảm",
   };
 }
 
@@ -144,20 +160,20 @@ export function evaluateRuleSignal(
  *   +1 EMA H1 xếp tầng đầy đủ thuận hướng (20>50>200 hoặc ngược).
  */
 export function convictionScore(
-  h1: Candle[],
-  h4: Candle[],
+  entry: Candle[],
+  bias: Candle[],
   signal: RuleSignal,
   config: RuleStrategyConfig = defaultRuleStrategyConfig,
 ): number {
   let score = 0;
-  const closes = h1.map((candle) => candle.close);
-  const emaTrend = trend(h4.map((candle) => candle.close));
-  const structTrend = structureTrend(h4, 20);
+  const closes = entry.map((candle) => candle.close);
+  const emaTrend = trend(bias.map((candle) => candle.close));
+  const structTrend = structureTrend(bias, 20);
   const wantUp = signal.direction === "BUY";
   const biasLabel = wantUp ? "UPTREND" : "DOWNTREND";
   if (emaTrend === biasLabel && structTrend === biasLabel) score += 1;
 
-  const last = h1.at(-1);
+  const last = entry.at(-1);
   if (last) {
     const range = last.high - last.low;
     const bodyRatio = range > 0 ? Math.abs(last.close - last.open) / range : 0;

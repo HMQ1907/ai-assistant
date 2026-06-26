@@ -63,6 +63,8 @@ export default defineNuxtConfig({
     autoMaxDailyLossPercent: Number(process.env.AUTO_MAX_DAILY_LOSS_PERCENT || 10),
     autoMaxHoldHours: Number(process.env.AUTO_MAX_HOLD_HOURS || 72),
     autoUseAiVetoOnBump: process.env.AUTO_AI_VETO !== "false",
+    // Cho phép vào lệnh trên M15 (trong trend H1, bias H4) để có nhiều lệnh hơn.
+    autoUseM15: process.env.AUTO_USE_M15 !== "false",
   },
   typescript: {
     strict: true,

@@ -14,6 +14,7 @@ import { MarketDataService } from "./MarketDataService";
 import { Mt5OrderService } from "./Mt5OrderService";
 import { OpportunityPayloadBuilder } from "./OpportunityPayloadBuilder";
 import { SupabaseService } from "./SupabaseService";
+import { TelegramService } from "./TelegramService";
 import { isInsideTradeScannerWindow } from "./TradeScannerService";
 
 /**
@@ -25,10 +26,13 @@ import { isInsideTradeScannerWindow } from "./TradeScannerService";
 export class AutoTradeRunner {
   private running = false;
   private lastEvaluatedH1 = "";
+  private lastEvaluatedM15 = "";
   private dayKey = "";
   private dayBaselineEquity = 0;
   private tradesToday = 0;
   private haltedForDay = false;
+  private lastErrorKey = "";
+  private lastErrorNotifyAt = 0;
 
   async runOnce(): Promise<void> {
     if (this.running) return;
@@ -45,6 +49,11 @@ export class AutoTradeRunner {
       this.rollDay(config.tradeScannerTimezone, account.equity);
       if (!account.tradeAllowed) {
         console.warn("[auto-bot] AutoTrading đang TẮT trong MT5 — bật Algo Trading để đặt lệnh.");
+        await this.notifyError(
+          config,
+          "algo-off",
+          "AutoTrading đang TẮT trong MT5 → bot KHÔNG đặt được lệnh. Hãy bật nút Algo Trading.",
+        );
         return;
       }
       if (this.haltedForDay) {
@@ -95,20 +104,44 @@ export class AutoTradeRunner {
 
       const h1 = snapshot.candles.H1;
       const h4 = snapshot.candles.H4;
-      const latestH1 = h1.at(-1)?.time ?? "";
-      if (!latestH1 || latestH1 === this.lastEvaluatedH1) return; // chỉ eval 1 lần/nến H1
-      this.lastEvaluatedH1 = latestH1;
-
+      const m15 = snapshot.candles.M15;
       const strategy = {
         ...defaultRuleStrategyConfig,
         rrTarget: config.autoRrTarget,
       };
-      const signal = evaluateRuleSignal(h1, h4, strategy);
+
+      // Tìm setup: ưu tiên H1 (mỗi nến H1 mới); nếu không có thì thử M15 (trong trend H1, bias H4).
+      let signal: RuleSignal | null = null;
+      let entryCandles = h1;
+      let entryTf = "H1";
+
+      const latestH1 = h1.at(-1)?.time ?? "";
+      if (latestH1 && latestH1 !== this.lastEvaluatedH1) {
+        this.lastEvaluatedH1 = latestH1;
+        const s = evaluateRuleSignal(h1, h4, strategy);
+        if (s) {
+          signal = s;
+          entryCandles = h1;
+          entryTf = "H1";
+        }
+      }
+      if (!signal && config.autoUseM15) {
+        const latestM15 = m15.at(-1)?.time ?? "";
+        if (latestM15 && latestM15 !== this.lastEvaluatedM15) {
+          this.lastEvaluatedM15 = latestM15;
+          const s = evaluateRuleSignal(m15, h4, strategy, h1); // entry M15, bias H4, trung gian H1
+          if (s) {
+            signal = s;
+            entryCandles = m15;
+            entryTf = "M15";
+          }
+        }
+      }
       if (!signal) return;
 
-      // 2 mức lot theo độ đẹp tất định: rất đẹp (conviction cao) -> veryGood, còn lại -> good.
-      const conviction = convictionScore(h1, h4, signal, strategy);
-      let lot =
+      // 2 mức lot theo độ đẹp tất định (trên khung vào lệnh).
+      const conviction = convictionScore(entryCandles, h4, signal, strategy);
+      const lot =
         conviction >= config.autoVeryGoodMinConviction
           ? config.autoLotVeryGood
           : config.autoLotGood;
@@ -121,8 +154,9 @@ export class AutoTradeRunner {
         config.accountSizeUsd,
       );
 
-      // AI chỉ VETO khi ở mức lot cao (rất đẹp): nếu LLM không TRADE/khác hướng -> hạ về lot đẹp.
-      if (lot > config.autoLotGood && config.autoUseAiVetoOnBump) {
+      // AI recheck TRƯỚC MỖI lệnh: chỉ vào khi AI đồng thuận (TRADE + cùng hướng).
+      // AI từ chối hoặc lỗi -> BỎ QUA lệnh (đúng yêu cầu: phải recheck mới được vào).
+      if (config.autoUseAiVetoOnBump) {
         try {
           const aiService = new AiAnalysisService({
             apiKey: config.evolinkApiKey,
@@ -135,15 +169,23 @@ export class AutoTradeRunner {
             recheck.parsed.decision !== "TRADE" ||
             recheck.parsed.direction !== signal.direction
           ) {
-            console.info("[auto-bot] AI veto -> hạ lot xuống mức đẹp.");
-            lot = config.autoLotGood;
+            console.info(
+              `[auto-bot] AI recheck từ chối (${recheck.parsed.decision}/${recheck.parsed.direction}) -> bỏ qua lệnh ${entryTf}.`,
+            );
+            return;
           }
         } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
           console.warn(
-            "[auto-bot] AI recheck lỗi -> hạ lot xuống mức đẹp:",
-            error instanceof Error ? error.message : error,
+            "[auto-bot] AI recheck lỗi -> bỏ qua lệnh (yêu cầu phải recheck trước khi vào):",
+            msg,
           );
-          lot = config.autoLotGood;
+          await this.notifyError(
+            config,
+            "ai",
+            `Gọi AI recheck thất bại nên BỎ QUA lệnh ${entryTf} ${signal.direction}. Lỗi: ${msg.slice(0, 200)}`,
+          );
+          return;
         }
       }
 
@@ -155,11 +197,11 @@ export class AutoTradeRunner {
         price: null,
         stopLoss: signal.stopLoss,
         takeProfit: signal.takeProfit,
-        comment: "auto-h1",
+        comment: `auto-${entryTf.toLowerCase()}`,
       });
       this.tradesToday += 1;
       console.info(
-        `[auto-bot] ĐẶT ${signal.direction} ${lot} lot @${placed.price} SL ${signal.stopLoss} TP ${signal.takeProfit} (conviction ${conviction}, ticket ${placed.ticket})`,
+        `[auto-bot] ĐẶT ${entryTf} ${signal.direction} ${lot} lot @${placed.price} SL ${signal.stopLoss} TP ${signal.takeProfit} (conviction ${conviction}, ticket ${placed.ticket})`,
       );
 
       // Ghi lịch sử để tracker/stats đo hiệu quả live.
@@ -194,10 +236,14 @@ export class AutoTradeRunner {
         );
       }
     } catch (error) {
-      console.warn(
-        "[auto-bot] tick lỗi:",
-        error instanceof Error ? error.message : error,
-      );
+      const msg = error instanceof Error ? error.message : String(error);
+      console.warn("[auto-bot] tick lỗi:", msg);
+      try {
+        const config = useRuntimeConfig();
+        await this.notifyError(config, "tick", `Tick lỗi: ${msg.slice(0, 250)}`);
+      } catch {
+        // useRuntimeConfig lỗi thì bỏ qua thông báo.
+      }
     } finally {
       this.running = false;
     }
@@ -226,6 +272,32 @@ export class AutoTradeRunner {
           );
         }
       }
+    }
+  }
+
+  // Gửi cảnh báo lỗi về Telegram, chống spam: cùng 1 loại lỗi tối đa 1 lần / 30 phút.
+  private async notifyError(
+    config: { telegramBotToken: string; telegramChatId: string },
+    key: string,
+    message: string,
+  ): Promise<void> {
+    if (!config.telegramBotToken || !config.telegramChatId) return;
+    const now = Date.now();
+    if (this.lastErrorKey === key && now - this.lastErrorNotifyAt < 30 * 60_000) {
+      return;
+    }
+    this.lastErrorKey = key;
+    this.lastErrorNotifyAt = now;
+    try {
+      await new TelegramService({
+        botToken: config.telegramBotToken,
+        chatId: config.telegramChatId,
+      }).sendMessage(`⚠️ Auto-bot: ${message}`);
+    } catch (error) {
+      console.warn(
+        "[auto-bot] gửi cảnh báo Telegram thất bại:",
+        error instanceof Error ? error.message : error,
+      );
     }
   }
 
