@@ -118,6 +118,34 @@ export class Mt5OrderService {
     };
   }
 
+  async getAccount(): Promise<{ balance: number; equity: number; tradeAllowed: boolean }> {
+    const url = new URL("/health", this.options.bridgeUrl);
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(this.options.timeoutMs ?? 20_000),
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "unknown error";
+      throw new Error(`Không kết nối được MT5 bridge tại ${this.options.bridgeUrl}: ${reason}`);
+    }
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`MT5 bridge /health trả HTTP ${response.status}${text ? `: ${text.slice(0, 200)}` : ""}`);
+    }
+    const body = (await response.json()) as {
+      balance?: number;
+      equity?: number;
+      trade_allowed?: boolean;
+    };
+    return {
+      balance: Number(body.balance ?? 0),
+      equity: Number(body.equity ?? 0),
+      tradeAllowed: Boolean(body.trade_allowed),
+    };
+  }
+
   async getActiveOrders(): Promise<ActiveMt5Order[]> {
     const url = new URL("/orders", this.options.bridgeUrl);
     url.searchParams.set("symbol", this.options.symbol);

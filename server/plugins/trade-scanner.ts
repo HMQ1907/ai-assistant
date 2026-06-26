@@ -1,3 +1,4 @@
+import { AutoTradeRunner } from "../services/AutoTradeRunner";
 import { SignalOutcomeTracker } from "../services/SignalOutcomeTracker";
 import { TradeScannerService, isScannerSlot } from "../services/TradeScannerService";
 
@@ -8,16 +9,21 @@ declare global {
   var __tradeScannerLastSlot: string | undefined;
   // eslint-disable-next-line no-var
   var __outcomeTrackerLastSlot: string | undefined;
+  // eslint-disable-next-line no-var
+  var __autoTradeLastSlot: string | undefined;
 }
 
 export default defineNitroPlugin((nitroApp) => {
   const config = useRuntimeConfig();
-  if (!config.tradeScannerEnabled) {
-    console.info("[trade-scanner] disabled");
+  const autoMode = config.autoTradeEnabled;
+
+  if (!autoMode && !config.tradeScannerEnabled) {
+    console.info("[trade-loop] disabled (AUTO_TRADE=false, TRADE_SCANNER_ENABLED=false)");
     return;
   }
-  if (!config.telegramBotToken || !config.telegramChatId) {
-    console.warn("[trade-scanner] disabled: missing Telegram config");
+  // Chế độ báo tín hiệu LLM cần Telegram; auto-bot thì không.
+  if (!autoMode && (!config.telegramBotToken || !config.telegramChatId)) {
+    console.warn("[trade-loop] scanner disabled: missing Telegram config");
     return;
   }
   if (globalThis.__tradeScannerTimer) {
@@ -26,27 +32,38 @@ export default defineNitroPlugin((nitroApp) => {
 
   const scanner = new TradeScannerService();
   const outcomeTracker = new SignalOutcomeTracker();
+  const autoBot = new AutoTradeRunner();
+  const tz = config.tradeScannerTimezone;
+
   globalThis.__tradeScannerTimer = setInterval(() => {
     const now = new Date();
 
-    // Tracker chay doc lap voi khung gio trade: lenh vao luc 21h co the resolve luc 23h
-    // (ngoai cua so quet). Chay moi 5 phut, doi chieu gia va cap nhat ket qua.
-    if (isOutcomeTrackerSlot(now, config.tradeScannerTimezone)) {
-      const trackerSlot = slotKey(now, config.tradeScannerTimezone);
+    // Tracker đo kết quả (cả 2 chế độ), mỗi 5 phút, độc lập khung giờ.
+    if (isFiveMinSlot(now, tz)) {
+      const trackerSlot = slotKey(now, tz);
       if (globalThis.__outcomeTrackerLastSlot !== trackerSlot) {
         globalThis.__outcomeTrackerLastSlot = trackerSlot;
         void outcomeTracker.trackOnce();
       }
     }
 
-    // Goi moi slot ke ca ngoai khung gio: scanOnce tu quyet dinh -- co lenh dang om thi
-    // theo doi lenh do (24/7), khong co lenh thi chi quet tim setup moi trong khung gio.
-    if (!isScannerSlot(now)) return;
+    if (autoMode) {
+      // Auto-bot: mỗi 5 phút (24/7 để quản lệnh; vào lệnh chỉ trong khung giờ — xử lý bên trong).
+      if (isFiveMinSlot(now, tz)) {
+        const autoSlot = slotKey(now, tz);
+        if (globalThis.__autoTradeLastSlot !== autoSlot) {
+          globalThis.__autoTradeLastSlot = autoSlot;
+          void autoBot.runOnce();
+        }
+      }
+      return;
+    }
 
-    const slot = slotKey(now, config.tradeScannerTimezone);
+    // Chế độ báo tín hiệu LLM: gọi mỗi slot, scanOnce tự xử lý focus/quét.
+    if (!isScannerSlot(now)) return;
+    const slot = slotKey(now, tz);
     if (globalThis.__tradeScannerLastSlot === slot) return;
     globalThis.__tradeScannerLastSlot = slot;
-
     void scanner.scanOnce();
   }, 5_000);
 
@@ -57,12 +74,18 @@ export default defineNitroPlugin((nitroApp) => {
     }
   });
 
-  console.info(
-    `[trade-scanner] enabled ${config.tradeScannerWindows || `${config.tradeScannerStartHour}:00-${config.tradeScannerEndHour}:00`} ${config.tradeScannerTimezone}, every ${config.tradeScannerIntervalMinutes}m`,
-  );
+  if (autoMode) {
+    console.info(
+      `[trade-loop] AUTO-BOT enabled (Rules Engine H1) — entries in ${config.tradeScannerWindows || `${config.tradeScannerStartHour}:00-${config.tradeScannerEndHour}:00`} ${tz}, lots ${config.autoLotGood}/${config.autoLotVeryGood}, maxDailyLoss ${config.autoMaxDailyLossPercent}%`,
+    );
+  } else {
+    console.info(
+      `[trade-loop] SIGNAL scanner enabled ${config.tradeScannerWindows || `${config.tradeScannerStartHour}:00-${config.tradeScannerEndHour}:00`} ${tz}, every ${config.tradeScannerIntervalMinutes}m`,
+    );
+  }
 });
 
-function isOutcomeTrackerSlot(date: Date, timeZone: string): boolean {
+function isFiveMinSlot(date: Date, timeZone: string): boolean {
   const parts = new Intl.DateTimeFormat("en-US", {
     minute: "2-digit",
     second: "2-digit",

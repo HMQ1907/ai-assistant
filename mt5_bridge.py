@@ -170,6 +170,8 @@ def health():
             "server": account.server,
             "company": account.company,
             "currency": account.currency,
+            "balance": float(account.balance),
+            "equity": float(account.equity),
             "trade_allowed": bool(terminal.trade_allowed),
         }
 
@@ -219,6 +221,41 @@ def snapshot(
             "time_msc": int(tick.time_msc),
             "provider": "mt5-exness",
             "candles": candles,
+        }
+
+
+@app.get("/candles")
+def candles_history(
+    symbol: str = "XAUUSDm",
+    timeframe: str = "H1",
+    count: int = Query(default=1500, ge=50, le=6000),
+):
+    """Tra ve nhieu nen lich su (1 khung) phuc vu backtest. Khong dung cho live."""
+    tf = TIMEFRAMES.get(timeframe)
+    if tf is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported timeframe {timeframe}. Allowed: {list(TIMEFRAMES)}",
+        )
+    with mt5_lock:
+        ensure_mt5()
+        if not mt5.symbol_select(symbol, True):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Cannot select symbol {symbol}: {mt5.last_error()}",
+            )
+        # Position 0 la nen dang hinh thanh -> doc tu position 1 (nen da dong).
+        rates = mt5.copy_rates_from_pos(symbol, tf, 1, count)
+        if rates is None or len(rates) == 0:
+            raise HTTPException(
+                status_code=500,
+                detail=f"No candles for {symbol} {timeframe}: {mt5.last_error()}",
+            )
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "count": len(rates),
+            "candles": [rate_to_candle(rate) for rate in rates],
         }
 
 
