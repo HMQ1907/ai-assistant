@@ -197,6 +197,18 @@ const autoTradeVetoSchema = z.object({
   confidence: z.number().min(0).max(100),
   direction_assessment: z.enum(["ALIGNED", "CONFLICTING", "UNCLEAR"]),
   data_status: z.enum(["OK", "STALE", "LOW_QUALITY", "EXECUTION_BLOCKED"]),
+  adjusted_trade: z
+    .object({
+      order_type: z.enum(["MARKET"]),
+      lot: z.number().positive(),
+      entry: z.number().positive(),
+      stop_loss: z.number().positive(),
+      take_profit: z.number().positive(),
+      risk_reward: z.number().positive(),
+      reason: z.preprocess(normalizeNullableString, z.string()),
+    })
+    .nullable()
+    .default(null),
   summary: z.preprocess(normalizeNullableString, z.string()),
   blocker_reasons: z.array(z.string()).default([]),
   warnings: z.array(z.string()).default([]),

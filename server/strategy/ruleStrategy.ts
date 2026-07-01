@@ -22,6 +22,7 @@ export interface RuleStrategyConfig {
   rrTarget: number;
   pullbackLookback: number;
   swingLookback: number;
+  targetLookback: number;
   pullbackTouchTolerancePct: number;
   biasMode: BiasMode;
   confirmMode: ConfirmMode;
@@ -38,6 +39,7 @@ export const defaultRuleStrategyConfig: RuleStrategyConfig = {
   rrTarget: tradingRules.minRiskReward,
   pullbackLookback: 5,
   swingLookback: 6,
+  targetLookback: 80,
   pullbackTouchTolerancePct: 0.0015,
   biasMode: "EMA",
   confirmMode: "BREAK",
@@ -119,11 +121,20 @@ export function evaluateRuleSignal(
     const stopLoss = round(swingLow - buffer);
     const risk = px - stopLoss;
     if (risk <= 0) return null;
+    const takeProfit = findStructuralTakeProfit(
+      entry,
+      "BUY",
+      px,
+      risk,
+      config.rrTarget,
+      config.targetLookback,
+    );
+    if (takeProfit === null) return null;
     return {
       direction: "BUY",
       entry: round(px),
       stopLoss,
-      takeProfit: round(px + config.rrTarget * risk),
+      takeProfit,
       reason: "bias up + pullback EMA + xác nhận tăng",
     };
   }
@@ -144,11 +155,20 @@ export function evaluateRuleSignal(
   const stopLoss = round(swingHigh + buffer);
   const risk = stopLoss - px;
   if (risk <= 0) return null;
+  const takeProfit = findStructuralTakeProfit(
+    entry,
+    "SELL",
+    px,
+    risk,
+    config.rrTarget,
+    config.targetLookback,
+  );
+  if (takeProfit === null) return null;
   return {
     direction: "SELL",
     entry: round(px),
     stopLoss,
-    takeProfit: round(px - config.rrTarget * risk),
+    takeProfit,
     reason: "bias down + pullback EMA + xác nhận giảm",
   };
 }
@@ -206,6 +226,32 @@ function isBearishEngulfing(prev: Candle, last: Candle): boolean {
     last.close <= prev.open &&
     last.open >= prev.close
   );
+}
+
+function findStructuralTakeProfit(
+  candles: Candle[],
+  direction: "BUY" | "SELL",
+  entryPrice: number,
+  risk: number,
+  minRiskReward: number,
+  lookback: number,
+): number | null {
+  const history = candles.slice(-Math.max(10, lookback + 1), -1);
+  if (history.length < 10) return null;
+
+  if (direction === "BUY") {
+    const minimumTarget = entryPrice + minRiskReward * risk;
+    const candidates = history
+      .map((candle) => candle.high)
+      .filter((level) => Number.isFinite(level) && level > minimumTarget);
+    return candidates.length > 0 ? round(Math.min(...candidates)) : null;
+  }
+
+  const maximumTarget = entryPrice - minRiskReward * risk;
+  const candidates = history
+    .map((candle) => candle.low)
+    .filter((level) => Number.isFinite(level) && level < maximumTarget);
+  return candidates.length > 0 ? round(Math.max(...candidates)) : null;
 }
 
 function round(value: number): number {

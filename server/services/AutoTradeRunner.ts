@@ -174,6 +174,8 @@ export class AutoTradeRunner {
             entryTimeframe: entryTf,
             conviction,
             lot,
+            minRiskReward: config.autoRrTarget,
+            allowedLots: uniqueLots([config.autoLotGood, config.autoLotVeryGood]),
           });
 
           if (veto.parsed.decision === "BLOCK") {
@@ -182,11 +184,79 @@ export class AutoTradeRunner {
             );
             return;
           }
+          const adjusted = veto.parsed.adjusted_trade;
+          if (!adjusted) {
+            console.info("[auto-bot] AI ALLOW nhưng thiếu adjusted_trade -> bỏ qua lệnh.");
+            return;
+          }
+          const validationError = validateAdjustedAutoTrade(
+            signal.direction,
+            adjusted,
+            config.autoRrTarget,
+            [config.autoLotGood, config.autoLotVeryGood],
+          );
+          if (validationError) {
+            console.info(`[auto-bot] adjusted_trade không hợp lệ -> bỏ qua lệnh: ${validationError}`);
+            return;
+          }
+          signal = {
+            ...signal,
+            entry: adjusted.entry,
+            stopLoss: adjusted.stop_loss,
+            takeProfit: adjusted.take_profit,
+            reason: `${signal.reason} AI final check: ${adjusted.reason}`,
+          };
+          const finalLot = adjusted.lot;
           if (veto.parsed.warnings.length > 0) {
             console.info(
               `[auto-bot] AI veto ALLOW with warnings: ${veto.parsed.warnings.join(" | ")}`,
             );
           }
+          const placed = await orderService.placeOrder({
+            direction: signal.direction,
+            orderType: "MARKET",
+            volume: finalLot,
+            price: null,
+            stopLoss: signal.stopLoss,
+            takeProfit: signal.takeProfit,
+            comment: `auto-${entryTf.toLowerCase()}`,
+          });
+          this.tradesToday += 1;
+          console.info(
+            `[auto-bot] ĐẶT ${entryTf} ${signal.direction} ${finalLot} lot @${placed.price} SL ${signal.stopLoss} TP ${signal.takeProfit} (conviction ${conviction}, ticket ${placed.ticket})`,
+          );
+
+          try {
+            const historyService = new AnalysisHistoryService(
+              new SupabaseService({
+                url: config.supabaseUrl,
+                serviceRoleKey: config.supabaseServiceRoleKey,
+              }).getClient(),
+            );
+            const record = await historyService.create({
+              requestPayload: payload,
+              aiResponseRaw: "auto-bot rules-engine with AI final trade check",
+              parsedResult: buildAutoRecommendation(
+                signal,
+                finalLot,
+                conviction,
+                snapshot.price,
+                payload,
+                config.autoRrTarget,
+              ),
+            });
+            await historyService.markOrderPlaced(record.id, {
+              mt5_ticket: placed.ticket,
+              order_type: placed.orderType,
+              order_state: "FILLED",
+            });
+          } catch (error) {
+            console.warn(
+              "[auto-bot] không ghi được lịch sử:",
+              error instanceof Error ? error.message : error,
+            );
+          }
+          return;
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
           console.warn("[auto-bot] AI auto-veto lỗi -> bỏ qua lệnh:", msg);
@@ -199,6 +269,24 @@ export class AutoTradeRunner {
         }
       }
 
+      const validationError = validateAdjustedAutoTrade(
+        signal.direction,
+        {
+          order_type: "MARKET",
+          lot,
+          entry: signal.entry,
+          stop_loss: signal.stopLoss,
+          take_profit: signal.takeProfit,
+          risk_reward: rewardRisk(signal.direction, signal.entry, signal.stopLoss, signal.takeProfit),
+          reason: signal.reason,
+        },
+        config.autoRrTarget,
+        [config.autoLotGood, config.autoLotVeryGood],
+      );
+      if (validationError) {
+        console.info(`[auto-bot] rules signal không hợp lệ -> bỏ qua lệnh: ${validationError}`);
+        return;
+      }
       const placed = await orderService.placeOrder({
         direction: signal.direction,
         orderType: "MARKET",
@@ -460,6 +548,79 @@ function emptyNews(): NewsSnapshot {
   };
 }
 
+interface AdjustedAutoTrade {
+  order_type: "MARKET";
+  lot: number;
+  entry: number;
+  stop_loss: number;
+  take_profit: number;
+  risk_reward: number;
+  reason: string;
+}
+
+function uniqueLots(lots: number[]): number[] {
+  return [...new Set(lots.filter((lot) => Number.isFinite(lot) && lot > 0))]
+    .sort((left, right) => left - right);
+}
+
+function validateAdjustedAutoTrade(
+  direction: RuleSignal["direction"],
+  trade: AdjustedAutoTrade,
+  minRiskReward: number,
+  allowedLots: number[],
+): string | null {
+  const lots = uniqueLots(allowedLots);
+  if (!lots.some((lot) => Math.abs(lot - trade.lot) < 0.000001)) {
+    return `lot ${trade.lot} không nằm trong danh sách cho phép ${lots.join(", ")}`;
+  }
+
+  if (
+    !Number.isFinite(trade.entry) ||
+    !Number.isFinite(trade.stop_loss) ||
+    !Number.isFinite(trade.take_profit)
+  ) {
+    return "entry/SL/TP không phải số hợp lệ";
+  }
+
+  const actualRr = rewardRisk(
+    direction,
+    trade.entry,
+    trade.stop_loss,
+    trade.take_profit,
+  );
+  if (!Number.isFinite(actualRr) || actualRr < minRiskReward) {
+    return `RR thực tế ${actualRr.toFixed(2)} thấp hơn tối thiểu 1:${minRiskReward}`;
+  }
+
+  if (Math.abs(actualRr - trade.risk_reward) > 0.35) {
+    return `RR AI khai báo ${trade.risk_reward} lệch nhiều so với RR thực tế ${actualRr.toFixed(2)}`;
+  }
+
+  if (direction === "BUY") {
+    if (trade.stop_loss >= trade.entry) return "BUY có SL không nằm dưới entry";
+    if (trade.take_profit <= trade.entry) return "BUY có TP không nằm trên entry";
+  } else {
+    if (trade.stop_loss <= trade.entry) return "SELL có SL không nằm trên entry";
+    if (trade.take_profit >= trade.entry) return "SELL có TP không nằm dưới entry";
+  }
+
+  return null;
+}
+
+function rewardRisk(
+  direction: RuleSignal["direction"],
+  entry: number,
+  stopLoss: number,
+  takeProfit: number,
+): number {
+  const risk = Math.abs(entry - stopLoss);
+  if (!Number.isFinite(risk) || risk <= 0) return 0;
+  const reward = direction === "BUY"
+    ? takeProfit - entry
+    : entry - takeProfit;
+  return reward / risk;
+}
+
 function isSaferStopLoss(
   order: ActiveMt5Order,
   currentPrice: number,
@@ -646,8 +807,8 @@ function buildAutoRecommendation(
     stop_loss: signal.stopLoss,
     stop_loss_reason: "SL ngoài swing gần nhất + đệm ATR(H1) theo rules engine.",
     take_profit: signal.takeProfit,
-    take_profit_reason: `TP = ${rr}R theo khoảng rủi ro.`,
-    risk_reward: `1:${rr}`,
+    take_profit_reason: `TP theo cấu trúc nến/vùng thanh khoản; RR tối thiểu yêu cầu là 1:${rr}.`,
+    risk_reward: `>=1:${rr}`,
     expected_holding_time: "Theo SL/TP, tối đa vài giờ.",
     cancel_after_minutes: null,
     position_sizing: {

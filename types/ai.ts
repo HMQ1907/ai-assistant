@@ -125,6 +125,15 @@ export interface AiAutoTradeVeto {
   confidence: number;
   direction_assessment: "ALIGNED" | "CONFLICTING" | "UNCLEAR";
   data_status: "OK" | "STALE" | "LOW_QUALITY" | "EXECUTION_BLOCKED";
+  adjusted_trade: {
+    order_type: "MARKET";
+    lot: number;
+    entry: number;
+    stop_loss: number;
+    take_profit: number;
+    risk_reward: number;
+    reason: string;
+  } | null;
   summary: string;
   blocker_reasons: string[];
   warnings: string[];

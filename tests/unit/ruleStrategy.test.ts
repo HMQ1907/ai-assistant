@@ -40,6 +40,7 @@ function buySetupH1(): Candle[] {
     const base = 100 + i * 0.5;
     out.push(candle(i, 1, base - 0.2, base + 0.3, base - 0.3, base));
   }
+  out[65] = { ...out[65]!, high: 150 };
   // pullback
   const dips = [134, 132.5, 131.5, 131, 130.8];
   dips.forEach((close, k) => {
@@ -57,6 +58,7 @@ function sellSetupH1(): Candle[] {
     const base = 200 - i * 0.5;
     out.push(candle(i, 1, base + 0.2, base + 0.3, base - 0.3, base));
   }
+  out[65] = { ...out[65]!, low: 150 };
   const rallies = [166, 167.5, 168.5, 169, 169.2];
   rallies.forEach((close, k) => {
     const i = 70 + k;
@@ -86,7 +88,8 @@ describe("evaluateRuleSignal", () => {
     expect(signal!.takeProfit).toBeGreaterThan(signal!.entry);
     const rr =
       (signal!.takeProfit - signal!.entry) / (signal!.entry - signal!.stopLoss);
-    expect(rr).toBeCloseTo(defaultRuleStrategyConfig.rrTarget, 1);
+    expect(rr).toBeGreaterThanOrEqual(defaultRuleStrategyConfig.rrTarget);
+    expect(signal!.takeProfit).toBe(150);
   });
 
   it("produces a geometrically valid SELL in an H4 downtrend pullback", () => {
@@ -97,7 +100,8 @@ describe("evaluateRuleSignal", () => {
     expect(signal!.takeProfit).toBeLessThan(signal!.entry);
     const rr =
       (signal!.entry - signal!.takeProfit) / (signal!.stopLoss - signal!.entry);
-    expect(rr).toBeCloseTo(defaultRuleStrategyConfig.rrTarget, 1);
+    expect(rr).toBeGreaterThanOrEqual(defaultRuleStrategyConfig.rrTarget);
+    expect(signal!.takeProfit).toBe(150);
   });
 
   it("does not BUY against an H4 downtrend", () => {
