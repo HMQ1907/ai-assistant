@@ -29,6 +29,19 @@ export interface CancelOrderResult {
   state: OrderState;
 }
 
+export interface ModifyOrderInput {
+  ticket: number;
+  stopLoss: number | null;
+  takeProfit: number | null;
+  comment?: string;
+}
+
+export interface ModifyOrderResult {
+  ticket: number;
+  stopLoss: number | null;
+  takeProfit: number | null;
+}
+
 interface BridgePlaceResponse {
   ok: boolean;
   ticket: number;
@@ -42,6 +55,13 @@ interface BridgeCancelResponse {
   ok: boolean;
   ticket: number;
   state: string;
+}
+
+interface BridgeModifyResponse {
+  ok: boolean;
+  ticket: number;
+  stop_loss: number | null;
+  take_profit: number | null;
 }
 
 interface BridgeActiveOrdersResponse {
@@ -115,6 +135,25 @@ export class Mt5OrderService {
     return {
       ticket: body.ticket,
       state: body.state === "CANCELLED" ? "CANCELLED" : "CLOSED",
+    };
+  }
+
+  async modifyOrder(input: ModifyOrderInput): Promise<ModifyOrderResult> {
+    if (input.stopLoss === null && input.takeProfit === null) {
+      throw new Error("Cần có SL hoặc TP mới để modify lệnh.");
+    }
+
+    const body = await this.call<BridgeModifyResponse>("/order/modify", {
+      symbol: this.options.symbol,
+      ticket: input.ticket,
+      stop_loss: input.stopLoss,
+      take_profit: input.takeProfit,
+      comment: input.comment ?? "ai-assistant-modify",
+    });
+    return {
+      ticket: body.ticket,
+      stopLoss: body.stop_loss,
+      takeProfit: body.take_profit,
     };
   }
 

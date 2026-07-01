@@ -16,15 +16,16 @@ export function buildActiveOrderReviewPrompt(
   return JSON.stringify(
     {
       task:
-        "Review one currently active MT5 XAUUSD order or position. Decide whether it should be kept, cancelled/closed manually, or whether SL/TP should be moved. This is advisory only.",
+        "Review one currently active MT5 XAUUSD order or position. Decide whether it should be kept, cancelled/closed, or whether SL/TP should be moved. The local bot may execute your recommended action, so be precise and conservative.",
       mandatory_rules: [
-        "This is a read-only trading assistant. Never place, modify, cancel, or execute any order.",
         "Return one strict JSON object only. Do not use Markdown or add text outside JSON.",
         "All user-facing content MUST be written in Vietnamese.",
         "Only enum values, symbols, and technical abbreviations may remain in English.",
         "Use the live MT5 order state as the source of truth.",
         "If state is PENDING, choose between KEEP_ORDER, CANCEL_ORDER, WAIT, MOVE_SL, MOVE_TP, or MOVE_SL_TP.",
         "If state is FILLED, choose between KEEP_ORDER, CLOSE_MANUALLY, WAIT, MOVE_SL, MOVE_TP, or MOVE_SL_TP.",
+        "Recommend CANCEL_ORDER only when a pending order is clearly stale, invalidated, or no longer has a realistic path to entry.",
+        "Recommend CLOSE_MANUALLY only when the open position is clearly invalidated, protecting floating profit is materially better than waiting, or current market structure makes the original trade thesis wrong.",
         "Only suggest moving SL if the new stop loss reduces risk or locks profit and is technically valid.",
         "Never suggest widening SL to avoid a loss, martingale, DCA, increasing lot, or revenge trading.",
         "Only suggest moving TP when market structure materially changed. Explain the exact reason.",

@@ -1,5 +1,7 @@
 import { z } from "zod";
 import type {
+  AiAutoTradeVeto,
+  AiAutoTradeVetoResult,
   AiAnalysisResult,
   AiOrderReview,
   AiOrderReviewResult,
@@ -11,6 +13,10 @@ import type {
   AnalysisPayload,
 } from "../../types/trading";
 import { buildActiveOrderReviewPrompt } from "../prompts/active-order-review.prompt";
+import {
+  buildAutoTradeVetoPrompt,
+  type AutoTradeVetoPromptInput,
+} from "../prompts/auto-trade-veto.prompt";
 import { buildOrderReviewPrompt } from "../prompts/order-review.prompt";
 import { buildTradingAnalysisPrompt } from "../prompts/trading-analysis.prompt";
 import { extractJsonObject } from "../utils/jsonParser";
@@ -186,6 +192,18 @@ const orderReviewSchema = z.object({
   disclaimer: z.string(),
 });
 
+const autoTradeVetoSchema = z.object({
+  decision: z.enum(["ALLOW", "BLOCK"]),
+  confidence: z.number().min(0).max(100),
+  direction_assessment: z.enum(["ALIGNED", "CONFLICTING", "UNCLEAR"]),
+  data_status: z.enum(["OK", "STALE", "LOW_QUALITY", "EXECUTION_BLOCKED"]),
+  summary: z.preprocess(normalizeNullableString, z.string()),
+  blocker_reasons: z.array(z.string()).default([]),
+  warnings: z.array(z.string()).default([]),
+  checklist: z.array(z.string()).default([]),
+  disclaimer: z.preprocess(normalizeNullableString, z.string()),
+});
+
 function normalizeEntryZone(value: unknown): unknown {
   if (typeof value !== "string") return value;
 
@@ -237,6 +255,18 @@ export class AiAnalysisService {
     const raw = await this.callWithRetry(prompt);
     const parsed = this.parseOrNoTrade(raw, payload);
     return { raw, parsed: this.validationService.validate(parsed, payload) };
+  }
+
+  async reviewAutoTradeVeto(
+    input: AutoTradeVetoPromptInput,
+  ): Promise<AiAutoTradeVetoResult> {
+    if (!this.options.apiKey) {
+      throw new Error("Chưa cấu hình Evolink API key.");
+    }
+
+    const prompt = buildAutoTradeVetoPrompt(input);
+    const raw = await this.callWithRetry(prompt);
+    return { raw, parsed: this.parseAutoTradeVeto(raw) };
   }
 
   async reviewOrder(input: {
@@ -408,6 +438,11 @@ export class AiAnalysisService {
         reason,
       );
     }
+  }
+
+  private parseAutoTradeVeto(raw: string): AiAutoTradeVeto {
+    const extracted = extractJsonObject(raw);
+    return autoTradeVetoSchema.parse(extracted);
   }
 }
 

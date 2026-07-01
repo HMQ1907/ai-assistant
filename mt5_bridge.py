@@ -55,6 +55,14 @@ class CancelOrderRequest(BaseModel):
     comment: str = "ai-assistant-cancel"
 
 
+class ModifyOrderRequest(BaseModel):
+    symbol: str = "XAUUSDm"
+    ticket: int
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+    comment: str = "ai-assistant-modify"
+
+
 def ensure_mt5():
     if not mt5.initialize():
         raise HTTPException(
@@ -456,6 +464,53 @@ def cancel_order(req: CancelOrderRequest):
         return _check_close_result(result, req.ticket, "CLOSED")
 
 
+@app.post("/order/modify")
+def modify_order(req: ModifyOrderRequest):
+    if req.stop_loss is None and req.take_profit is None:
+        raise HTTPException(
+            status_code=400,
+            detail="stop_loss or take_profit is required.",
+        )
+
+    with mt5_lock:
+        ensure_mt5()
+        ensure_trading_enabled()
+
+        pending = mt5.orders_get(ticket=req.ticket)
+        if pending:
+            order = pending[0]
+            request = {
+                "action": mt5.TRADE_ACTION_MODIFY,
+                "order": int(req.ticket),
+                "symbol": order.symbol,
+                "price": float(order.price_open),
+                "sl": float(req.stop_loss) if req.stop_loss is not None else float(order.sl or 0),
+                "tp": float(req.take_profit) if req.take_profit is not None else float(order.tp or 0),
+                "comment": req.comment,
+            }
+            result = mt5.order_send(request)
+            return _check_modify_result(result, req.ticket, request["sl"], request["tp"])
+
+        positions = mt5.positions_get(ticket=req.ticket)
+        if not positions:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Ticket {req.ticket} khong phai lenh cho hay vi the dang mo.",
+            )
+
+        position = positions[0]
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "position": int(req.ticket),
+            "symbol": position.symbol,
+            "sl": float(req.stop_loss) if req.stop_loss is not None else float(position.sl or 0),
+            "tp": float(req.take_profit) if req.take_profit is not None else float(position.tp or 0),
+            "comment": req.comment,
+        }
+        result = mt5.order_send(request)
+        return _check_modify_result(result, req.ticket, request["sl"], request["tp"])
+
+
 def _check_close_result(result, ticket: int, new_state: str):
     if result is None:
         raise HTTPException(
@@ -471,6 +526,27 @@ def _check_close_result(result, ticket: int, new_state: str):
         "ok": True,
         "ticket": int(ticket),
         "state": new_state,
+        "retcode": int(result.retcode),
+        "comment": result.comment,
+    }
+
+
+def _check_modify_result(result, ticket: int, stop_loss: float, take_profit: float):
+    if result is None:
+        raise HTTPException(
+            status_code=500,
+            detail=f"order_send returned None: {mt5.last_error()}",
+        )
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"modify failed retcode={result.retcode}: {result.comment}",
+        )
+    return {
+        "ok": True,
+        "ticket": int(ticket),
+        "stop_loss": None if stop_loss == 0 else float(stop_loss),
+        "take_profit": None if take_profit == 0 else float(take_profit),
         "retcode": int(result.retcode),
         "comment": result.comment,
     }

@@ -120,6 +120,23 @@ export interface AiOrderReviewResult {
   parsed: AiOrderReview;
 }
 
+export interface AiAutoTradeVeto {
+  decision: "ALLOW" | "BLOCK";
+  confidence: number;
+  direction_assessment: "ALIGNED" | "CONFLICTING" | "UNCLEAR";
+  data_status: "OK" | "STALE" | "LOW_QUALITY" | "EXECUTION_BLOCKED";
+  summary: string;
+  blocker_reasons: string[];
+  warnings: string[];
+  checklist: string[];
+  disclaimer: string;
+}
+
+export interface AiAutoTradeVetoResult {
+  raw: string;
+  parsed: AiAutoTradeVeto;
+}
+
 export interface AiOrderScenarioReview {
   scenario: "MAIN_RECOMMENDATION" | "RISKY_TRADE";
   title: string;
