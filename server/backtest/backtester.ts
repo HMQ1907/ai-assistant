@@ -229,5 +229,7 @@ function pct(numerator: number, denominator: number): number {
 }
 
 function round(value: number): number {
-  return Number.isFinite(value) ? Number(value.toFixed(3)) : value;
+  if (!Number.isFinite(value)) return value;
+  const digits = Math.abs(value) >= 100 ? 3 : 5;
+  return Number(value.toFixed(digits));
 }

@@ -294,6 +294,13 @@ function structuralLows(candles: Candle[]): number[] {
   return pivots.length > 0 ? pivots : candles.map((candle) => candle.low);
 }
 
+// Số chữ số thập phân theo độ lớn giá: XAUUSD (~hàng trăm/nghìn) dùng 3 số,
+// EURUSD (~1.0x) cần 5 số để giữ độ chính xác pip lẻ. Cùng quy ước với
+// roundPrice() trong AutoTradeRunner.ts.
+// Số chữ số thập phân theo độ lớn giá: XAUUSD (~hàng trăm/nghìn) dùng 3 số,
+// EURUSD (~1.0x) cần 5 số để giữ độ chính xác pip lẻ. Cùng quy ước với
+// roundPrice() trong AutoTradeRunner.ts.
 function round(value: number): number {
-  return Number(value.toFixed(3));
+  const digits = Math.abs(value) >= 100 ? 3 : 5;
+  return Number(value.toFixed(digits));
 }

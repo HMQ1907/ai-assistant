@@ -108,4 +108,26 @@ describe("evaluateRuleSignal", () => {
     // Setup BUY trên H1 nhưng bias H4 giảm -> không được trade ngược bias.
     expect(evaluateRuleSignal(buySetupH1(), downtrendH4())).toBeNull();
   });
+
+  it("keeps 5-decimal pip precision for EURUSD-scale prices (regression: round() must not force 3 decimals)", () => {
+    // Tái tạo setup BUY nhưng ở thang giá EURUSD (~1.0x) thay vì XAUUSD (~100+),
+    // với một offset lẻ pip (0.10453) để phân biệt được .toFixed(3) vs .toFixed(5).
+    const scale = 0.01;
+    const offset = 0.10453;
+    const rescale = (candles: Candle[]) =>
+      candles.map((c) => ({
+        ...c,
+        open: Number((c.open * scale + offset).toFixed(6)),
+        high: Number((c.high * scale + offset).toFixed(6)),
+        low: Number((c.low * scale + offset).toFixed(6)),
+        close: Number((c.close * scale + offset).toFixed(6)),
+      }));
+    const signal = evaluateRuleSignal(rescale(buySetupH1()), rescale(uptrendH4()));
+    expect(signal).not.toBeNull();
+    // Nếu round() vẫn bo cứng .toFixed(3), entry/stopLoss sẽ mất phần lẻ pip (4-5 số thập phân)
+    // và không còn khớp giá trị tính toán đầy đủ độ chính xác.
+    expect(signal!.entry).toBeCloseTo(1.45453, 5);
+    expect(Number(signal!.entry.toFixed(5))).toBe(signal!.entry);
+    expect(Number(signal!.stopLoss.toFixed(5))).toBe(signal!.stopLoss);
+  });
 });
