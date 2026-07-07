@@ -21,7 +21,7 @@ export class OpportunityPayloadBuilder {
     indicators: IndicatorSnapshot[],
     news: NewsSnapshot,
     accountSizeUsd: number,
-    maxLossPercentPerTrade = tradingRules.maxLossPercentPerTrade,
+    maxLossPercentPerTrade: number = tradingRules.maxLossPercentPerTrade,
   ): AnalysisPayload {
     const selectedSymbols = market.snapshots.map((snapshot) => snapshot.symbol);
     const filteredNews = filterNewsForSymbols(news, selectedSymbols);

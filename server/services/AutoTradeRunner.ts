@@ -11,6 +11,7 @@ import {
   convictionScore,
   defaultRuleStrategyConfig,
   evaluateRuleSignal,
+  explainRuleSignalRejection,
   type RuleSignal,
 } from "../strategy/ruleStrategy";
 import { AiAnalysisService } from "./AiAnalysisService";
@@ -25,7 +26,7 @@ import { Mt5OrderService } from "./Mt5OrderService";
 import { OpportunityPayloadBuilder } from "./OpportunityPayloadBuilder";
 import { SupabaseService } from "./SupabaseService";
 import { TelegramService } from "./TelegramService";
-import { isInsideTradeScannerWindow } from "./TradeScannerService";
+import { isInsideTradeScannerWindow, isScannerSlot } from "./TradeScannerService";
 import { symbolCodeFromMt5Symbol, symbolLabel } from "../utils/symbols";
 
 /**
@@ -126,6 +127,12 @@ export class AutoTradeRunner {
         return;
       }
       if (!isInsideTradeScannerWindow()) return;
+      if (!isScannerSlot()) {
+        console.info(
+          `[auto-bot] skipped new setup scan: waiting for ${config.tradeScannerIntervalMinutes}m scan slot. Active-order management still runs every 5m.`,
+        );
+        return;
+      }
 
       const marketService = new MarketDataService({
         providerName: config.marketDataProvider,
@@ -154,6 +161,10 @@ export class AutoTradeRunner {
       let signal: RuleSignal | null = null;
       let entryCandles = h1;
       let entryTf = "H1";
+      let h1RejectReason = "H1 candle not evaluated yet";
+      let m15RejectReason = config.autoUseM15
+        ? "M15 candle not evaluated yet"
+        : "M15 disabled";
 
       const latestH1 = h1.at(-1)?.time ?? "";
       if (latestH1 && latestH1 !== this.lastEvaluatedH1) {
@@ -163,6 +174,9 @@ export class AutoTradeRunner {
           signal = nextSignal;
           entryCandles = h1;
           entryTf = "H1";
+        } else {
+          h1RejectReason =
+            explainRuleSignalRejection(h1, h4, strategy) ?? "H1 passed diagnostics but returned no signal";
         }
       }
 
@@ -175,11 +189,17 @@ export class AutoTradeRunner {
             signal = nextSignal;
             entryCandles = m15;
             entryTf = "M15";
+          } else {
+            m15RejectReason =
+              explainRuleSignalRejection(m15, h4, strategy, h1) ??
+              "M15 passed diagnostics but returned no signal";
           }
         }
       }
       if (!signal) {
-        console.info(`[auto-bot] no setup for ${activeSymbolLabel}`);
+        console.info(
+          `[auto-bot] no setup for ${activeSymbolLabel}. H1: ${h1RejectReason}. M15: ${m15RejectReason}.`,
+        );
         return;
       }
       console.info(

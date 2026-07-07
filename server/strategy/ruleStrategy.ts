@@ -58,6 +58,118 @@ export interface RuleSignal {
   reason: string;
 }
 
+export function explainRuleSignalRejection(
+  entry: Candle[],
+  bias: Candle[],
+  config: RuleStrategyConfig = defaultRuleStrategyConfig,
+  intermediate?: Candle[],
+): string | null {
+  if (entry.length < 60) return `entry candles ${entry.length} < 60`;
+  if (bias.length < 200) return `bias candles ${bias.length} < 200`;
+
+  const biasDir =
+    config.biasMode === "STRUCTURE"
+      ? structureTrend(bias, 20)
+      : trend(bias.map((candle) => candle.close));
+  if (biasDir !== "UPTREND" && biasDir !== "DOWNTREND") {
+    return `H4 bias not clearly trending (${biasDir})`;
+  }
+
+  if (intermediate && intermediate.length >= config.emaSlow) {
+    const ic = intermediate.map((candle) => candle.close);
+    const ief = ema(ic, config.emaFast);
+    const ies = ema(ic, config.emaSlow);
+    if (ief === null || ies === null) return "intermediate EMA unavailable";
+    const aligned = biasDir === "UPTREND" ? ief > ies : ief < ies;
+    if (!aligned) {
+      return `intermediate trend not aligned with H4 (${round(ief)} vs ${round(ies)})`;
+    }
+  }
+
+  const closes = entry.map((candle) => candle.close);
+  const emaFast = ema(closes, config.emaFast);
+  const emaSlow = ema(closes, config.emaSlow);
+  const atrV = atr(entry, config.atrPeriod);
+  if (emaFast === null) return `EMA${config.emaFast} unavailable`;
+  if (emaSlow === null) return `EMA${config.emaSlow} unavailable`;
+  if (atrV === null || atrV <= 0) return `ATR${config.atrPeriod} unavailable`;
+
+  const rsiV = config.useRsiFilter ? rsi(closes) : null;
+  if (config.useRsiFilter && rsiV === null) return "RSI unavailable";
+
+  const last = entry.at(-1);
+  const prev = entry.at(-2);
+  if (!last || !prev) return "missing latest/previous candle";
+
+  const window = entry.slice(-(config.pullbackLookback + 1), -1);
+  const tol = config.pullbackTouchTolerancePct;
+  const direction = biasDir === "UPTREND" ? "BUY" : "SELL";
+
+  if (biasDir === "UPTREND") {
+    if (emaFast <= emaSlow) {
+      return `BUY blocked: EMA${config.emaFast} <= EMA${config.emaSlow}`;
+    }
+    const pulledBack = window.some((candle) => candle.low <= emaFast * (1 + tol));
+    if (!pulledBack) {
+      return `BUY blocked: no pullback to EMA${config.emaFast} in last ${config.pullbackLookback} candle(s)`;
+    }
+    const confirmed =
+      config.confirmMode === "ENGULFING"
+        ? isBullishEngulfing(prev, last) && last.close > emaFast
+        : last.close > last.open && last.close > emaFast && last.close > prev.high;
+    if (!confirmed) {
+      return "BUY blocked: confirmation candle not strong enough";
+    }
+    if (config.useRsiFilter && rsiV !== null && rsiV >= config.rsiMaxForBuy) {
+      return `BUY blocked: RSI ${rsiV} >= ${config.rsiMaxForBuy}`;
+    }
+  } else {
+    if (emaFast >= emaSlow) {
+      return `SELL blocked: EMA${config.emaFast} >= EMA${config.emaSlow}`;
+    }
+    const pulledBack = window.some((candle) => candle.high >= emaFast * (1 - tol));
+    if (!pulledBack) {
+      return `SELL blocked: no pullback to EMA${config.emaFast} in last ${config.pullbackLookback} candle(s)`;
+    }
+    const confirmed =
+      config.confirmMode === "ENGULFING"
+        ? isBearishEngulfing(prev, last) && last.close < emaFast
+        : last.close < last.open && last.close < emaFast && last.close < prev.low;
+    if (!confirmed) {
+      return "SELL blocked: confirmation candle not strong enough";
+    }
+    if (config.useRsiFilter && rsiV !== null && rsiV <= config.rsiMinForSell) {
+      return `SELL blocked: RSI ${rsiV} <= ${config.rsiMinForSell}`;
+    }
+  }
+
+  const px = last.close;
+  const buffer = atrV * config.atrBufferMult;
+  const stopLoss =
+    direction === "BUY"
+      ? Math.min(...entry.slice(-config.swingLookback).map((candle) => candle.low)) - buffer
+      : Math.max(...entry.slice(-config.swingLookback).map((candle) => candle.high)) + buffer;
+  const risk = Math.abs(px - stopLoss);
+  if (!Number.isFinite(risk) || risk <= 0) return `${direction} blocked: invalid SL/risk`;
+
+  const takeProfit = findStructuralTakeProfit(
+    entry,
+    direction,
+    px,
+    config.targetLookback,
+  );
+  if (takeProfit === null) {
+    return `${direction} blocked: no structural TP beyond entry`;
+  }
+  const rr =
+    direction === "BUY" ? (takeProfit - px) / risk : (px - takeProfit) / risk;
+  if (!Number.isFinite(rr) || rr < config.rrTarget) {
+    return `${direction} blocked: structural RR ${Number(rr.toFixed(2))} < ${config.rrTarget}`;
+  }
+
+  return null;
+}
+
 /**
  * @param entry  Khung vào lệnh (H1, hoặc M15).
  * @param bias   Khung xu hướng lớn (H4).
