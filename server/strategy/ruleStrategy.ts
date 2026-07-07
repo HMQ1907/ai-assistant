@@ -58,6 +58,56 @@ export interface RuleSignal {
   reason: string;
 }
 
+function resolveBiasTrend(
+  bias: Candle[],
+  config: RuleStrategyConfig,
+): {
+  direction: ReturnType<typeof trend>;
+  emaTrend: ReturnType<typeof trend>;
+  structTrend: ReturnType<typeof structureTrend>;
+  source: "EMA" | "STRUCTURE" | "NONE";
+} {
+  const emaTrendValue = trend(bias.map((candle) => candle.close));
+  const structTrendValue = structureTrend(bias, 20);
+
+  if (config.biasMode === "STRUCTURE") {
+    return {
+      direction: structTrendValue,
+      emaTrend: emaTrendValue,
+      structTrend: structTrendValue,
+      source:
+        structTrendValue === "UPTREND" || structTrendValue === "DOWNTREND"
+          ? "STRUCTURE"
+          : "NONE",
+    };
+  }
+
+  if (emaTrendValue === "UPTREND" || emaTrendValue === "DOWNTREND") {
+    return {
+      direction: emaTrendValue,
+      emaTrend: emaTrendValue,
+      structTrend: structTrendValue,
+      source: "EMA",
+    };
+  }
+
+  if (structTrendValue === "UPTREND" || structTrendValue === "DOWNTREND") {
+    return {
+      direction: structTrendValue,
+      emaTrend: emaTrendValue,
+      structTrend: structTrendValue,
+      source: "STRUCTURE",
+    };
+  }
+
+  return {
+    direction: emaTrendValue,
+    emaTrend: emaTrendValue,
+    structTrend: structTrendValue,
+    source: "NONE",
+  };
+}
+
 export function explainRuleSignalRejection(
   entry: Candle[],
   bias: Candle[],
@@ -67,12 +117,10 @@ export function explainRuleSignalRejection(
   if (entry.length < 60) return `entry candles ${entry.length} < 60`;
   if (bias.length < 200) return `bias candles ${bias.length} < 200`;
 
-  const biasDir =
-    config.biasMode === "STRUCTURE"
-      ? structureTrend(bias, 20)
-      : trend(bias.map((candle) => candle.close));
+  const biasState = resolveBiasTrend(bias, config);
+  const biasDir = biasState.direction;
   if (biasDir !== "UPTREND" && biasDir !== "DOWNTREND") {
-    return `H4 bias not clearly trending (${biasDir})`;
+    return `H4 bias not clearly trending (EMA=${biasState.emaTrend}, structure=${biasState.structTrend})`;
   }
 
   if (intermediate && intermediate.length >= config.emaSlow) {
@@ -184,10 +232,8 @@ export function evaluateRuleSignal(
   if (entry.length < 60 || bias.length < 200) return null;
 
   // Bước 1: BIAS khung lớn.
-  const biasDir =
-    config.biasMode === "STRUCTURE"
-      ? structureTrend(bias, 20)
-      : trend(bias.map((candle) => candle.close));
+  const biasState = resolveBiasTrend(bias, config);
+  const biasDir = biasState.direction;
   if (biasDir !== "UPTREND" && biasDir !== "DOWNTREND") return null;
 
   // Khung trung gian (H1 khi entry là M15) phải đồng pha với bias.
