@@ -114,7 +114,7 @@ export class AutoTradeRunner {
       const m15 = snapshot.candles.M15;
       const strategy = {
         ...defaultRuleStrategyConfig,
-        rrTarget: config.autoRrTarget,
+        rrTarget: tradingRules.minRiskReward,
       };
 
       let signal: RuleSignal | null = null;
@@ -174,7 +174,7 @@ export class AutoTradeRunner {
             entryTimeframe: entryTf,
             conviction,
             lot,
-            minRiskReward: config.autoRrTarget,
+            minRiskReward: tradingRules.minRiskReward,
             allowedLots: uniqueLots([config.autoLotGood, config.autoLotVeryGood]),
           });
 
@@ -192,7 +192,7 @@ export class AutoTradeRunner {
           const validationError = validateAdjustedAutoTrade(
             signal.direction,
             adjusted,
-            config.autoRrTarget,
+            tradingRules.minRiskReward,
             [config.autoLotGood, config.autoLotVeryGood],
           );
           if (validationError) {
@@ -242,7 +242,7 @@ export class AutoTradeRunner {
                 conviction,
                 snapshot.price,
                 payload,
-                config.autoRrTarget,
+                tradingRules.minRiskReward,
               ),
             });
             await historyService.markOrderPlaced(record.id, {
@@ -280,7 +280,7 @@ export class AutoTradeRunner {
           risk_reward: rewardRisk(signal.direction, signal.entry, signal.stopLoss, signal.takeProfit),
           reason: signal.reason,
         },
-        config.autoRrTarget,
+        tradingRules.minRiskReward,
         [config.autoLotGood, config.autoLotVeryGood],
       );
       if (validationError) {
@@ -317,7 +317,7 @@ export class AutoTradeRunner {
             conviction,
             snapshot.price,
             payload,
-            config.autoRrTarget,
+            tradingRules.minRiskReward,
           ),
         });
         await historyService.markOrderPlaced(record.id, {

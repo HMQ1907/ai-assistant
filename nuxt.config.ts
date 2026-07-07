@@ -58,7 +58,6 @@ export default defineNuxtConfig({
     autoLotGood: Number(process.env.AUTO_LOT_GOOD || 0.03),
     autoLotVeryGood: Number(process.env.AUTO_LOT_VERY_GOOD || 0.05),
     autoVeryGoodMinConviction: Number(process.env.AUTO_VERYGOOD_MIN_CONVICTION || 2),
-    autoRrTarget: Number(process.env.AUTO_RR_TARGET || 2.0),
     autoMaxTradesPerDay: Number(process.env.AUTO_MAX_TRADES_PER_DAY || 5),
     autoMaxDailyLossPercent: Number(process.env.AUTO_MAX_DAILY_LOSS_PERCENT || 10),
     autoMaxHoldHours: Number(process.env.AUTO_MAX_HOLD_HOURS || 72),

@@ -27,7 +27,7 @@ function sawtoothUptrendH1(cycles = 60): Candle[] {
       const base = level + k * 0.9;
       out.push(mk(H1_START + idx++ * 3_600_000, base - 0.2, base + 0.3, base - 0.3, base));
     }
-    out[out.length - 1] = { ...out[out.length - 1]!, high: level + 24 };
+    out[out.length - 1] = { ...out[out.length - 1]!, high: level + 40 };
     const dips = [level + 9, level + 7, level + 5.5, level + 5, level + 4.8];
     for (const close of dips) {
       out.push(mk(H1_START + idx++ * 3_600_000, close + 0.5, close + 0.6, close - 0.6, close));

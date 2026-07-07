@@ -12,7 +12,7 @@ export interface Variant {
 
 /** Lưới tham số chung cho sweep và walk-forward. */
 export function buildGrid(): Variant[] {
-  const rrValues = [1.5, 1.8, 2.0];
+  const minRiskRewardValues = [1.5, 1.8, 2.0];
   const emaFastValues = [20, 34];
   const maxHoldValues = [48, 72];
   const filters: Array<{ tag: string; patch: Partial<RuleStrategyConfig> }> = [
@@ -23,7 +23,7 @@ export function buildGrid(): Variant[] {
   ];
 
   const variants: Variant[] = [];
-  for (const rrTarget of rrValues) {
+  for (const rrTarget of minRiskRewardValues) {
     for (const emaFast of emaFastValues) {
       for (const maxHoldBars of maxHoldValues) {
         for (const filter of filters) {

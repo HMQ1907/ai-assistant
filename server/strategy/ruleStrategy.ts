@@ -8,7 +8,7 @@ import { atr, ema, rsi, structureTrend, trend } from "../utils/indicators";
  *   2. TRIGGER: trên H1, giá hồi về vùng EMA nhanh (pullback) thuận bias.
  *   3. XÁC NHẬN: nến H1 quay lại theo hướng bias (phá đỉnh/đáy nến trước, hoặc engulfing).
  *   4. SL: ngoài swing gần nhất + đệm ATR(H1).
- *   5. TP: theo bội số R (rrTarget) của khoảng rủi ro.
+ *   5. TP: theo cấu trúc nến gần nhất cùng hướng trade; RR chỉ là bộ lọc tối thiểu sau cùng.
  * Filter phụ (bật/tắt được, để backtest đo đóng góp): RSI, Dow bias, engulfing.
  */
 export type BiasMode = "EMA" | "STRUCTURE";
@@ -19,6 +19,8 @@ export interface RuleStrategyConfig {
   emaSlow: number;
   atrPeriod: number;
   atrBufferMult: number;
+  // RR tối thiểu để ĐƯỢC PHÉP trade sau khi SL/TP đã được lấy theo cấu trúc.
+  // Không dùng để kéo TP ra xa một cách máy móc.
   rrTarget: number;
   pullbackLookback: number;
   swingLookback: number;
@@ -125,11 +127,11 @@ export function evaluateRuleSignal(
       entry,
       "BUY",
       px,
-      risk,
-      config.rrTarget,
       config.targetLookback,
     );
     if (takeProfit === null) return null;
+    const rr = (takeProfit - px) / risk;
+    if (!Number.isFinite(rr) || rr < config.rrTarget) return null;
     return {
       direction: "BUY",
       entry: round(px),
@@ -159,11 +161,11 @@ export function evaluateRuleSignal(
     entry,
     "SELL",
     px,
-    risk,
-    config.rrTarget,
     config.targetLookback,
   );
   if (takeProfit === null) return null;
+  const rr = (px - takeProfit) / risk;
+  if (!Number.isFinite(rr) || rr < config.rrTarget) return null;
   return {
     direction: "SELL",
     entry: round(px),
@@ -232,26 +234,64 @@ function findStructuralTakeProfit(
   candles: Candle[],
   direction: "BUY" | "SELL",
   entryPrice: number,
-  risk: number,
-  minRiskReward: number,
   lookback: number,
 ): number | null {
   const history = candles.slice(-Math.max(10, lookback + 1), -1);
   if (history.length < 10) return null;
 
   if (direction === "BUY") {
-    const minimumTarget = entryPrice + minRiskReward * risk;
-    const candidates = history
-      .map((candle) => candle.high)
-      .filter((level) => Number.isFinite(level) && level > minimumTarget);
+    const candidates = structuralHighs(history)
+      .filter((level) => Number.isFinite(level) && level > entryPrice);
     return candidates.length > 0 ? round(Math.min(...candidates)) : null;
   }
 
-  const maximumTarget = entryPrice - minRiskReward * risk;
-  const candidates = history
-    .map((candle) => candle.low)
-    .filter((level) => Number.isFinite(level) && level < maximumTarget);
+  const candidates = structuralLows(history)
+    .filter((level) => Number.isFinite(level) && level < entryPrice);
   return candidates.length > 0 ? round(Math.max(...candidates)) : null;
+}
+
+function structuralHighs(candles: Candle[]): number[] {
+  const pivots: number[] = [];
+  for (let i = 2; i < candles.length - 2; i += 1) {
+    const left2 = candles[i - 2]!;
+    const left1 = candles[i - 1]!;
+    const current = candles[i]!;
+    const right1 = candles[i + 1]!;
+    const right2 = candles[i + 2]!;
+    if (
+      current.high >= left2.high &&
+      current.high >= left1.high &&
+      current.high >= right1.high &&
+      current.high >= right2.high
+    ) {
+      pivots.push(current.high);
+    }
+  }
+
+  // Fallback: nếu thị trường trend quá mượt không tạo pivot rõ, dùng high lịch sử
+  // gần nhất như vùng chốt lời cấu trúc, rồi để RR filter quyết định có đáng đánh không.
+  return pivots.length > 0 ? pivots : candles.map((candle) => candle.high);
+}
+
+function structuralLows(candles: Candle[]): number[] {
+  const pivots: number[] = [];
+  for (let i = 2; i < candles.length - 2; i += 1) {
+    const left2 = candles[i - 2]!;
+    const left1 = candles[i - 1]!;
+    const current = candles[i]!;
+    const right1 = candles[i + 1]!;
+    const right2 = candles[i + 2]!;
+    if (
+      current.low <= left2.low &&
+      current.low <= left1.low &&
+      current.low <= right1.low &&
+      current.low <= right2.low
+    ) {
+      pivots.push(current.low);
+    }
+  }
+
+  return pivots.length > 0 ? pivots : candles.map((candle) => candle.low);
 }
 
 function round(value: number): number {
