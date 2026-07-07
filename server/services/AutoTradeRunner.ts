@@ -4,6 +4,7 @@ import type {
   AnalysisPayload,
   MarketSnapshot,
   NewsSnapshot,
+  SymbolCode,
 } from "../../types/trading";
 import { tradingRules } from "../config/tradingRules";
 import {
@@ -14,7 +15,7 @@ import {
 } from "../strategy/ruleStrategy";
 import { AiAnalysisService } from "./AiAnalysisService";
 import {
-  runActiveXauUsdOrderReviews,
+  runActiveSymbolOrderReviews,
   type ActiveOrderReviewItem,
 } from "./ActiveOrderReviewRunner";
 import { AnalysisHistoryService } from "./AnalysisHistoryService";
@@ -25,6 +26,7 @@ import { OpportunityPayloadBuilder } from "./OpportunityPayloadBuilder";
 import { SupabaseService } from "./SupabaseService";
 import { TelegramService } from "./TelegramService";
 import { isInsideTradeScannerWindow } from "./TradeScannerService";
+import { symbolCodeFromMt5Symbol, symbolLabel } from "../utils/symbols";
 
 /**
  * Auto-bot Rules Engine H1.
@@ -41,12 +43,17 @@ export class AutoTradeRunner {
   private lastErrorKey = "";
   private lastErrorNotifyAt = 0;
   private lastActiveReviewAt = 0;
+  private hadActiveOrders = false;
+  private lastOrderClosedAt = 0;
 
   async runOnce(): Promise<void> {
     if (this.running) return;
     this.running = true;
     try {
       const config = useRuntimeConfig();
+      const symbol = symbolCodeFromMt5Symbol(config.mt5Symbol);
+      const activeSymbolLabel = symbolLabel(config.mt5Symbol);
+      console.info(`[auto-bot] scanning ${activeSymbolLabel}`);
       const orderService = new Mt5OrderService({
         bridgeUrl: config.mt5BridgeUrl,
         symbol: config.mt5Symbol,
@@ -81,11 +88,38 @@ export class AutoTradeRunner {
 
       const activeOrders = await orderService.getActiveOrders();
       if (activeOrders.length > 0) {
-        await this.closeStaleOrders(orderService, activeOrders, config.autoMaxHoldHours);
+        this.hadActiveOrders = true;
+        console.info(
+          `[auto-bot] skipped new scan: ${activeOrders.length} active ${activeSymbolLabel} order(s)/position(s). Managing current order(s) only.`,
+        );
+        const closedByTimeStop = await this.closeStaleOrders(
+          orderService,
+          activeOrders,
+          config.autoMaxHoldHours,
+        );
+        if (closedByTimeStop > 0) return;
         await this.manageActiveOrders(orderService, activeOrders);
         return;
       }
+      if (this.hadActiveOrders) {
+        this.hadActiveOrders = false;
+        this.lastOrderClosedAt = Date.now();
+        console.info(
+          `[auto-bot] detected ${activeSymbolLabel} order closed; starting ${config.autoCooldownMinutes}m cooldown.`,
+        );
+      }
       this.lastActiveReviewAt = 0;
+
+      const cooldownRemainingMs =
+        this.lastOrderClosedAt > 0
+          ? config.autoCooldownMinutes * 60_000 - (Date.now() - this.lastOrderClosedAt)
+          : 0;
+      if (cooldownRemainingMs > 0) {
+        console.info(
+          `[auto-bot] skipped new scan: cooldown active for ${Math.ceil(cooldownRemainingMs / 60_000)} more minute(s).`,
+        );
+        return;
+      }
 
       if (this.tradesToday >= config.autoMaxTradesPerDay) {
         console.info("[auto-bot] đã đạt số lệnh tối đa/ngày.");
@@ -102,7 +136,7 @@ export class AutoTradeRunner {
         maxQuoteAgeSeconds: config.maxQuoteAgeSeconds,
         debug: false,
       });
-      const market = await marketService.collectAll(["XAUUSD"]);
+      const market = await marketService.collectAll([symbol]);
       const snapshot = market.snapshots[0];
       if (!snapshot || snapshot.data_quality === "LOW") {
         console.info("[auto-bot] bỏ qua: data_quality LOW hoặc thiếu snapshot.");
@@ -144,7 +178,13 @@ export class AutoTradeRunner {
           }
         }
       }
-      if (!signal) return;
+      if (!signal) {
+        console.info(`[auto-bot] no setup for ${activeSymbolLabel}`);
+        return;
+      }
+      console.info(
+        `[auto-bot] setup found ${activeSymbolLabel}: ${entryTf} ${signal.direction} entry ${signal.entry} SL ${signal.stopLoss} TP ${signal.takeProfit}`,
+      );
 
       const conviction = convictionScore(entryCandles, h4, signal, strategy);
       const lot =
@@ -158,6 +198,7 @@ export class AutoTradeRunner {
         indicators,
         emptyNews(),
         config.accountSizeUsd,
+        config.maxLossPercentPerTrade,
       );
 
       if (config.autoUseAiVetoOnBump) {
@@ -184,11 +225,17 @@ export class AutoTradeRunner {
             );
             return;
           }
-          const adjusted = veto.parsed.adjusted_trade;
-          if (!adjusted) {
-            console.info("[auto-bot] AI ALLOW nhưng thiếu adjusted_trade -> bỏ qua lệnh.");
-            return;
-          }
+          const finalLot = lot;
+          console.info(`[auto-bot] AI veto ALLOW for ${activeSymbolLabel}; keeping rules-engine entry/SL/TP unchanged.`);
+          const adjusted = {
+            order_type: "MARKET" as const,
+            lot: finalLot,
+            entry: signal.entry,
+            stop_loss: signal.stopLoss,
+            take_profit: signal.takeProfit,
+            risk_reward: rewardRisk(signal.direction, signal.entry, signal.stopLoss, signal.takeProfit),
+            reason: signal.reason,
+          };
           const validationError = validateAdjustedAutoTrade(
             signal.direction,
             adjusted,
@@ -196,21 +243,30 @@ export class AutoTradeRunner {
             [config.autoLotGood, config.autoLotVeryGood],
           );
           if (validationError) {
-            console.info(`[auto-bot] adjusted_trade không hợp lệ -> bỏ qua lệnh: ${validationError}`);
+            console.info(`[auto-bot] rules-engine trade invalid after AI ALLOW -> skip: ${validationError}`);
             return;
           }
-          signal = {
-            ...signal,
-            entry: adjusted.entry,
-            stopLoss: adjusted.stop_loss,
-            takeProfit: adjusted.take_profit,
-            reason: `${signal.reason} AI final check: ${adjusted.reason}`,
-          };
-          const finalLot = adjusted.lot;
           if (veto.parsed.warnings.length > 0) {
             console.info(
               `[auto-bot] AI veto ALLOW with warnings: ${veto.parsed.warnings.join(" | ")}`,
             );
+          }
+          const riskCheck = checkAutoRisk({
+            symbol,
+            entry: signal.entry,
+            stopLoss: signal.stopLoss,
+            lot: finalLot,
+            accountSizeUsd: config.accountSizeUsd,
+            maxLossPercentPerTrade: config.maxLossPercentPerTrade,
+          });
+          console.info(
+            `[auto-bot] risk check ${activeSymbolLabel}: estimated loss ${riskCheck.estimatedLossUsd} USD, max allowed ${riskCheck.maxLossUsd} USD.`,
+          );
+          if (!riskCheck.allowed) {
+            const message = `SKIP: estimated loss ${riskCheck.estimatedLossUsd} USD exceeds max loss ${riskCheck.maxLossUsd} USD`;
+            console.info(`[auto-bot] ${message}`);
+            await this.notifyAction(message);
+            return;
           }
           const placed = await orderService.placeOrder({
             direction: signal.direction,
@@ -287,6 +343,23 @@ export class AutoTradeRunner {
         console.info(`[auto-bot] rules signal không hợp lệ -> bỏ qua lệnh: ${validationError}`);
         return;
       }
+      const riskCheck = checkAutoRisk({
+        symbol,
+        entry: signal.entry,
+        stopLoss: signal.stopLoss,
+        lot,
+        accountSizeUsd: config.accountSizeUsd,
+        maxLossPercentPerTrade: config.maxLossPercentPerTrade,
+      });
+      console.info(
+        `[auto-bot] risk check ${activeSymbolLabel}: estimated loss ${riskCheck.estimatedLossUsd} USD, max allowed ${riskCheck.maxLossUsd} USD.`,
+      );
+      if (!riskCheck.allowed) {
+        const message = `SKIP: estimated loss ${riskCheck.estimatedLossUsd} USD exceeds max loss ${riskCheck.maxLossUsd} USD`;
+        console.info(`[auto-bot] ${message}`);
+        await this.notifyAction(message);
+        return;
+      }
       const placed = await orderService.placeOrder({
         direction: signal.direction,
         orderType: "MARKET",
@@ -349,8 +422,9 @@ export class AutoTradeRunner {
     orderService: Mt5OrderService,
     orders: { ticket: number; opened_at: string }[],
     maxHoldHours: number,
-  ): Promise<void> {
+  ): Promise<number> {
     const now = Date.now();
+    let closed = 0;
     for (const order of orders) {
       const openedMs = new Date(order.opened_at).getTime();
       if (!Number.isFinite(openedMs)) continue;
@@ -358,6 +432,9 @@ export class AutoTradeRunner {
       if (ageHours >= maxHoldHours) {
         try {
           await orderService.cancelOrder(order.ticket);
+          this.lastOrderClosedAt = Date.now();
+          this.hadActiveOrders = false;
+          closed += 1;
           console.info(
             `[auto-bot] đóng lệnh #${order.ticket} do giữ quá ${maxHoldHours}h (time-stop).`,
           );
@@ -369,6 +446,7 @@ export class AutoTradeRunner {
         }
       }
     }
+    return closed;
   }
 
   private async manageActiveOrders(
@@ -376,7 +454,11 @@ export class AutoTradeRunner {
     activeOrders: ActiveMt5Order[],
   ): Promise<void> {
     const snapshot = await this.collectActiveOrderSnapshot();
-    const checks = activeOrders.map((order) => ruleCheckActiveOrder(order, snapshot));
+    await this.moveEligibleOrdersToBreakEven(orderService, activeOrders, snapshot);
+    const config = useRuntimeConfig();
+    const checks = activeOrders.map((order) =>
+      ruleCheckActiveOrder(order, snapshot, config.maxQuoteAgeSeconds),
+    );
     const escalationReasons = checks.flatMap((check) => check.reasons);
     if (escalationReasons.length === 0) {
       console.info("[auto-bot] active-order rule-check OK, chưa cần gọi AI.");
@@ -393,14 +475,42 @@ export class AutoTradeRunner {
     this.lastActiveReviewAt = now;
     console.info(`[auto-bot] gọi AI review active order: ${escalationReasons.join(" | ")}`);
 
-    const { reviews } = await runActiveXauUsdOrderReviews();
+    const { reviews } = await runActiveSymbolOrderReviews();
     for (const item of reviews) {
       await this.applyActiveOrderReview(orderService, item);
     }
   }
 
+  private async moveEligibleOrdersToBreakEven(
+    orderService: Mt5OrderService,
+    activeOrders: ActiveMt5Order[],
+    snapshot: MarketSnapshot,
+  ): Promise<void> {
+    for (const order of activeOrders) {
+      const breakEvenStop = breakEvenStopLoss(order, snapshot);
+      if (breakEvenStop === null) continue;
+      try {
+        const result = await orderService.modifyOrder({
+          ticket: order.ticket,
+          stopLoss: breakEvenStop,
+          takeProfit: null,
+          comment: "auto-break-even-1r",
+        });
+        const message = `Moved SL to break-even for #${order.ticket}: SL ${result.stopLoss} after reaching >= 1R.`;
+        console.info(`[auto-bot] ${message}`);
+        await this.notifyAction(message);
+      } catch (error) {
+        console.warn(
+          `[auto-bot] failed moving #${order.ticket} SL to break-even:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }
+  }
+
   private async collectActiveOrderSnapshot(): Promise<MarketSnapshot> {
     const config = useRuntimeConfig();
+    const symbol = symbolCodeFromMt5Symbol(config.mt5Symbol);
     const marketService = new MarketDataService({
       providerName: config.marketDataProvider,
       apiKey: config.marketDataApiKey,
@@ -410,10 +520,10 @@ export class AutoTradeRunner {
       maxQuoteAgeSeconds: config.maxQuoteAgeSeconds,
       debug: false,
     });
-    const market = await marketService.collectAll(["XAUUSD"]);
+    const market = await marketService.collectAll([symbol]);
     const snapshot = market.snapshots[0];
     if (!snapshot) {
-      throw new Error("Không lấy được snapshot XAUUSD để rule-check lệnh active.");
+      throw new Error(`Không lấy được snapshot ${symbolLabel(config.mt5Symbol)} để rule-check lệnh active.`);
     }
     return snapshot;
   }
@@ -427,6 +537,8 @@ export class AutoTradeRunner {
 
     if (action === "CANCEL_ORDER" && order.state === "PENDING") {
       const result = await orderService.cancelOrder(order.ticket);
+      this.lastOrderClosedAt = Date.now();
+      this.hadActiveOrders = false;
       await this.notifyAction(
         `Đã hủy lệnh chờ #${order.ticket}. Lý do AI: ${review.action_reason}. State: ${result.state}`,
       );
@@ -435,6 +547,8 @@ export class AutoTradeRunner {
 
     if (action === "CLOSE_MANUALLY" && order.state === "FILLED") {
       const result = await orderService.cancelOrder(order.ticket);
+      this.lastOrderClosedAt = Date.now();
+      this.hadActiveOrders = false;
       await this.notifyAction(
         `Đã đóng lệnh #${order.ticket}. Lý do AI: ${review.action_reason}. State: ${result.state}`,
       );
@@ -621,6 +735,61 @@ function rewardRisk(
   return reward / risk;
 }
 
+interface AutoRiskCheckInput {
+  symbol: SymbolCode;
+  entry: number;
+  stopLoss: number;
+  lot: number;
+  accountSizeUsd: number;
+  maxLossPercentPerTrade: number;
+}
+
+interface AutoRiskCheck {
+  allowed: boolean;
+  estimatedLossUsd: number;
+  maxLossUsd: number;
+}
+
+function checkAutoRisk(input: AutoRiskCheckInput): AutoRiskCheck {
+  const estimatedLossUsd = estimateLossUsd(input);
+  const maxLossUsd = Number(
+    (input.accountSizeUsd * (input.maxLossPercentPerTrade / 100)).toFixed(2),
+  );
+  return {
+    allowed:
+      Number.isFinite(estimatedLossUsd) &&
+      estimatedLossUsd > 0 &&
+      estimatedLossUsd <= maxLossUsd,
+    estimatedLossUsd,
+    maxLossUsd,
+  };
+}
+
+function estimateLossUsd(input: {
+  symbol: SymbolCode;
+  entry: number;
+  stopLoss: number;
+  lot: number;
+}): number {
+  const distance = Math.abs(input.entry - input.stopLoss);
+  if (!Number.isFinite(distance) || distance <= 0 || input.lot <= 0) return 0;
+
+  if (input.symbol === "EURUSD") {
+    const pipSize = 0.0001;
+    const pipValuePerLot = 10;
+    const slPips = distance / pipSize;
+    return Number((slPips * pipValuePerLot * input.lot).toFixed(2));
+  }
+
+  // XAUUSD fallback: most MT5 gold contracts use 1.00 lot = 100 oz.
+  return Number((input.lot * distance * tradingRules.xauUsdOuncesPerLot).toFixed(2));
+}
+
+function roundPrice(price: number, referencePrice: number): number {
+  const digits = Math.abs(referencePrice) >= 100 ? 3 : 5;
+  return Number(price.toFixed(digits));
+}
+
 function isSaferStopLoss(
   order: ActiveMt5Order,
   currentPrice: number,
@@ -653,6 +822,25 @@ function isValidTakeProfit(
     : suggested < referencePrice;
 }
 
+function breakEvenStopLoss(
+  order: ActiveMt5Order,
+  snapshot: MarketSnapshot,
+): number | null {
+  if (order.state !== "FILLED" || order.stop_loss === null) return null;
+  const riskDistance = Math.abs(order.price_open - order.stop_loss);
+  if (!Number.isFinite(riskDistance) || riskDistance <= 0) return null;
+
+  if (order.direction === "BUY") {
+    if (order.stop_loss >= order.price_open) return null;
+    if (snapshot.price < order.price_open + riskDistance) return null;
+    return roundPrice(order.price_open, snapshot.price);
+  }
+
+  if (order.stop_loss <= order.price_open) return null;
+  if (snapshot.price > order.price_open - riskDistance) return null;
+  return roundPrice(order.price_open, snapshot.price);
+}
+
 interface ActiveOrderRuleCheck {
   shouldEscalate: boolean;
   reasons: string[];
@@ -661,6 +849,7 @@ interface ActiveOrderRuleCheck {
 function ruleCheckActiveOrder(
   order: ActiveMt5Order,
   snapshot: MarketSnapshot,
+  maxQuoteAgeSeconds: number,
 ): ActiveOrderRuleCheck {
   const reasons: string[] = [];
   const currentPrice = snapshot.price;
@@ -673,7 +862,7 @@ function ruleCheckActiveOrder(
   }
   if (
     snapshot.quoteAgeSeconds === null ||
-    snapshot.quoteAgeSeconds > tradingRules.maxQuoteAgeSeconds
+    snapshot.quoteAgeSeconds > maxQuoteAgeSeconds
   ) {
     reasons.push("quote MT5 stale");
   }
@@ -791,14 +980,17 @@ function buildAutoRecommendation(
   payload: AnalysisPayload,
   rr: number,
 ): AiTradeRecommendation {
-  const distance = Math.abs(signal.entry - signal.stopLoss);
-  const estLoss = Number(
-    (lot * distance * tradingRules.xauUsdOuncesPerLot).toFixed(2),
-  );
+  const symbol = payload.symbols[0]?.market.symbol ?? "EURUSD";
+  const estLoss = estimateLossUsd({
+    symbol,
+    entry: signal.entry,
+    stopLoss: signal.stopLoss,
+    lot,
+  });
   const confidence = conviction >= 2 ? 82 : 75;
   return {
     decision: "TRADE",
-    symbol: "XAUUSD",
+    symbol,
     direction: signal.direction,
     order_type: "MARKET",
     confidence,

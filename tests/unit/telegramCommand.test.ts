@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { parseCheckCommand } from "../../server/services/TelegramCommandService";
 
 describe("Telegram /check command", () => {
-  it("uses /check without an id for all active XAUUSD orders", () => {
-    expect(parseCheckCommand("/check")).toEqual({ kind: "ACTIVE_XAUUSD" });
+  it("uses /check without an id for all active configured-symbol orders", () => {
+    expect(parseCheckCommand("/check")).toEqual({ kind: "ACTIVE_SYMBOL" });
     expect(parseCheckCommand("/check@my_bot  ")).toEqual({
-      kind: "ACTIVE_XAUUSD",
+      kind: "ACTIVE_SYMBOL",
     });
   });
 

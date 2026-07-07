@@ -11,6 +11,7 @@ import { Mt5OrderService } from "./Mt5OrderService";
 import { NewsService } from "./NewsService";
 import { OpportunityPayloadBuilder } from "./OpportunityPayloadBuilder";
 import { SupabaseService } from "./SupabaseService";
+import { symbolCodeFromMt5Symbol } from "../utils/symbols";
 
 export interface ActiveOrderReviewItem {
   order: ActiveMt5Order;
@@ -18,11 +19,12 @@ export interface ActiveOrderReviewItem {
   matching_history_id: string | null;
 }
 
-export async function runActiveXauUsdOrderReviews(): Promise<{
+export async function runActiveSymbolOrderReviews(): Promise<{
   orders: ActiveMt5Order[];
   reviews: ActiveOrderReviewItem[];
 }> {
   const config = useRuntimeConfig();
+  const symbol = symbolCodeFromMt5Symbol(config.mt5Symbol);
   const orderService = new Mt5OrderService({
     bridgeUrl: config.mt5BridgeUrl,
     symbol: config.mt5Symbol,
@@ -59,8 +61,8 @@ export async function runActiveXauUsdOrderReviews(): Promise<{
     timeoutMs: config.aiTimeoutMs,
   });
 
-  // One fresh XAUUSD snapshot is shared by all active-order reviews in this run.
-  const market = await marketService.collectAll(["XAUUSD"]);
+  // One fresh snapshot for the configured MT5 symbol is shared by all active-order reviews in this run.
+  const market = await marketService.collectAll([symbol]);
   const indicators = new IndicatorService().calculateMany(market.snapshots);
   const news = await newsService.collect();
   const payload = new OpportunityPayloadBuilder().build(
@@ -68,6 +70,7 @@ export async function runActiveXauUsdOrderReviews(): Promise<{
     indicators,
     news,
     config.accountSizeUsd,
+    config.maxLossPercentPerTrade,
   );
 
   const reviews: ActiveOrderReviewItem[] = [];
@@ -92,15 +95,17 @@ export function findMatchingHistory(
   order: ActiveMt5Order,
   histories: AnalysisHistoryRecord[],
 ): AnalysisHistoryRecord | null {
+  const symbol = symbolCodeFromMt5Symbol(order.symbol);
+  const entryTolerance = symbol === "EURUSD" ? 0.002 : 2;
   return (
     histories.find((history) => history.mt5_ticket === order.ticket) ??
     histories.find(
       (history) =>
-        history.symbol === "XAUUSD" &&
+        history.symbol === symbol &&
         history.order_state === order.state &&
         history.direction === order.direction &&
-        Math.abs(history.entry_from - order.price_open) <= 2 &&
-        Math.abs(history.entry_to - order.price_open) <= 2,
+        Math.abs(history.entry_from - order.price_open) <= entryTolerance &&
+        Math.abs(history.entry_to - order.price_open) <= entryTolerance,
     ) ??
     null
   );

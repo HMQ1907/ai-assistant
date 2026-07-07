@@ -13,10 +13,11 @@ export interface ActiveOrderReviewPromptInput {
 export function buildActiveOrderReviewPrompt(
   input: ActiveOrderReviewPromptInput,
 ): string {
+  const symbol = input.latestPayload.symbols[0]?.market.symbol ?? "EURUSD";
   return JSON.stringify(
     {
       task:
-        "Review one currently active MT5 XAUUSD order or position. Decide whether it should be kept, cancelled/closed, or whether SL/TP should be moved. The local bot may execute your recommended action, so be precise and conservative.",
+        `Review one currently active MT5 ${symbol} order or position. Decide whether it should be kept, cancelled/closed, or whether SL/TP should be moved. The local bot may execute your recommended action, so be precise and conservative.`,
       mandatory_rules: [
         "Return one strict JSON object only. Do not use Markdown or add text outside JSON.",
         "All user-facing content MUST be written in Vietnamese.",
@@ -32,7 +33,7 @@ export function buildActiveOrderReviewPrompt(
         "If evidence is insufficient, select WAIT or KEEP_ORDER and list what should be checked manually.",
       ],
       output_schema: {
-        symbol: "XAUUSD",
+        symbol,
         reviewed_history_id: String(input.order.ticket),
         current_price: 0,
         order_status_assessment:

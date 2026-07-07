@@ -13,11 +13,12 @@ export interface AutoTradeVetoPromptInput {
 }
 
 export function buildAutoTradeVetoPrompt(input: AutoTradeVetoPromptInput): string {
-  const symbol = input.payload.symbols[0]?.market.symbol ?? "XAUUSD";
+  const symbol = input.payload.symbols[0]?.market.symbol ?? "EURUSD";
   return [
     `You are the final AI veto checker for an automated ${symbol} rules-engine trade.`,
     "The rules engine has already found a deterministic setup. Your job is the final safety and execution check before a real MT5 order is sent.",
-    "Return ALLOW only when you can provide the final lot, MARKET entry estimate, stop_loss and take_profit for this exact trade.",
+    "Return ALLOW only when the proposed rules-engine trade is safe enough to execute as-is.",
+    "You are veto-only: do not change direction, entry, stop_loss, take_profit, or lot. If any proposed level is wrong, BLOCK instead of adjusting it.",
     `Minimum accepted reward:risk is 1:${input.minRiskReward}. TP and SL must be based on visible candle structure, swing highs/lows, liquidity zones, or recent support/resistance. Do not use a blind fixed R target.`,
     "",
     "Hard BLOCK only for these reasons:",
@@ -29,10 +30,10 @@ export function buildAutoTradeVetoPrompt(input: AutoTradeVetoPromptInput): strin
     `- Stop loss or take profit is nonsensical: wrong side, zero/negative risk, TP on wrong side, or R:R below 1:${input.minRiskReward}.`,
     "- Known fresh high-impact news or abnormal volatility makes immediate automated entry unreasonable.",
     "",
-    "If ALLOW, adjusted_trade is REQUIRED and must contain the exact lot, entry, stop_loss, take_profit and numeric risk_reward.",
-    `Allowed lots: ${input.allowedLots.join(", ")}. Choose one of these lots only. If uncertain, choose the smallest lot.`,
-    "Do NOT widen SL just to make the trade survive. If the structural SL is too wide or TP is not realistically structural, BLOCK.",
-    "Do NOT use account size as a blocker, but do choose the smallest allowed lot when setup quality is only acceptable.",
+    "If ALLOW, adjusted_trade may repeat the proposed trade exactly for reporting, but it must not change any proposed level or lot.",
+    `Allowed lots: ${input.allowedLots.join(", ")}. The proposed lot is fixed at ${input.lot}; do not choose a different lot.`,
+    "Do NOT widen SL or move TP to make the trade survive. If the structural SL is too wide or TP is not realistically structural, BLOCK.",
+    "Do NOT use account size as a blocker; hard risk sizing is enforced by local code after your veto.",
     "Do NOT block for mild uncertainty, imperfect confidence, lack of a textbook retest, or because you would personally prefer to wait. Put those in warnings and still ALLOW only if adjusted_trade is valid.",
     "All user-facing text must be Vietnamese. Only enum values may remain English.",
     "Return only valid JSON. No markdown.",

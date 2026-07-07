@@ -1,6 +1,7 @@
 import type { AiOrderReview } from "../../types/ai";
 import type { ActiveMt5Order } from "../../types/trading";
-import { runActiveXauUsdOrderReviews } from "./ActiveOrderReviewRunner";
+import { runActiveSymbolOrderReviews } from "./ActiveOrderReviewRunner";
+import { symbolLabel } from "../utils/symbols";
 import { runOrderReview } from "./OrderReviewRunner";
 import { TelegramService, type TelegramUpdate } from "./TelegramService";
 
@@ -43,8 +44,8 @@ export class TelegramCommandService {
     const command = parseCheckCommand(message.text);
     if (!command) return;
 
-    if (command.kind === "ACTIVE_XAUUSD") {
-      await this.reviewActiveXauUsdOrders(telegram);
+    if (command.kind === "ACTIVE_SYMBOL") {
+      await this.reviewActiveSymbolOrders(telegram);
       return;
     }
 
@@ -78,22 +79,24 @@ export class TelegramCommandService {
     }
   }
 
-  private async reviewActiveXauUsdOrders(telegram: TelegramService): Promise<void> {
+  private async reviewActiveSymbolOrders(telegram: TelegramService): Promise<void> {
+    const config = useRuntimeConfig();
+    const activeSymbolLabel = symbolLabel(config.mt5Symbol);
     await telegram.sendMessage(
-      "Đã nhận /check. Mình đang đọc các pending order và position XAUUSD trực tiếp từ MT5, sau đó lấy dữ liệu thị trường mới nhất để AI review.",
+      `Đã nhận /check. Mình đang đọc các pending order và position ${activeSymbolLabel} trực tiếp từ MT5, sau đó lấy dữ liệu thị trường mới nhất để AI review.`,
     );
 
     try {
-      const output = await runActiveXauUsdOrderReviews();
+      const output = await runActiveSymbolOrderReviews();
       if (output.reviews.length === 0) {
         await telegram.sendMessage(
-          "Hiện không có pending order hoặc position XAUUSD nào đang active trên MT5.",
+          `Hiện không có pending order hoặc position ${activeSymbolLabel} nào đang active trên MT5.`,
         );
         return;
       }
 
       await telegram.sendMessage(
-        `Tìm thấy ${output.reviews.length} lệnh/vị thế XAUUSD đang active. Bot sẽ gửi một bản review cho từng ticket.`,
+        `Tìm thấy ${output.reviews.length} lệnh/vị thế ${activeSymbolLabel} đang active. Bot sẽ gửi một bản review cho từng ticket.`,
       );
       for (const item of output.reviews) {
         await telegram.sendMessage(
@@ -103,7 +106,7 @@ export class TelegramCommandService {
     } catch (error) {
       await telegram.sendMessage(
         [
-          "Không thể review các lệnh XAUUSD đang active.",
+          `Không thể review các lệnh ${activeSymbolLabel} đang active.`,
           "",
           `Lỗi: ${error instanceof Error ? error.message : String(error)}`,
           "",
@@ -115,13 +118,13 @@ export class TelegramCommandService {
 }
 
 export type CheckCommand =
-  | { kind: "ACTIVE_XAUUSD" }
+  | { kind: "ACTIVE_SYMBOL" }
   | { kind: "SIGNAL"; id: string };
 
 export function parseCheckCommand(text: string): CheckCommand | null {
   const trimmed = text.trim();
   if (/^\/check(?:@\w+)?\s*$/i.test(trimmed)) {
-    return { kind: "ACTIVE_XAUUSD" };
+    return { kind: "ACTIVE_SYMBOL" };
   }
   const match = trimmed.match(/^\/check(?:@\w+)?\s+["']?([0-9a-fA-F-]{8,})["']?\s*$/);
   if (!match?.[1]) return null;
@@ -134,7 +137,7 @@ function formatActiveOrderReviewTelegram(
 ): string {
   const state = order.state === "PENDING" ? "PENDING ORDER" : "POSITION ĐÃ KHỚP";
   return [
-    `Review XAUUSD #${order.ticket}`,
+    `Review ${review.symbol} #${order.ticket}`,
     "",
     `Trạng thái MT5: ${state}`,
     `Loại: ${order.type} (${order.direction})`,
@@ -143,7 +146,7 @@ function formatActiveOrderReviewTelegram(
     `SL hiện tại: ${order.stop_loss ?? "Chưa đặt"}`,
     `TP hiện tại: ${order.take_profit ?? "Chưa đặt"}`,
     `Lợi nhuận hiện tại: ${order.profit ?? "Chưa áp dụng"}`,
-    `Giá XAUUSD lúc review: ${review.current_price}`,
+    `Giá ${review.symbol} lúc review: ${review.current_price}`,
     "",
     `Đề xuất: ${translateAction(review.recommended_action)}`,
     `Độ tin cậy: ${review.confidence}%`,

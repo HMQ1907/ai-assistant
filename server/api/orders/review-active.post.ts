@@ -1,9 +1,9 @@
 import { createError } from "h3";
-import { runActiveXauUsdOrderReviews } from "../../services/ActiveOrderReviewRunner";
+import { runActiveSymbolOrderReviews } from "../../services/ActiveOrderReviewRunner";
 
 export default defineEventHandler(async () => {
   try {
-    return await runActiveXauUsdOrderReviews();
+    return await runActiveSymbolOrderReviews();
   } catch (error) {
     throw createError({
       statusCode: 500,

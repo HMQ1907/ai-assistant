@@ -2,7 +2,7 @@ import type { AiOrderReview, AiTradeRecommendation, OrderReviewAction } from "..
 import type { ActiveMt5Order } from "../../types/trading";
 import { tradingRules } from "../config/tradingRules";
 import { parseRiskReward } from "../utils/risk";
-import { runActiveXauUsdOrderReviews } from "./ActiveOrderReviewRunner";
+import { runActiveSymbolOrderReviews } from "./ActiveOrderReviewRunner";
 import { Mt5OrderService } from "./Mt5OrderService";
 import { runTradingAnalysis } from "./TradingAnalysisRunner";
 import { TelegramService } from "./TelegramService";
@@ -129,7 +129,7 @@ export class TradeScannerService {
       return;
     }
 
-    const { reviews } = await runActiveXauUsdOrderReviews();
+    const { reviews } = await runActiveSymbolOrderReviews();
     if (reviews.length === 0) return;
 
     this.focusLastReviewAt = now;

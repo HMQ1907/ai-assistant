@@ -63,6 +63,7 @@ export async function runOrderReview(input: {
     indicators,
     news,
     history.request_payload.accountSizeUsd,
+    history.request_payload.maxLossPercentPerTrade,
   );
   const review = await aiService.reviewOrder({
     history,

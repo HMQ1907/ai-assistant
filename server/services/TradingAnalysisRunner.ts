@@ -53,6 +53,7 @@ export async function runTradingAnalysis(input: {
     indicators,
     news,
     input.accountSizeUsd ?? tradingRules.defaultAccountSizeUsd,
+    config.maxLossPercentPerTrade,
   );
   const aiResult = await aiService.analyze(payload);
   const history = await historyService.create({

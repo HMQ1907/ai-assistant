@@ -35,7 +35,7 @@ export class MarketDataService {
     return this.provider.getSnapshots(symbols);
   }
 
-  async getLatestPrice(symbol: SymbolCode = "XAUUSD"): Promise<LatestMarketPrice> {
+  async getLatestPrice(symbol: SymbolCode = "EURUSD"): Promise<LatestMarketPrice> {
     if (!this.provider.getLatestPrice) {
       throw new Error("Provider hiện tại không hỗ trợ lấy giá riêng lẻ.");
     }
@@ -58,7 +58,7 @@ export class MarketDataService {
       case "mt5":
         return new Mt5MarketDataProvider({
           bridgeUrl: this.options.mt5BridgeUrl ?? "",
-          symbol: this.options.mt5Symbol ?? "XAUUSDm",
+          symbol: this.options.mt5Symbol ?? "EURUSD",
           ...(this.options.maxQuoteAgeSeconds !== undefined
             ? { maxQuoteAgeSeconds: this.options.maxQuoteAgeSeconds }
             : {}),

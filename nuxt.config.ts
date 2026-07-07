@@ -20,8 +20,8 @@ export default defineNuxtConfig({
     marketDataBaseUrl:
       process.env.MARKET_DATA_BASE_URL || "https://api.twelvedata.com",
     mt5BridgeUrl: process.env.MT5_BRIDGE_URL || "http://127.0.0.1:8765",
-    mt5Symbol: process.env.MT5_SYMBOL || "XAUUSDm",
-    mt5EurUsdSymbol: process.env.MT5_EURUSD_SYMBOL || "EURUSDm",
+    mt5Symbol: process.env.MT5_SYMBOL || "EURUSD",
+    mt5EurUsdSymbol: process.env.MT5_EURUSD_SYMBOL || "EURUSD",
     maxQuoteAgeSeconds: Number(process.env.MAX_QUOTE_AGE_SECONDS || 180),
     marketDataDebug: process.env.MARKET_DATA_DEBUG === "true",
     newsProvider: process.env.NEWS_PROVIDER || "gnews",
@@ -61,6 +61,7 @@ export default defineNuxtConfig({
     autoMaxTradesPerDay: Number(process.env.AUTO_MAX_TRADES_PER_DAY || 5),
     autoMaxDailyLossPercent: Number(process.env.AUTO_MAX_DAILY_LOSS_PERCENT || 10),
     autoMaxHoldHours: Number(process.env.AUTO_MAX_HOLD_HOURS || 72),
+    autoCooldownMinutes: Number(process.env.AUTO_COOLDOWN_MINUTES || 15),
     autoUseAiVetoOnBump: process.env.AUTO_AI_VETO !== "false",
     // Cho phép vào lệnh trên M15 (trong trend H1, bias H4) để có nhiều lệnh hơn.
     autoUseM15: process.env.AUTO_USE_M15 !== "false",

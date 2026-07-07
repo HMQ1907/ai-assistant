@@ -21,6 +21,7 @@ export class OpportunityPayloadBuilder {
     indicators: IndicatorSnapshot[],
     news: NewsSnapshot,
     accountSizeUsd: number,
+    maxLossPercentPerTrade = tradingRules.maxLossPercentPerTrade,
   ): AnalysisPayload {
     const selectedSymbols = market.snapshots.map((snapshot) => snapshot.symbol);
     const filteredNews = filterNewsForSymbols(news, selectedSymbols);
@@ -29,14 +30,17 @@ export class OpportunityPayloadBuilder {
       market.dataQuality,
       filteredNews.status === "AVAILABLE" ? "HIGH" : "MEDIUM",
     );
-    const maxLossUsdPerTrade = calculateMaxLossUsd(accountSizeUsd);
+    const maxLossUsdPerTrade = calculateMaxLossUsd(
+      accountSizeUsd,
+      maxLossPercentPerTrade,
+    );
     const symbolList = selectedSymbols.join(", ");
 
     return {
       generatedAt: new Date().toISOString(),
       accountSizeUsd,
       maxLossUsdPerTrade,
-      maxLossPercentPerTrade: tradingRules.maxLossPercentPerTrade,
+      maxLossPercentPerTrade,
       marketDataProvider: market.provider,
       newsProvider: filteredNews.provider,
       dataQuality,
@@ -59,11 +63,11 @@ export class OpportunityPayloadBuilder {
       news: filteredNews,
       rules: [
         `Requested analysis symbol(s): ${symbolList}. Analyze only these symbol(s).`,
-        "Hệ thống chỉ là AI Trading Assistant cho giao dịch thủ công XAUUSD. Không đặt lệnh.",
-        "Chỉ phân tích XAUUSD. Không quét hoặc chọn symbol khác.",
+        `Hệ thống chỉ phân tích symbol được yêu cầu: ${symbolList}. Không quét hoặc chọn symbol khác.`,
+        "Trong chế độ auto-bot, hệ thống local mới là nơi quyết định/đặt lệnh; AI chỉ phân tích hoặc veto theo dữ liệu được cung cấp.",
         "Phong cách giao dịch phải thận trọng. Chỉ TRADE khi setup rõ, dữ liệu mới và điều kiện khớp lệnh đáng tin cậy.",
         `Vốn hiện tại là ${accountSizeUsd} USD.`,
-        `Mức lỗ tham khảo mỗi giao dịch là ${tradingRules.maxLossPercentPerTrade}% vốn, tương đương ${maxLossUsdPerTrade} USD; đây không phải điều kiện để quyết định TRADE hay NO_TRADE.`,
+        `Mức lỗ tham khảo mỗi giao dịch là ${maxLossPercentPerTrade}% vốn, tương đương ${maxLossUsdPerTrade} USD; đây không phải điều kiện để quyết định TRADE hay NO_TRADE.`,
         `Nếu confidence < ${tradingRules.minConfidence}%, trả NO_TRADE.`,
         `Nếu risk_reward < 1:${tradingRules.minRiskReward}, trả NO_TRADE.`,
         "Vốn, lot và estimated_loss_if_sl_hit chỉ mang tính tham khảo; không được dùng để phủ quyết một setup kỹ thuật hợp lệ. Người dùng tự quản trị vốn và khối lượng.",
@@ -75,7 +79,7 @@ export class OpportunityPayloadBuilder {
         "Không SELL vào động lượng tăng đang mở rộng và không BUY vào động lượng giảm đang mở rộng. Khi có dấu hiệu chuyển pha mạnh, phải chờ pullback/retest hoặc trả NO_TRADE.",
         "Setup pullback/retest chỉ được trả TRADE khi bối cảnh đa khung rõ ràng, quote mới, bid/ask/spread thật có sẵn, và điều kiện hủy kèo cụ thể.",
         "Khung quyết định là H1, H4 làm bias lọc hướng, M15 chỉ để canh điểm vào, M5 gần như bỏ. Chỉ trade thuận bias H4.",
-        `Stop loss phải đặt ngoài cấu trúc H1 và cách entry tối thiểu ${tradingRules.minStopLossAtrMultiple} lần ATR(H1) để không bị noise hoặc quét thanh khoản của vàng đánh bay. Không được bóp SL sát lại chỉ để đạt risk_reward; nếu SL đúng cấu trúc làm RR dưới ngưỡng thì trả NO_TRADE.`,
+        `Stop loss phải đặt ngoài cấu trúc H1 và cách entry tối thiểu ${tradingRules.minStopLossAtrMultiple} lần ATR(H1) để không bị noise hoặc quét thanh khoản. Không được bóp SL sát lại chỉ để đạt risk_reward; nếu SL đúng cấu trúc làm RR dưới ngưỡng thì trả NO_TRADE.`,
         "Ưu tiên lệnh MARKET tại giá hiện tại khi có setup H1 hợp lệ ngay lúc này, vì người dùng không ngồi canh để chờ lệnh chờ khớp. Chỉ dùng lệnh chờ khi giá đang thực sự hồi về vùng retest gần và có điều kiện hủy kèo cụ thể.",
         "All user-facing content MUST be written in Vietnamese. Only enum values may remain in English.",
         "Không khuyến nghị martingale, DCA lỗ, all-in, tăng khối lượng sau khi thua, copy trade hoặc auto trade.",
@@ -195,11 +199,14 @@ function round(value: number): number {
   return Number(value.toFixed(4));
 }
 
-function calculateMaxLossUsd(accountSizeUsd: number): number {
+function calculateMaxLossUsd(
+  accountSizeUsd: number,
+  maxLossPercentPerTrade: number,
+): number {
   return Number(
     (
       accountSizeUsd *
-      (tradingRules.maxLossPercentPerTrade / 100)
+      (maxLossPercentPerTrade / 100)
     ).toFixed(2),
   );
 }
