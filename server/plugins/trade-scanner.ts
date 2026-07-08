@@ -23,7 +23,7 @@ export default defineNitroPlugin((nitroApp) => {
     console.info("[trade-loop] disabled (AUTO_TRADE=false, TRADE_SCANNER_ENABLED=false)");
     return;
   }
-  // Cháº¿ Ä‘á»™ bÃ¡o tÃ­n hiá»‡u LLM cáº§n Telegram; auto-bot thÃ¬ khÃ´ng.
+  // Signal scanner needs Telegram; auto-bot can run without it.
   if (!autoMode && (!config.telegramBotToken || !config.telegramChatId)) {
     console.warn("[trade-loop] scanner disabled: missing Telegram config");
     return;
@@ -40,7 +40,7 @@ export default defineNitroPlugin((nitroApp) => {
   globalThis.__tradeScannerTimer = setInterval(() => {
     const now = new Date();
 
-    // Tracker Ä‘o káº¿t quáº£ (cáº£ 2 cháº¿ Ä‘á»™), má»—i 5 phÃºt, Ä‘á»™c láº­p khung giá».
+    // Outcome tracker runs every 5 minutes, independent from entry session.
     if (isFiveMinSlot(now, tz)) {
       const trackerSlot = slotKey(now, tz);
       if (globalThis.__outcomeTrackerLastSlot !== trackerSlot) {
@@ -50,7 +50,7 @@ export default defineNitroPlugin((nitroApp) => {
     }
 
     if (autoMode) {
-      // Auto-bot vòng 1: m?i 5 phút + vài giây sau n?n dóng d? scan setup m?i.
+      // Auto-bot loop 1: every 5 minutes + a few seconds after candle close.
       if (isFiveMinSlot(now, tz)) {
         const autoSlot = slotKey(now, tz);
         if (globalThis.__autoTradeLastSlot !== autoSlot) {
@@ -60,7 +60,7 @@ export default defineNitroPlugin((nitroApp) => {
         return;
       }
 
-      // Auto-bot vòng 2: m?i phút + vài giây, ch? qu?n lý l?nh dang có.
+      // Auto-bot loop 2: every minute, manage active orders / pending setup only.
       if (isOneMinSlot(now, tz)) {
         const managementSlot = slotKey(now, tz);
         if (globalThis.__autoTradeManagementLastSlot !== managementSlot) {
@@ -71,7 +71,7 @@ export default defineNitroPlugin((nitroApp) => {
       return;
     }
 
-    // Cháº¿ Ä‘á»™ bÃ¡o tÃ­n hiá»‡u LLM: gá»i má»—i slot, scanOnce tá»± xá»­ lÃ½ focus/quÃ©t.
+    // LLM signal scanner mode.
     if (!isScannerSlot(now)) return;
     const slot = slotKey(now, tz);
     if (globalThis.__tradeScannerLastSlot === slot) return;
@@ -88,7 +88,7 @@ export default defineNitroPlugin((nitroApp) => {
 
   if (autoMode) {
     console.info(
-      `[trade-loop] AUTO-BOT enabled (Rules Engine H1) â€” entries in ${config.tradeScannerWindows || `${config.tradeScannerStartHour}:00-${config.tradeScannerEndHour}:00`} ${tz}, lots ${config.autoLotGood}/${config.autoLotVeryGood}, maxDailyLoss ${config.autoMaxDailyLossPercent}%`,
+      `[trade-loop] AUTO-BOT enabled (Rules Engine H1) - entries in ${config.tradeScannerWindows || `${config.tradeScannerStartHour}:00-${config.tradeScannerEndHour}:00`} ${tz}, lots ${config.autoLotGood}/${config.autoLotVeryGood}, maxDailyLoss ${config.autoMaxDailyLossPercent}%`,
     );
   } else {
     console.info(
@@ -129,4 +129,3 @@ function slotKey(date: Date, timeZone: string): string {
     timeZone,
   }).format(date);
 }
-

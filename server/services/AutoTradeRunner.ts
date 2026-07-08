@@ -99,7 +99,7 @@ export class AutoTradeRunner {
       await this.manageActiveOrders(orderService, activeOrders);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      console.warn("[auto-bot] management tick lỗi:", msg);
+      console.warn("[auto-bot] management tick error:", msg);
     } finally {
       this.running = false;
     }
@@ -121,16 +121,16 @@ export class AutoTradeRunner {
       const account = await orderService.getAccount();
       this.rollDay(config.tradeScannerTimezone, account.equity);
       if (!account.tradeAllowed) {
-        console.warn("[auto-bot] AutoTrading đang TẮT trong MT5.");
+        console.warn("[auto-bot] AutoTrading is OFF in MT5.");
         await this.notifyError(
           config,
           "algo-off",
-          "AutoTrading đang TẮT trong MT5, bot không đặt được lệnh. Hãy bật nút Algo Trading.",
+          "AutoTrading is OFF in MT5, bot cannot place orders. Please enable Algo Trading.",
         );
         return;
       }
       if (this.haltedForDay) {
-        console.info("[auto-bot] đã chạm giới hạn lỗ/lệnh trong ngày, dừng vào lệnh.");
+        console.info("[auto-bot] daily trade/loss limit reached, stop opening new trades.");
         return;
       }
       if (
@@ -140,7 +140,7 @@ export class AutoTradeRunner {
       ) {
         this.haltedForDay = true;
         console.warn(
-          `[auto-bot] kill-switch: equity ${account.equity} <= ngưỡng lỗ ngày ${config.autoMaxDailyLossPercent}%.`,
+          `[auto-bot] kill-switch: equity ${account.equity} <= daily loss threshold ${config.autoMaxDailyLossPercent}%.`,
         );
         return;
       }
@@ -195,7 +195,7 @@ export class AutoTradeRunner {
       }
 
       if (this.tradesToday >= config.autoMaxTradesPerDay) {
-        console.info("[auto-bot] đã đạt số lệnh tối đa/ngày.");
+        console.info("[auto-bot] max trades/day reached.");
         return;
       }
       const timeBlockReason = getAutoTradeTimeBlockReason(config.tradeScannerTimezone);
@@ -223,7 +223,7 @@ export class AutoTradeRunner {
       const market = await marketService.collectAll([symbol]);
       const snapshot = market.snapshots[0];
       if (!snapshot || snapshot.data_quality === "LOW") {
-        console.info("[auto-bot] bỏ qua: data_quality LOW hoặc thiếu snapshot.");
+        console.info("[auto-bot] skipped: data_quality LOW or missing snapshot.");
         return;
       }
 
@@ -379,7 +379,7 @@ export class AutoTradeRunner {
 
           if (veto.parsed.decision === "BLOCK") {
             console.info(
-              `[auto-bot] AI veto BLOCK -> bỏ qua lệnh ${entryTf}: ${veto.parsed.blocker_reasons.join(" | ") || veto.parsed.summary}`,
+              `[auto-bot] AI veto BLOCK -> skip ${entryTf}: ${veto.parsed.blocker_reasons.join(" | ") || veto.parsed.summary}`,
             );
             return;
           }
@@ -437,7 +437,7 @@ export class AutoTradeRunner {
           });
           this.tradesToday += 1;
           console.info(
-            `[auto-bot] ĐẶT ${entryTf} ${signal.direction} ${finalLot} lot @${placed.price} SL ${signal.stopLoss} TP ${signal.takeProfit} (conviction ${conviction}, ticket ${placed.ticket})`,
+            `[auto-bot] PLACED ${entryTf} ${signal.direction} ${finalLot} lot @${placed.price} SL ${signal.stopLoss} TP ${signal.takeProfit} (conviction ${conviction}, ticket ${placed.ticket})`,
           );
 
           try {
@@ -466,7 +466,7 @@ export class AutoTradeRunner {
             });
           } catch (error) {
             console.warn(
-              "[auto-bot] không ghi được lịch sử:",
+              "[auto-bot] failed writing history:",
               error instanceof Error ? error.message : error,
             );
           }
@@ -475,29 +475,29 @@ export class AutoTradeRunner {
           const msg = error instanceof Error ? error.message : String(error);
           if (config.autoTradeOnAiError) {
             console.warn(
-              "[auto-bot] AI auto-veto lỗi, fallback trade bằng Rule Engine:",
+              "[auto-bot] AI auto-veto error, fallback to Rule Engine:",
               msg,
             );
             await this.notifyError(
               config,
               "ai-fallback",
               [
-                "AI auto-veto lỗi nhưng AUTO_TRADE_ON_AI_ERROR=true nên bot sẽ dùng Rule Engine để tiếp tục xét vào lệnh.",
+                "AI auto-veto failed but AUTO_TRADE_ON_AI_ERROR=true, so bot will continue with Rule Engine.",
                 `Symbol: ${activeSymbolLabel}`,
                 `Setup: ${entryTf} ${signal.direction}`,
                 `Entry: ${signal.entry}`,
                 `SL: ${signal.stopLoss}`,
                 `TP: ${signal.takeProfit}`,
-                `Lỗi AI: ${msg.slice(0, 200)}`,
-                "Bạn kiểm tra/nạp quota Gemini/Evolink giúp mình.",
+                `AI error: ${msg.slice(0, 200)}`,
+                "Please check Gemini/Evolink quota or API status.",
               ].join("\n"),
             );
           } else {
-          console.warn("[auto-bot] AI auto-veto lỗi -> bỏ qua lệnh:", msg);
+          console.warn("[auto-bot] AI auto-veto error -> skip trade:", msg);
           await this.notifyError(
             config,
             "ai",
-            `Gọi AI auto-veto thất bại nên BỎ QUA lệnh ${entryTf} ${signal.direction}. Lỗi: ${msg.slice(0, 200)}`,
+            `AI auto-veto failed, so SKIP ${entryTf} ${signal.direction}. Error: ${msg.slice(0, 200)}`,
           );
           return;
           }
@@ -519,7 +519,7 @@ export class AutoTradeRunner {
         [config.autoLotGood, config.autoLotVeryGood],
       );
       if (validationError) {
-        console.info(`[auto-bot] rules signal không hợp lệ -> bỏ qua lệnh: ${validationError}`);
+        console.info(`[auto-bot] rules signal invalid -> skip: ${validationError}`);
         return;
       }
       const riskCheck = checkAutoRisk({
@@ -550,7 +550,7 @@ export class AutoTradeRunner {
       });
       this.tradesToday += 1;
       console.info(
-        `[auto-bot] ĐẶT ${entryTf} ${signal.direction} ${lot} lot @${placed.price} SL ${signal.stopLoss} TP ${signal.takeProfit} (conviction ${conviction}, ticket ${placed.ticket})`,
+        `[auto-bot] PLACED ${entryTf} ${signal.direction} ${lot} lot @${placed.price} SL ${signal.stopLoss} TP ${signal.takeProfit} (conviction ${conviction}, ticket ${placed.ticket})`,
       );
 
       try {
@@ -579,16 +579,16 @@ export class AutoTradeRunner {
         });
       } catch (error) {
         console.warn(
-          "[auto-bot] không ghi được lịch sử:",
+          "[auto-bot] failed writing history:",
           error instanceof Error ? error.message : error,
         );
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      console.warn("[auto-bot] tick lỗi:", msg);
+      console.warn("[auto-bot] tick error:", msg);
       try {
         const config = useRuntimeConfig();
-        await this.notifyError(config, "tick", `Tick lỗi: ${msg.slice(0, 250)}`);
+        await this.notifyError(config, "tick", `Tick error: ${msg.slice(0, 250)}`);
       } catch {
         // Ignore secondary notification failure.
       }
@@ -768,7 +768,7 @@ export class AutoTradeRunner {
     });
     this.tradesToday += 1;
     console.info(
-      `[auto-bot] ĐẶT pending-trigger ${input.entryTf} ${input.signal.direction} ${lot} lot @${placed.price} SL ${input.signal.stopLoss} TP ${input.signal.takeProfit} (conviction ${conviction}, ticket ${placed.ticket})`,
+      `[auto-bot] PLACED pending-trigger ${input.entryTf} ${input.signal.direction} ${lot} lot @${placed.price} SL ${input.signal.stopLoss} TP ${input.signal.takeProfit} (conviction ${conviction}, ticket ${placed.ticket})`,
     );
 
     try {
@@ -805,7 +805,7 @@ export class AutoTradeRunner {
       });
     } catch (error) {
       console.warn(
-        "[auto-bot] không ghi được lịch sử pending trigger:",
+        "[auto-bot] failed writing pending-trigger history:",
         error instanceof Error ? error.message : error,
       );
     }
@@ -830,11 +830,11 @@ export class AutoTradeRunner {
           this.hadActiveOrders = false;
           closed += 1;
           console.info(
-            `[auto-bot] đóng lệnh #${order.ticket} do giữ quá ${maxHoldHours}h (time-stop).`,
+            `[auto-bot] closed #${order.ticket}: held longer than ${maxHoldHours}h (time-stop).`,
           );
         } catch (error) {
           console.warn(
-            `[auto-bot] không đóng được #${order.ticket}:`,
+            `[auto-bot] failed closing #${order.ticket}:`,
             error instanceof Error ? error.message : error,
           );
         }
@@ -879,19 +879,19 @@ export class AutoTradeRunner {
     );
     const escalationReasons = checks.flatMap((check) => check.reasons);
     if (escalationReasons.length === 0) {
-      console.info("[auto-bot] active-order rule-check OK, chưa cần gọi AI.");
+      console.info("[auto-bot] active-order rule-check OK, no AI review needed.");
       return;
     }
 
     const now = Date.now();
     if (this.lastActiveReviewAt > 0 && now - this.lastActiveReviewAt < 15 * 60_000) {
       console.info(
-        `[auto-bot] active-order rule-check có cảnh báo nhưng chưa đủ 15 phút gọi lại AI: ${escalationReasons.join(" | ")}`,
+        `[auto-bot] active-order warnings found, but AI review cooldown is not over yet: ${escalationReasons.join(" | ")}`,
       );
       return;
     }
     this.lastActiveReviewAt = now;
-    console.info(`[auto-bot] gọi AI review active order: ${escalationReasons.join(" | ")}`);
+    console.info(`[auto-bot] calling AI active-order review: ${escalationReasons.join(" | ")}`);
 
     const { reviews } = await runActiveSymbolOrderReviews();
     for (const item of reviews) {
@@ -941,7 +941,7 @@ export class AutoTradeRunner {
     const market = await marketService.collectAll([symbol]);
     const snapshot = market.snapshots[0];
     if (!snapshot) {
-      throw new Error(`Không lấy được snapshot ${symbolLabel(config.mt5Symbol)} để rule-check lệnh active.`);
+      throw new Error(`Cannot collect snapshot ${symbolLabel(config.mt5Symbol)} for active-order rule-check.`);
     }
     return snapshot;
   }
@@ -958,7 +958,7 @@ export class AutoTradeRunner {
       this.lastOrderClosedAt = Date.now();
       this.hadActiveOrders = false;
       await this.notifyAction(
-        `Đã hủy lệnh chờ #${order.ticket}. Lý do AI: ${review.action_reason}. State: ${result.state}`,
+        `Cancelled pending order #${order.ticket}. AI reason: ${review.action_reason}. State: ${result.state}`,
       );
       return;
     }
@@ -968,7 +968,7 @@ export class AutoTradeRunner {
       this.lastOrderClosedAt = Date.now();
       this.hadActiveOrders = false;
       await this.notifyAction(
-        `Đã đóng lệnh #${order.ticket}. Lý do AI: ${review.action_reason}. State: ${result.state}`,
+        `Closed order #${order.ticket}. AI reason: ${review.action_reason}. State: ${result.state}`,
       );
       return;
     }
@@ -990,7 +990,7 @@ export class AutoTradeRunner {
 
     if (nextStopLoss === null && nextTakeProfit === null) {
       await this.notifyAction(
-        `AI đề xuất ${action} cho #${order.ticket}, nhưng giá SL/TP đề xuất không hợp lệ hoặc không giảm rủi ro nên bot không sửa lệnh.`,
+        `AI suggested ${action} for #${order.ticket}, but suggested SL/TP is invalid or does not reduce risk, so bot did not modify the order.`,
       );
       return;
     }
@@ -1003,11 +1003,11 @@ export class AutoTradeRunner {
     });
     await this.notifyAction(
       [
-        `Đã sửa lệnh #${order.ticket} theo AI review.`,
+        `Modified order #${order.ticket} based on AI review.`,
         `Action: ${action}`,
-        `SL mới: ${result.stopLoss ?? "giữ nguyên"}`,
-        `TP mới: ${result.takeProfit ?? "giữ nguyên"}`,
-        `Lý do: ${review.action_reason}`,
+        `New SL: ${result.stopLoss ?? "unchanged"}`,
+        `New TP: ${result.takeProfit ?? "unchanged"}`,
+        `Reason: ${review.action_reason}`,
       ].join("\n"),
     );
   }
@@ -1031,7 +1031,7 @@ export class AutoTradeRunner {
       }).sendMessage(`Auto-bot: ${message}`);
     } catch (error) {
       console.warn(
-        "[auto-bot] gửi cảnh báo Telegram thất bại:",
+        "[auto-bot] failed sending Telegram alert:",
         error instanceof Error ? error.message : error,
       );
     }
@@ -1044,10 +1044,10 @@ export class AutoTradeRunner {
       await new TelegramService({
         botToken: config.telegramBotToken,
         chatId: config.telegramChatId,
-      }).sendMessage(`Auto-bot quản lý lệnh:\n${message}`);
+      }).sendMessage(`Auto-bot order management:\n${message}`);
     } catch (error) {
       console.warn(
-        "[auto-bot] gửi thông báo quản lý lệnh thất bại:",
+        "[auto-bot] failed sending order-management Telegram message:",
         error instanceof Error ? error.message : error,
       );
     }
@@ -1144,7 +1144,7 @@ function validateAdjustedAutoTrade(
 ): string | null {
   const lots = uniqueLots(allowedLots);
   if (!lots.some((lot) => Math.abs(lot - trade.lot) < 0.000001)) {
-    return `lot ${trade.lot} không nằm trong danh sách cho phép ${lots.join(", ")}`;
+    return `lot ${trade.lot} is not in allowed lots ${lots.join(", ")}`;
   }
 
   if (
@@ -1152,7 +1152,7 @@ function validateAdjustedAutoTrade(
     !Number.isFinite(trade.stop_loss) ||
     !Number.isFinite(trade.take_profit)
   ) {
-    return "entry/SL/TP không phải số hợp lệ";
+    return "entry/SL/TP are not valid numbers";
   }
 
   const actualRr = rewardRisk(
@@ -1162,19 +1162,19 @@ function validateAdjustedAutoTrade(
     trade.take_profit,
   );
   if (!Number.isFinite(actualRr) || actualRr < minRiskReward) {
-    return `RR thực tế ${actualRr.toFixed(2)} thấp hơn tối thiểu 1:${minRiskReward}`;
+    return `actual RR ${actualRr.toFixed(2)} is below minimum 1:${minRiskReward}`;
   }
 
   if (Math.abs(actualRr - trade.risk_reward) > 0.35) {
-    return `RR AI khai báo ${trade.risk_reward} lệch nhiều so với RR thực tế ${actualRr.toFixed(2)}`;
+    return `reported RR ${trade.risk_reward} differs too much from actual RR ${actualRr.toFixed(2)}`;
   }
 
   if (direction === "BUY") {
-    if (trade.stop_loss >= trade.entry) return "BUY có SL không nằm dưới entry";
-    if (trade.take_profit <= trade.entry) return "BUY có TP không nằm trên entry";
+    if (trade.stop_loss >= trade.entry) return "BUY SL is not below entry";
+    if (trade.take_profit <= trade.entry) return "BUY TP is not above entry";
   } else {
-    if (trade.stop_loss <= trade.entry) return "SELL có SL không nằm trên entry";
-    if (trade.take_profit >= trade.entry) return "SELL có TP không nằm dưới entry";
+    if (trade.stop_loss <= trade.entry) return "SELL SL is not above entry";
+    if (trade.take_profit >= trade.entry) return "SELL TP is not below entry";
   }
 
   return null;
@@ -1323,7 +1323,7 @@ function ruleCheckActiveOrder(
     : null;
 
   if (snapshot.data_quality === "LOW" || snapshot.critical_errors.length > 0) {
-    reasons.push("data quality thấp hoặc có critical error");
+    reasons.push("data quality LOW or critical error");
   }
   if (
     snapshot.quoteAgeSeconds === null ||
@@ -1332,21 +1332,21 @@ function ruleCheckActiveOrder(
     reasons.push("quote MT5 stale");
   }
   if (order.stop_loss === null || order.take_profit === null) {
-    reasons.push("lệnh active thiếu SL hoặc TP");
+    reasons.push("active order is missing SL or TP");
   }
   if (hasVolatilitySpike(snapshot)) {
-    reasons.push("volatility spike trên candle gần nhất");
+    reasons.push("volatility spike on latest candle");
   }
 
   if (order.state === "PENDING") {
     const ageMinutes = orderAgeMinutes(order);
     if (ageMinutes !== null && ageMinutes >= 60) {
-      reasons.push(`lệnh chờ đã ${Math.round(ageMinutes)} phút`);
+      reasons.push(`pending order age ${Math.round(ageMinutes)} minutes`);
     }
     if (risk !== null && risk > 0) {
       const driftFromEntry = Math.abs(currentPrice - order.price_open) / risk;
       if (driftFromEntry >= 1.2) {
-        reasons.push(`giá đã lệch xa entry ${driftFromEntry.toFixed(1)}R`);
+        reasons.push(`price drifted ${driftFromEntry.toFixed(1)}R away from entry`);
       }
     }
     return { shouldEscalate: reasons.length > 0, reasons };
@@ -1355,20 +1355,20 @@ function ruleCheckActiveOrder(
   if (risk !== null && risk > 0) {
     const openR = unrealizedR(order, currentPrice, risk);
     if (openR >= 1) {
-      reasons.push(`lệnh đang lời ${openR.toFixed(1)}R, cân nhắc khóa lời/dời SL`);
+      reasons.push(`order is up ${openR.toFixed(1)}R, consider locking profit/moving SL`);
     }
     if (openR <= -0.6) {
-      reasons.push(`lệnh đang âm ${openR.toFixed(1)}R, cần kiểm tra thesis`);
+      reasons.push(`order is down ${openR.toFixed(1)}R, thesis needs review`);
     }
 
     const slDistanceRatio = distanceToStopRatio(order, currentPrice, risk);
     if (slDistanceRatio !== null && slDistanceRatio <= 0.25) {
-      reasons.push(`giá còn cách SL khoảng ${slDistanceRatio.toFixed(2)}R`);
+      reasons.push(`price is about ${slDistanceRatio.toFixed(2)}R from SL`);
     }
 
     const tpDistanceRatio = distanceToTakeProfitRatio(order, currentPrice, risk);
     if (tpDistanceRatio !== null && tpDistanceRatio <= 0.25) {
-      reasons.push(`giá còn cách TP khoảng ${tpDistanceRatio.toFixed(2)}R`);
+      reasons.push(`price is about ${tpDistanceRatio.toFixed(2)}R from TP`);
     }
   }
 
@@ -1462,11 +1462,11 @@ function buildAutoRecommendation(
     estimated_win_probability: confidence,
     entry_zone: { from: signal.entry, to: signal.entry },
     stop_loss: signal.stopLoss,
-    stop_loss_reason: "SL ngoài swing gần nhất + đệm ATR(H1) theo rules engine.",
+    stop_loss_reason: "SL beyond nearest swing plus ATR buffer by rules engine.",
     take_profit: signal.takeProfit,
-    take_profit_reason: `TP theo cấu trúc nến/vùng thanh khoản; RR tối thiểu yêu cầu là 1:${rr}.`,
+    take_profit_reason: `TP based on structure/liquidity zone; minimum required RR is 1:${rr}.`,
     risk_reward: `>=1:${rr}`,
-    expected_holding_time: "Theo SL/TP, tối đa vài giờ.",
+    expected_holding_time: "Until SL/TP, max a few hours.",
     cancel_after_minutes: null,
     position_sizing: {
       account_size_usd: payload.accountSizeUsd,
@@ -1479,7 +1479,7 @@ function buildAutoRecommendation(
     current_price: currentPrice,
     market_context: signal.reason,
     trade_reason: signal.reason,
-    entry_plan: "Vào MARKET ngay khi nến xác nhận đã đóng.",
+    entry_plan: "Enter MARKET after confirmation candle closes.",
     summary: `Auto-bot Rules Engine: ${signal.direction} ${lot} lot.`,
     technical_analysis: {
       trend: "",
@@ -1504,6 +1504,6 @@ function buildAutoRecommendation(
     next_check_suggestion: "",
     risky_trade: null,
     disclaimer:
-      "Auto-bot demo, đây không phải lời khuyên tài chính. Người dùng tự chịu trách nhiệm với quyết định giao dịch.",
+      "Auto-bot demo. This is not financial advice. User is fully responsible for trading decisions.",
   };
 }
