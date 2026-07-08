@@ -112,6 +112,61 @@ export function atr(candles: Candle[], period = 14): number | null {
   return round(average(trs));
 }
 
+export function adx(candles: Candle[], period = 14): number | null {
+  if (candles.length < period * 2 + 1) return null;
+
+  const plusDm: number[] = [];
+  const minusDm: number[] = [];
+  const trValues: number[] = [];
+
+  for (let i = 1; i < candles.length; i += 1) {
+    const current = candles[i];
+    const previous = candles[i - 1];
+    if (!current || !previous) continue;
+
+    const upMove = current.high - previous.high;
+    const downMove = previous.low - current.low;
+    plusDm.push(upMove > downMove && upMove > 0 ? upMove : 0);
+    minusDm.push(downMove > upMove && downMove > 0 ? downMove : 0);
+    trValues.push(
+      Math.max(
+        current.high - current.low,
+        Math.abs(current.high - previous.close),
+        Math.abs(current.low - previous.close),
+      ),
+    );
+  }
+
+  if (trValues.length < period * 2) return null;
+
+  let smoothedTr = sum(trValues.slice(0, period));
+  let smoothedPlusDm = sum(plusDm.slice(0, period));
+  let smoothedMinusDm = sum(minusDm.slice(0, period));
+  const dxValues: number[] = [];
+
+  for (let i = period; i < trValues.length; i += 1) {
+    if (i > period) {
+      smoothedTr = smoothedTr - smoothedTr / period + (trValues[i] ?? 0);
+      smoothedPlusDm = smoothedPlusDm - smoothedPlusDm / period + (plusDm[i] ?? 0);
+      smoothedMinusDm = smoothedMinusDm - smoothedMinusDm / period + (minusDm[i] ?? 0);
+    }
+
+    if (smoothedTr <= 0) continue;
+    const plusDi = 100 * (smoothedPlusDm / smoothedTr);
+    const minusDi = 100 * (smoothedMinusDm / smoothedTr);
+    const denominator = plusDi + minusDi;
+    if (denominator <= 0) continue;
+    dxValues.push(100 * (Math.abs(plusDi - minusDi) / denominator));
+  }
+
+  if (dxValues.length < period) return null;
+  let adxValue = average(dxValues.slice(0, period));
+  for (const dx of dxValues.slice(period)) {
+    adxValue = (adxValue * (period - 1) + dx) / period;
+  }
+  return round(adxValue, 2);
+}
+
 export function supportResistance(candles: Candle[]): SupportResistanceSnapshot {
   const recent = candles.slice(-80);
   if (recent.length === 0) {
@@ -256,4 +311,8 @@ function strengthLabel(touches: number): SupportResistanceLevel["strength"] {
 function average(values: number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function sum(values: number[]): number {
+  return values.reduce((total, value) => total + value, 0);
 }

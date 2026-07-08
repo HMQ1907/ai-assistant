@@ -11,6 +11,8 @@ declare global {
   var __outcomeTrackerLastSlot: string | undefined;
   // eslint-disable-next-line no-var
   var __autoTradeLastSlot: string | undefined;
+  // eslint-disable-next-line no-var
+  var __autoTradeManagementLastSlot: string | undefined;
 }
 
 export default defineNitroPlugin((nitroApp) => {
@@ -21,7 +23,7 @@ export default defineNitroPlugin((nitroApp) => {
     console.info("[trade-loop] disabled (AUTO_TRADE=false, TRADE_SCANNER_ENABLED=false)");
     return;
   }
-  // Chế độ báo tín hiệu LLM cần Telegram; auto-bot thì không.
+  // Cháº¿ Ä‘á»™ bÃ¡o tÃ­n hiá»‡u LLM cáº§n Telegram; auto-bot thÃ¬ khÃ´ng.
   if (!autoMode && (!config.telegramBotToken || !config.telegramChatId)) {
     console.warn("[trade-loop] scanner disabled: missing Telegram config");
     return;
@@ -38,7 +40,7 @@ export default defineNitroPlugin((nitroApp) => {
   globalThis.__tradeScannerTimer = setInterval(() => {
     const now = new Date();
 
-    // Tracker đo kết quả (cả 2 chế độ), mỗi 5 phút, độc lập khung giờ.
+    // Tracker Ä‘o káº¿t quáº£ (cáº£ 2 cháº¿ Ä‘á»™), má»—i 5 phÃºt, Ä‘á»™c láº­p khung giá».
     if (isFiveMinSlot(now, tz)) {
       const trackerSlot = slotKey(now, tz);
       if (globalThis.__outcomeTrackerLastSlot !== trackerSlot) {
@@ -48,18 +50,28 @@ export default defineNitroPlugin((nitroApp) => {
     }
 
     if (autoMode) {
-      // Auto-bot: mỗi 5 phút (24/7 để quản lệnh; vào lệnh chỉ trong khung giờ — xử lý bên trong).
+      // Auto-bot vòng 1: m?i 5 phút + vài giây sau n?n dóng d? scan setup m?i.
       if (isFiveMinSlot(now, tz)) {
         const autoSlot = slotKey(now, tz);
         if (globalThis.__autoTradeLastSlot !== autoSlot) {
           globalThis.__autoTradeLastSlot = autoSlot;
           void autoBot.runOnce();
         }
+        return;
+      }
+
+      // Auto-bot vòng 2: m?i phút + vài giây, ch? qu?n lý l?nh dang có.
+      if (isOneMinSlot(now, tz)) {
+        const managementSlot = slotKey(now, tz);
+        if (globalThis.__autoTradeManagementLastSlot !== managementSlot) {
+          globalThis.__autoTradeManagementLastSlot = managementSlot;
+          void autoBot.runManagementOnce();
+        }
       }
       return;
     }
 
-    // Chế độ báo tín hiệu LLM: gọi mỗi slot, scanOnce tự xử lý focus/quét.
+    // Cháº¿ Ä‘á»™ bÃ¡o tÃ­n hiá»‡u LLM: gá»i má»—i slot, scanOnce tá»± xá»­ lÃ½ focus/quÃ©t.
     if (!isScannerSlot(now)) return;
     const slot = slotKey(now, tz);
     if (globalThis.__tradeScannerLastSlot === slot) return;
@@ -76,7 +88,7 @@ export default defineNitroPlugin((nitroApp) => {
 
   if (autoMode) {
     console.info(
-      `[trade-loop] AUTO-BOT enabled (Rules Engine H1) — entries in ${config.tradeScannerWindows || `${config.tradeScannerStartHour}:00-${config.tradeScannerEndHour}:00`} ${tz}, lots ${config.autoLotGood}/${config.autoLotVeryGood}, maxDailyLoss ${config.autoMaxDailyLossPercent}%`,
+      `[trade-loop] AUTO-BOT enabled (Rules Engine H1) â€” entries in ${config.tradeScannerWindows || `${config.tradeScannerStartHour}:00-${config.tradeScannerEndHour}:00`} ${tz}, lots ${config.autoLotGood}/${config.autoLotVeryGood}, maxDailyLoss ${config.autoMaxDailyLossPercent}%`,
     );
   } else {
     console.info(
@@ -94,7 +106,17 @@ function isFiveMinSlot(date: Date, timeZone: string): boolean {
   }).formatToParts(date);
   const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
   const second = Number(parts.find((part) => part.type === "second")?.value ?? 0);
-  return second < 10 && minute % 5 === 0;
+  return second >= 3 && second < 13 && minute % 5 === 0;
+}
+
+function isOneMinSlot(date: Date, timeZone: string): boolean {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    second: "2-digit",
+    hour12: false,
+    timeZone,
+  }).formatToParts(date);
+  const second = Number(parts.find((part) => part.type === "second")?.value ?? 0);
+  return second >= 3 && second < 13;
 }
 
 function slotKey(date: Date, timeZone: string): string {
@@ -107,3 +129,4 @@ function slotKey(date: Date, timeZone: string): string {
     timeZone,
   }).format(date);
 }
+

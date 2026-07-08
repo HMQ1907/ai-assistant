@@ -1,6 +1,6 @@
 import type { Candle } from "../../types/trading";
 import { tradingRules } from "../config/tradingRules";
-import { atr, ema, rsi, structureTrend, trend } from "../utils/indicators";
+import { adx, atr, ema, rsi, structureTrend, trend } from "../utils/indicators";
 
 /**
  * Rules engine TẤT ĐỊNH cho method 5 bước (không AI):
@@ -28,6 +28,7 @@ export interface RuleStrategyConfig {
   pullbackTouchTolerancePct: number;
   biasMode: BiasMode;
   confirmMode: ConfirmMode;
+  requireBreakOfPreviousCandle: boolean;
   useRsiFilter: boolean;
   rsiMaxForBuy: number; // BUY chỉ khi RSI(H1) < ngưỡng (còn dư địa, đã thực sự hồi)
   rsiMinForSell: number; // SELL chỉ khi RSI(H1) > ngưỡng
@@ -45,6 +46,7 @@ export const defaultRuleStrategyConfig: RuleStrategyConfig = {
   pullbackTouchTolerancePct: 0.0015,
   biasMode: "EMA",
   confirmMode: "BREAK",
+  requireBreakOfPreviousCandle: false,
   useRsiFilter: false,
   rsiMaxForBuy: 65,
   rsiMinForSell: 35,
@@ -56,6 +58,317 @@ export interface RuleSignal {
   stopLoss: number;
   takeProfit: number;
   reason: string;
+}
+
+export interface XauTrendPullbackSetup {
+  direction: "BUY" | "SELL";
+  m15CandleTime: string;
+  reason: string;
+}
+
+export function evaluateXauTrendPullbackSetup(
+  m15: Candle[],
+  h1: Candle[],
+): XauTrendPullbackSetup | null {
+  return buildXauTrendPullbackSetup(m15, h1).setup;
+}
+
+export function explainXauTrendPullbackSetupRejection(
+  m15: Candle[],
+  h1: Candle[],
+): string | null {
+  return buildXauTrendPullbackSetup(m15, h1).reason;
+}
+
+export function evaluateXauTrendPullbackTriggerSignal(
+  m5: Candle[],
+  m15: Candle[],
+  h1: Candle[],
+  setup: XauTrendPullbackSetup,
+): RuleSignal | null {
+  const signal = evaluateXauTrendPullbackSignal(m5, m15, h1);
+  return signal?.direction === setup.direction ? signal : null;
+}
+
+export function explainXauPendingSetupInvalidation(
+  setup: XauTrendPullbackSetup,
+  m15: Candle[],
+  h1: Candle[],
+): string | null {
+  const h1Adx = adx(h1, 14);
+  if (h1Adx !== null && h1Adx < 18) {
+    return `ADX H1 dropped below 18 (${h1Adx})`;
+  }
+
+  const m15Closes = m15.map((candle) => candle.close);
+  const m15Ema200 = ema(m15Closes, 200);
+  const m15Last = m15.at(-1);
+  if (!m15Last || m15Ema200 === null) return null;
+  if (setup.direction === "BUY" && m15Last.close < m15Ema200) {
+    return `M15 close ${m15Last.close} broke below EMA200 ${m15Ema200}`;
+  }
+  if (setup.direction === "SELL" && m15Last.close > m15Ema200) {
+    return `M15 close ${m15Last.close} broke above EMA200 ${m15Ema200}`;
+  }
+  return null;
+}
+
+function buildXauTrendPullbackSetup(
+  m15: Candle[],
+  h1: Candle[],
+): { setup: XauTrendPullbackSetup | null; reason: string | null } {
+  if (h1.length < 220) return { setup: null, reason: `H1 candles ${h1.length} < 220` };
+  if (m15.length < 220) return { setup: null, reason: `M15 candles ${m15.length} < 220` };
+
+  const h1Closes = h1.map((candle) => candle.close);
+  const h1Ema50 = ema(h1Closes, 50);
+  const h1Ema200 = ema(h1Closes, 200);
+  const h1Adx = adx(h1, 14);
+  const h1Last = h1.at(-1);
+  if (!h1Last || h1Ema50 === null || h1Ema200 === null || h1Adx === null) {
+    return { setup: null, reason: "H1 EMA50/EMA200/ADX unavailable" };
+  }
+  if (h1Adx <= 20) return { setup: null, reason: `H1 ADX ${h1Adx} <= 20` };
+
+  const direction =
+    h1Ema50 > h1Ema200 && h1Last.close > h1Ema200
+      ? "BUY"
+      : h1Ema50 < h1Ema200 && h1Last.close < h1Ema200
+        ? "SELL"
+        : null;
+  if (direction === null) {
+    return {
+      setup: null,
+      reason: `H1 filter blocked: EMA50 ${h1Ema50} vs EMA200 ${h1Ema200}, close ${h1Last.close}`,
+    };
+  }
+
+  const m15Closes = m15.map((candle) => candle.close);
+  const m15Ema21 = ema(m15Closes, 21);
+  const m15Ema50 = ema(m15Closes, 50);
+  const m15Ema200 = ema(m15Closes, 200);
+  const m15Atr = atr(m15, 14);
+  const m15Rsi = rsi(m15Closes, 14);
+  const m15Last = m15.at(-1);
+  if (
+    !m15Last ||
+    m15Ema21 === null ||
+    m15Ema50 === null ||
+    m15Ema200 === null ||
+    m15Atr === null ||
+    m15Atr <= 0 ||
+    m15Rsi === null
+  ) {
+    return { setup: null, reason: "M15 EMA/ATR/RSI unavailable" };
+  }
+
+  const pullbackTolerance = 0.3 * m15Atr;
+  const touchedPullbackZone =
+    direction === "BUY"
+      ? m15Last.low <= Math.max(m15Ema21, m15Ema50) + pullbackTolerance &&
+        m15Last.low >= Math.min(m15Ema21, m15Ema50) - pullbackTolerance
+      : m15Last.high >= Math.min(m15Ema21, m15Ema50) - pullbackTolerance &&
+        m15Last.high <= Math.max(m15Ema21, m15Ema50) + pullbackTolerance;
+  if (!touchedPullbackZone) {
+    return {
+      setup: null,
+      reason: "M15 setup blocked: price did not touch EMA21-EMA50 zone within 0.3 ATR",
+    };
+  }
+
+  if (direction === "BUY") {
+    if (m15Rsi < 40 || m15Rsi > 55) {
+      return { setup: null, reason: `M15 BUY RSI ${m15Rsi} outside 40-55` };
+    }
+    if (m15Ema21 <= m15Ema200) {
+      return { setup: null, reason: "M15 BUY structure broken: EMA21 <= EMA200" };
+    }
+  } else {
+    if (m15Rsi < 45 || m15Rsi > 60) {
+      return { setup: null, reason: `M15 SELL RSI ${m15Rsi} outside 45-60` };
+    }
+    if (m15Ema21 >= m15Ema200) {
+      return { setup: null, reason: "M15 SELL structure broken: EMA21 >= EMA200" };
+    }
+  }
+
+  return {
+    setup: {
+      direction,
+      m15CandleTime: m15Last.time,
+      reason: `H1 ${direction} filter + M15 EMA21-50 pullback valid, waiting up to 6 M5 candles for trigger`,
+    },
+    reason: null,
+  };
+}
+
+export function evaluateXauTrendPullbackSignal(
+  m5: Candle[],
+  m15: Candle[],
+  h1: Candle[],
+): RuleSignal | null {
+  return buildXauTrendPullbackSignal(m5, m15, h1)?.signal ?? null;
+}
+
+export function explainXauTrendPullbackRejection(
+  m5: Candle[],
+  m15: Candle[],
+  h1: Candle[],
+): string | null {
+  return buildXauTrendPullbackSignal(m5, m15, h1)?.reason ?? null;
+}
+
+function buildXauTrendPullbackSignal(
+  m5: Candle[],
+  m15: Candle[],
+  h1: Candle[],
+): { signal: RuleSignal | null; reason: string } {
+  if (h1.length < 220) return { signal: null, reason: `H1 candles ${h1.length} < 220` };
+  if (m15.length < 220) return { signal: null, reason: `M15 candles ${m15.length} < 220` };
+  if (m5.length < 3) return { signal: null, reason: `M5 candles ${m5.length} < 3` };
+
+  const h1Closes = h1.map((candle) => candle.close);
+  const h1Ema50 = ema(h1Closes, 50);
+  const h1Ema200 = ema(h1Closes, 200);
+  const h1Adx = adx(h1, 14);
+  const h1Last = h1.at(-1);
+  if (!h1Last || h1Ema50 === null || h1Ema200 === null || h1Adx === null) {
+    return { signal: null, reason: "H1 EMA50/EMA200/ADX unavailable" };
+  }
+  if (h1Adx <= 20) return { signal: null, reason: `H1 ADX ${h1Adx} <= 20` };
+
+  const direction =
+    h1Ema50 > h1Ema200 && h1Last.close > h1Ema200
+      ? "BUY"
+      : h1Ema50 < h1Ema200 && h1Last.close < h1Ema200
+        ? "SELL"
+        : null;
+  if (direction === null) {
+    return {
+      signal: null,
+      reason: `H1 filter blocked: EMA50 ${h1Ema50} vs EMA200 ${h1Ema200}, close ${h1Last.close}`,
+    };
+  }
+
+  const m15Closes = m15.map((candle) => candle.close);
+  const m15Ema21 = ema(m15Closes, 21);
+  const m15Ema50 = ema(m15Closes, 50);
+  const m15Ema200 = ema(m15Closes, 200);
+  const m15Atr = atr(m15, 14);
+  const m15Rsi = rsi(m15Closes, 14);
+  const m15Last = m15.at(-1);
+  if (
+    !m15Last ||
+    m15Ema21 === null ||
+    m15Ema50 === null ||
+    m15Ema200 === null ||
+    m15Atr === null ||
+    m15Atr <= 0 ||
+    m15Rsi === null
+  ) {
+    return { signal: null, reason: "M15 EMA/ATR/RSI unavailable" };
+  }
+
+  const pullbackTolerance = 0.3 * m15Atr;
+  const touchedPullbackZone =
+    direction === "BUY"
+      ? m15Last.low <= Math.max(m15Ema21, m15Ema50) + pullbackTolerance &&
+        m15Last.low >= Math.min(m15Ema21, m15Ema50) - pullbackTolerance
+      : m15Last.high >= Math.min(m15Ema21, m15Ema50) - pullbackTolerance &&
+        m15Last.high <= Math.max(m15Ema21, m15Ema50) + pullbackTolerance;
+  if (!touchedPullbackZone) {
+    return {
+      signal: null,
+      reason: `M15 setup blocked: price did not touch EMA21-EMA50 zone within 0.3 ATR`,
+    };
+  }
+
+  if (direction === "BUY") {
+    if (m15Rsi < 40 || m15Rsi > 55) {
+      return { signal: null, reason: `M15 BUY RSI ${m15Rsi} outside 40-55` };
+    }
+    if (m15Ema21 <= m15Ema200) {
+      return { signal: null, reason: `M15 BUY structure broken: EMA21 <= EMA200` };
+    }
+  } else {
+    if (m15Rsi < 45 || m15Rsi > 60) {
+      return { signal: null, reason: `M15 SELL RSI ${m15Rsi} outside 45-60` };
+    }
+    if (m15Ema21 >= m15Ema200) {
+      return { signal: null, reason: `M15 SELL structure broken: EMA21 >= EMA200` };
+    }
+  }
+
+  const prevM5 = m5.at(-2);
+  const lastM5 = m5.at(-1);
+  if (!prevM5 || !lastM5) return { signal: null, reason: "M5 missing trigger candles" };
+  const trigger =
+    direction === "BUY"
+      ? isBullishEngulfing(prevM5, lastM5) || isBullishPinBar(lastM5)
+      : isBearishEngulfing(prevM5, lastM5) || isBearishPinBar(lastM5);
+  if (!trigger) {
+    return {
+      signal: null,
+      reason: `M5 ${direction} trigger blocked: no engulfing/pin bar on closed candle`,
+    };
+  }
+
+  const entry = lastM5.close;
+  const rawStopLoss =
+    direction === "BUY" ? entry - 1.5 * m15Atr : entry + 1.5 * m15Atr;
+  const swingStop = findNearestM15SwingStop(m15, direction, entry);
+  const stopLoss =
+    swingStop === null
+      ? rawStopLoss
+      : direction === "BUY"
+        ? Math.min(rawStopLoss, swingStop - 0.2 * m15Atr)
+        : Math.max(rawStopLoss, swingStop + 0.2 * m15Atr);
+  const risk = Math.abs(entry - stopLoss);
+  if (!Number.isFinite(risk) || risk <= 0) {
+    return { signal: null, reason: `${direction} blocked: invalid SL/risk` };
+  }
+
+  const structuralTp = findNearestM15TargetSwing(m15, direction, entry);
+  const fallbackTp = direction === "BUY" ? entry + 1.5 * risk : entry - 1.5 * risk;
+  const wantedTp =
+    structuralTp === null
+      ? fallbackTp
+      : direction === "BUY"
+        ? structuralTp - 0.2 * m15Atr
+        : structuralTp + 0.2 * m15Atr;
+  const rawReward = direction === "BUY" ? wantedTp - entry : entry - wantedTp;
+  const rawRr = rawReward / risk;
+  if (!Number.isFinite(rawRr) || rawRr < 1.3) {
+    return {
+      signal: null,
+      reason: `${direction} blocked: structural RR ${Number(rawRr.toFixed(2))} < 1.3`,
+    };
+  }
+
+  const takeProfit =
+    rawRr > 2.5
+      ? direction === "BUY"
+        ? entry + 2.5 * risk
+        : entry - 2.5 * risk
+      : wantedTp;
+
+  return {
+    signal: {
+      direction,
+      entry: round(entry),
+      stopLoss: round(stopLoss),
+      takeProfit: round(takeProfit),
+      reason: `XAUUSD Trend Pullback: H1 filter ${direction}, M15 EMA21-50 pullback RSI ${m15Rsi}, M5 engulfing/pin trigger, SL 1.5 ATR M15 adjusted by swing, TP structure/capped 2.5R`,
+    },
+    reason: "signal found",
+  };
+}
+
+function oppositeTrend(left: ReturnType<typeof trend>, right: ReturnType<typeof trend>): boolean {
+  return (
+    (left === "UPTREND" && right === "DOWNTREND") ||
+    (left === "DOWNTREND" && right === "UPTREND")
+  );
 }
 
 function resolveBiasTrend(
@@ -161,10 +474,7 @@ export function explainRuleSignalRejection(
     if (!pulledBack) {
       return `BUY blocked: no pullback to EMA${config.emaFast} in last ${config.pullbackLookback} candle(s)`;
     }
-    const confirmed =
-      config.confirmMode === "ENGULFING"
-        ? isBullishEngulfing(prev, last) && last.close > emaFast
-        : last.close > last.open && last.close > emaFast && last.close > prev.high;
+    const confirmed = isBullishConfirmation(prev, last, emaFast, config);
     if (!confirmed) {
       return "BUY blocked: confirmation candle not strong enough";
     }
@@ -179,10 +489,7 @@ export function explainRuleSignalRejection(
     if (!pulledBack) {
       return `SELL blocked: no pullback to EMA${config.emaFast} in last ${config.pullbackLookback} candle(s)`;
     }
-    const confirmed =
-      config.confirmMode === "ENGULFING"
-        ? isBearishEngulfing(prev, last) && last.close < emaFast
-        : last.close < last.open && last.close < emaFast && last.close < prev.low;
+    const confirmed = isBearishConfirmation(prev, last, emaFast, config);
     if (!confirmed) {
       return "SELL blocked: confirmation candle not strong enough";
     }
@@ -216,6 +523,101 @@ export function explainRuleSignalRejection(
   }
 
   return null;
+}
+
+export function evaluateBalancedM5Signal(
+  m5: Candle[],
+  m15: Candle[],
+  h1: Candle[],
+  h4: Candle[],
+  config: RuleStrategyConfig = defaultRuleStrategyConfig,
+): RuleSignal | null {
+  const h1Bias = resolveBiasTrend(h1, config);
+  if (h1Bias.direction !== "UPTREND" && h1Bias.direction !== "DOWNTREND") {
+    return null;
+  }
+
+  const h4Bias = resolveBiasTrend(h4, config);
+  if (
+    (h4Bias.direction === "UPTREND" || h4Bias.direction === "DOWNTREND") &&
+    oppositeTrend(h1Bias.direction, h4Bias.direction)
+  ) {
+    return null;
+  }
+
+  if (!hasPullbackSetup(m15, h1Bias.direction, config)) {
+    return null;
+  }
+
+  const signal = evaluateRuleSignal(m5, h1, config);
+  return signal
+    ? {
+        ...signal,
+        reason: `${signal.reason} (balanced: H1 bias + M15 pullback setup + M5 trigger, H4 soft filter)`,
+      }
+    : null;
+}
+
+export function explainBalancedM5Rejection(
+  m5: Candle[],
+  m15: Candle[],
+  h1: Candle[],
+  h4: Candle[],
+  config: RuleStrategyConfig = defaultRuleStrategyConfig,
+): string | null {
+  const h1Bias = resolveBiasTrend(h1, config);
+  if (h1Bias.direction !== "UPTREND" && h1Bias.direction !== "DOWNTREND") {
+    return `H1 bias not clearly trending (EMA=${h1Bias.emaTrend}, structure=${h1Bias.structTrend})`;
+  }
+
+  const h4Bias = resolveBiasTrend(h4, config);
+  if (
+    (h4Bias.direction === "UPTREND" || h4Bias.direction === "DOWNTREND") &&
+    oppositeTrend(h1Bias.direction, h4Bias.direction)
+  ) {
+    return `H4 soft filter blocked: H1=${h1Bias.direction}, H4=${h4Bias.direction}`;
+  }
+
+  if (!hasPullbackSetup(m15, h1Bias.direction, config)) {
+    return `M15 setup blocked: no pullback to EMA${config.emaFast}/EMA${config.emaSlow} aligned with H1 ${h1Bias.direction}`;
+  }
+
+  return (
+    explainRuleSignalRejection(m5, h1, config) ??
+    "M5 passed balanced diagnostics but returned no signal"
+  );
+}
+
+function hasPullbackSetup(
+  candles: Candle[],
+  biasDirection: ReturnType<typeof trend>,
+  config: RuleStrategyConfig,
+): boolean {
+  if (candles.length < Math.max(config.emaSlow, config.pullbackLookback + 2)) {
+    return false;
+  }
+  const closes = candles.map((candle) => candle.close);
+  const emaFast = ema(closes, config.emaFast);
+  const emaSlow = ema(closes, config.emaSlow);
+  if (emaFast === null || emaSlow === null) return false;
+
+  const recent = candles.slice(-(config.pullbackLookback + 1), -1);
+  const tolerance = config.pullbackTouchTolerancePct;
+  if (biasDirection === "UPTREND") {
+    return recent.some(
+      (candle) =>
+        candle.low <= emaFast * (1 + tolerance) ||
+        candle.low <= emaSlow * (1 + tolerance),
+    );
+  }
+  if (biasDirection === "DOWNTREND") {
+    return recent.some(
+      (candle) =>
+        candle.high >= emaFast * (1 - tolerance) ||
+        candle.high >= emaSlow * (1 - tolerance),
+    );
+  }
+  return false;
 }
 
 /**
@@ -267,10 +669,7 @@ export function evaluateRuleSignal(
   if (biasDir === "UPTREND") {
     const up = emaFast > emaSlow;
     const pulledBack = window.some((candle) => candle.low <= emaFast * (1 + tol));
-    const confirmed =
-      config.confirmMode === "ENGULFING"
-        ? isBullishEngulfing(prev, last) && last.close > emaFast
-        : last.close > last.open && last.close > emaFast && last.close > prev.high;
+    const confirmed = isBullishConfirmation(prev, last, emaFast, config);
     const rsiOk = !config.useRsiFilter || (rsiV !== null && rsiV < config.rsiMaxForBuy);
     if (!up || !pulledBack || !confirmed || !rsiOk) return null;
 
@@ -302,9 +701,7 @@ export function evaluateRuleSignal(
   const down = emaFast < emaSlow;
   const pulledBack = window.some((candle) => candle.high >= emaFast * (1 - tol));
   const confirmed =
-    config.confirmMode === "ENGULFING"
-      ? isBearishEngulfing(prev, last) && last.close < emaFast
-      : last.close < last.open && last.close < emaFast && last.close < prev.low;
+    isBearishConfirmation(prev, last, emaFast, config);
   const rsiOk = !config.useRsiFilter || (rsiV !== null && rsiV > config.rsiMinForSell);
   if (!down || !pulledBack || !confirmed || !rsiOk) return null;
 
@@ -379,6 +776,27 @@ function isBullishEngulfing(prev: Candle, last: Candle): boolean {
   );
 }
 
+function isBullishPinBar(candle: Candle): boolean {
+  const body = Math.abs(candle.close - candle.open);
+  const range = candle.high - candle.low;
+  if (range <= 0) return false;
+  const lowerWick = Math.min(candle.open, candle.close) - candle.low;
+  return lowerWick >= 2 * Math.max(body, 0.000001) && candle.close >= candle.low + range * (2 / 3);
+}
+
+function isBullishConfirmation(
+  prev: Candle,
+  last: Candle,
+  emaFast: number,
+  config: RuleStrategyConfig,
+): boolean {
+  if (config.confirmMode === "ENGULFING") {
+    return isBullishEngulfing(prev, last) && last.close > emaFast;
+  }
+  const base = last.close > last.open && last.close > emaFast;
+  return config.requireBreakOfPreviousCandle ? base && last.close > prev.high : base;
+}
+
 function isBearishEngulfing(prev: Candle, last: Candle): boolean {
   return (
     prev.close > prev.open &&
@@ -386,6 +804,27 @@ function isBearishEngulfing(prev: Candle, last: Candle): boolean {
     last.close <= prev.open &&
     last.open >= prev.close
   );
+}
+
+function isBearishPinBar(candle: Candle): boolean {
+  const body = Math.abs(candle.close - candle.open);
+  const range = candle.high - candle.low;
+  if (range <= 0) return false;
+  const upperWick = candle.high - Math.max(candle.open, candle.close);
+  return upperWick >= 2 * Math.max(body, 0.000001) && candle.close <= candle.low + range / 3;
+}
+
+function isBearishConfirmation(
+  prev: Candle,
+  last: Candle,
+  emaFast: number,
+  config: RuleStrategyConfig,
+): boolean {
+  if (config.confirmMode === "ENGULFING") {
+    return isBearishEngulfing(prev, last) && last.close < emaFast;
+  }
+  const base = last.close < last.open && last.close < emaFast;
+  return config.requireBreakOfPreviousCandle ? base && last.close < prev.low : base;
 }
 
 function findStructuralTakeProfit(
@@ -406,6 +845,34 @@ function findStructuralTakeProfit(
   const candidates = structuralLows(history)
     .filter((level) => Number.isFinite(level) && level < entryPrice);
   return candidates.length > 0 ? round(Math.max(...candidates)) : null;
+}
+
+function findNearestM15SwingStop(
+  candles: Candle[],
+  direction: "BUY" | "SELL",
+  entryPrice: number,
+): number | null {
+  const history = candles.slice(-50);
+  const swings = direction === "BUY" ? structuralLows(history) : structuralHighs(history);
+  const candidates = swings.filter((level) =>
+    direction === "BUY" ? level < entryPrice : level > entryPrice,
+  );
+  if (candidates.length === 0) return null;
+  return direction === "BUY" ? Math.max(...candidates) : Math.min(...candidates);
+}
+
+function findNearestM15TargetSwing(
+  candles: Candle[],
+  direction: "BUY" | "SELL",
+  entryPrice: number,
+): number | null {
+  const history = candles.slice(-50);
+  const swings = direction === "BUY" ? structuralHighs(history) : structuralLows(history);
+  const candidates = swings.filter((level) =>
+    direction === "BUY" ? level > entryPrice : level < entryPrice,
+  );
+  if (candidates.length === 0) return null;
+  return direction === "BUY" ? Math.min(...candidates) : Math.max(...candidates);
 }
 
 function structuralHighs(candles: Candle[]): number[] {
