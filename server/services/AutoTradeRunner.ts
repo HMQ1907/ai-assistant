@@ -262,7 +262,7 @@ export class AutoTradeRunner {
             entryCandles = m5;
             entryTf = "M5";
           } else {
-            const setup = evaluateXauTrendPullbackSetup(m15, h1);
+            const setup = evaluateXauTrendPullbackSetup(m15, h1, m5);
             if (setup) {
               this.pendingSetup = {
                 setup,
@@ -1081,24 +1081,13 @@ function emptyNews(): NewsSnapshot {
 }
 
 function getAutoTradeTimeBlockReason(timeZone: string): string | null {
-  const parts = datePartsInTimeZone(timeZone);
-  const minutes = parts.hour * 60 + parts.minute;
-  const isFriday = parts.weekday === "Fri";
-  if (isFriday && minutes >= 21 * 60) {
-    return "Friday after 21:00 VN; no new trades.";
-  }
-  if (minutes < 14 * 60 || minutes >= 23 * 60) {
-    return "outside XAUUSD session 14:00-23:00 VN.";
-  }
-  if (minutes >= 22 * 60 + 30) {
-    return "after 22:30 VN; no new trades.";
-  }
+  void timeZone;
   return null;
 }
 
 function shouldFlatBeforeSessionClose(timeZone: string): boolean {
-  const parts = datePartsInTimeZone(timeZone);
-  return parts.hour * 60 + parts.minute >= 23 * 60 + 45;
+  void timeZone;
+  return false;
 }
 
 function datePartsInTimeZone(timeZone: string): {

@@ -63,21 +63,25 @@ export interface RuleSignal {
 export interface XauTrendPullbackSetup {
   direction: "BUY" | "SELL";
   m15CandleTime: string;
+  mode: "NORMAL" | "EARLY_TREND";
+  kind: "TREND_PULLBACK" | "BREAKOUT_CONTINUATION";
   reason: string;
 }
 
 export function evaluateXauTrendPullbackSetup(
   m15: Candle[],
   h1: Candle[],
+  m5?: Candle[],
 ): XauTrendPullbackSetup | null {
-  return buildXauTrendPullbackSetup(m15, h1).setup;
+  return buildXauTrendPullbackSetup(m15, h1, m5).setup;
 }
 
 export function explainXauTrendPullbackSetupRejection(
   m15: Candle[],
   h1: Candle[],
+  m5?: Candle[],
 ): string | null {
-  return buildXauTrendPullbackSetup(m15, h1).reason;
+  return buildXauTrendPullbackSetup(m15, h1, m5).reason;
 }
 
 export function evaluateXauTrendPullbackTriggerSignal(
@@ -96,8 +100,8 @@ export function explainXauPendingSetupInvalidation(
   h1: Candle[],
 ): string | null {
   const h1Adx = adx(h1, 14);
-  if (h1Adx !== null && h1Adx < 18) {
-    return `ADX H1 dropped below 18 (${h1Adx})`;
+  if (h1Adx !== null && h1Adx <= 15) {
+    return `ADX H1 dropped to ${h1Adx} <= 15`;
   }
 
   const m15Closes = m15.map((candle) => candle.close);
@@ -116,6 +120,7 @@ export function explainXauPendingSetupInvalidation(
 function buildXauTrendPullbackSetup(
   m15: Candle[],
   h1: Candle[],
+  m5?: Candle[],
 ): { setup: XauTrendPullbackSetup | null; reason: string | null } {
   if (h1.length < 220) return { setup: null, reason: `H1 candles ${h1.length} < 220` };
   if (m15.length < 220) return { setup: null, reason: `M15 candles ${m15.length} < 220` };
@@ -128,20 +133,17 @@ function buildXauTrendPullbackSetup(
   if (!h1Last || h1Ema50 === null || h1Ema200 === null || h1Adx === null) {
     return { setup: null, reason: "H1 EMA50/EMA200/ADX unavailable" };
   }
-  if (h1Adx <= 20) return { setup: null, reason: `H1 ADX ${h1Adx} <= 20` };
+  if (h1Adx <= 15) return { setup: null, reason: `H1 ADX ${h1Adx} <= 15` };
+  const setupMode = h1Adx <= 18 ? "EARLY_TREND" : "NORMAL";
 
-  const direction =
-    h1Ema50 > h1Ema200 && h1Last.close > h1Ema200
-      ? "BUY"
-      : h1Ema50 < h1Ema200 && h1Last.close < h1Ema200
-        ? "SELL"
-        : null;
-  if (direction === null) {
+  const h1Bias = resolveXauH1Direction(h1Last.close, h1Ema50, h1Ema200);
+  if (h1Bias === null) {
     return {
       setup: null,
       reason: `H1 filter blocked: EMA50 ${h1Ema50} vs EMA200 ${h1Ema200}, close ${h1Last.close}`,
     };
   }
+  const { direction, kind } = h1Bias;
 
   const m15Closes = m15.map((candle) => candle.close);
   const m15Ema21 = ema(m15Closes, 21);
@@ -162,33 +164,40 @@ function buildXauTrendPullbackSetup(
     return { setup: null, reason: "M15 EMA/ATR/RSI unavailable" };
   }
 
-  const pullbackTolerance = 0.3 * m15Atr;
-  const touchedPullbackZone =
-    direction === "BUY"
-      ? m15Last.low <= Math.max(m15Ema21, m15Ema50) + pullbackTolerance &&
-        m15Last.low >= Math.min(m15Ema21, m15Ema50) - pullbackTolerance
-      : m15Last.high >= Math.min(m15Ema21, m15Ema50) - pullbackTolerance &&
-        m15Last.high <= Math.max(m15Ema21, m15Ema50) + pullbackTolerance;
-  if (!touchedPullbackZone) {
+  const pullbackTolerance = 0.5 * m15Atr;
+  const touchedPullbackZone = hasRecentM15PullbackTouch(
+    m15,
+    direction,
+    m15Ema21,
+    m15Ema50,
+    pullbackTolerance,
+  );
+  const m15Continuation = isStrongContinuationCandle(m15Last, direction);
+  const m5VeryStrong = hasVeryStrongM5Trigger(m5, direction);
+  if (
+    !touchedPullbackZone &&
+    !(kind === "BREAKOUT_CONTINUATION" && m15Continuation) &&
+    !m5VeryStrong
+  ) {
     return {
       setup: null,
-      reason: "M15 setup blocked: price did not touch EMA21-EMA50 zone within 0.3 ATR",
+      reason: "M15 setup blocked: no recent EMA21-EMA50 pullback, no continuation candle, and no very-strong M5 trigger",
     };
   }
 
   if (direction === "BUY") {
-    if (m15Rsi < 40 || m15Rsi > 55) {
-      return { setup: null, reason: `M15 BUY RSI ${m15Rsi} outside 40-55` };
+    if (m15Rsi < 38 || m15Rsi > 60) {
+      return { setup: null, reason: `M15 BUY RSI ${m15Rsi} outside 38-60` };
     }
-    if (m15Ema21 <= m15Ema200) {
-      return { setup: null, reason: "M15 BUY structure broken: EMA21 <= EMA200" };
+    if (m15Ema21 <= m15Ema200 && m15Last.close <= m15Ema200) {
+      return { setup: null, reason: "M15 BUY structure broken: EMA21 <= EMA200 and close <= EMA200" };
     }
   } else {
-    if (m15Rsi < 45 || m15Rsi > 60) {
-      return { setup: null, reason: `M15 SELL RSI ${m15Rsi} outside 45-60` };
+    if (m15Rsi < 40 || m15Rsi > 62) {
+      return { setup: null, reason: `M15 SELL RSI ${m15Rsi} outside 40-62` };
     }
-    if (m15Ema21 >= m15Ema200) {
-      return { setup: null, reason: "M15 SELL structure broken: EMA21 >= EMA200" };
+    if (m15Ema21 >= m15Ema200 && m15Last.close >= m15Ema200) {
+      return { setup: null, reason: "M15 SELL structure broken: EMA21 >= EMA200 and close >= EMA200" };
     }
   }
 
@@ -196,7 +205,9 @@ function buildXauTrendPullbackSetup(
     setup: {
       direction,
       m15CandleTime: m15Last.time,
-      reason: `H1 ${direction} filter + M15 EMA21-50 pullback valid, waiting up to 6 M5 candles for trigger`,
+      mode: setupMode,
+      kind,
+      reason: `H1 ${direction} ${kind} + M15/M5 setup valid (${setupMode}), waiting up to 6 M5 candles for trigger`,
     },
     reason: null,
   };
@@ -235,20 +246,17 @@ function buildXauTrendPullbackSignal(
   if (!h1Last || h1Ema50 === null || h1Ema200 === null || h1Adx === null) {
     return { signal: null, reason: "H1 EMA50/EMA200/ADX unavailable" };
   }
-  if (h1Adx <= 20) return { signal: null, reason: `H1 ADX ${h1Adx} <= 20` };
+  if (h1Adx <= 15) return { signal: null, reason: `H1 ADX ${h1Adx} <= 15` };
+  const setupMode = h1Adx <= 18 ? "EARLY_TREND" : "NORMAL";
 
-  const direction =
-    h1Ema50 > h1Ema200 && h1Last.close > h1Ema200
-      ? "BUY"
-      : h1Ema50 < h1Ema200 && h1Last.close < h1Ema200
-        ? "SELL"
-        : null;
-  if (direction === null) {
+  const h1Bias = resolveXauH1Direction(h1Last.close, h1Ema50, h1Ema200);
+  if (h1Bias === null) {
     return {
       signal: null,
       reason: `H1 filter blocked: EMA50 ${h1Ema50} vs EMA200 ${h1Ema200}, close ${h1Last.close}`,
     };
   }
+  const { direction, kind } = h1Bias;
 
   const m15Closes = m15.map((candle) => candle.close);
   const m15Ema21 = ema(m15Closes, 21);
@@ -269,47 +277,68 @@ function buildXauTrendPullbackSignal(
     return { signal: null, reason: "M15 EMA/ATR/RSI unavailable" };
   }
 
-  const pullbackTolerance = 0.3 * m15Atr;
-  const touchedPullbackZone =
-    direction === "BUY"
-      ? m15Last.low <= Math.max(m15Ema21, m15Ema50) + pullbackTolerance &&
-        m15Last.low >= Math.min(m15Ema21, m15Ema50) - pullbackTolerance
-      : m15Last.high >= Math.min(m15Ema21, m15Ema50) - pullbackTolerance &&
-        m15Last.high <= Math.max(m15Ema21, m15Ema50) + pullbackTolerance;
-  if (!touchedPullbackZone) {
+  const pullbackTolerance = 0.5 * m15Atr;
+  const touchedPullbackZone = hasRecentM15PullbackTouch(
+    m15,
+    direction,
+    m15Ema21,
+    m15Ema50,
+    pullbackTolerance,
+  );
+  const m15Continuation = isStrongContinuationCandle(m15Last, direction);
+  const m5VeryStrong = hasVeryStrongM5Trigger(m5, direction);
+  if (
+    !touchedPullbackZone &&
+    !(kind === "BREAKOUT_CONTINUATION" && m15Continuation) &&
+    !m5VeryStrong
+  ) {
     return {
       signal: null,
-      reason: `M15 setup blocked: price did not touch EMA21-EMA50 zone within 0.3 ATR`,
+      reason: `M15 setup blocked: no recent EMA21-EMA50 pullback, no continuation candle, and no very-strong M5 trigger`,
     };
   }
 
   if (direction === "BUY") {
-    if (m15Rsi < 40 || m15Rsi > 55) {
-      return { signal: null, reason: `M15 BUY RSI ${m15Rsi} outside 40-55` };
+    if (m15Rsi < 38 || m15Rsi > 60) {
+      return { signal: null, reason: `M15 BUY RSI ${m15Rsi} outside 38-60` };
     }
-    if (m15Ema21 <= m15Ema200) {
-      return { signal: null, reason: `M15 BUY structure broken: EMA21 <= EMA200` };
+    if (m15Ema21 <= m15Ema200 && m15Last.close <= m15Ema200) {
+      return { signal: null, reason: `M15 BUY structure broken: EMA21 <= EMA200 and close <= EMA200` };
     }
   } else {
-    if (m15Rsi < 45 || m15Rsi > 60) {
-      return { signal: null, reason: `M15 SELL RSI ${m15Rsi} outside 45-60` };
+    if (m15Rsi < 40 || m15Rsi > 62) {
+      return { signal: null, reason: `M15 SELL RSI ${m15Rsi} outside 40-62` };
     }
-    if (m15Ema21 >= m15Ema200) {
-      return { signal: null, reason: `M15 SELL structure broken: EMA21 >= EMA200` };
+    if (m15Ema21 >= m15Ema200 && m15Last.close >= m15Ema200) {
+      return { signal: null, reason: `M15 SELL structure broken: EMA21 >= EMA200 and close >= EMA200` };
     }
   }
 
   const prevM5 = m5.at(-2);
   const lastM5 = m5.at(-1);
   if (!prevM5 || !lastM5) return { signal: null, reason: "M5 missing trigger candles" };
+  const strongTrigger =
+    direction === "BUY"
+      ? isStrongBullishTrigger(lastM5)
+      : isStrongBearishTrigger(lastM5);
   const trigger =
     direction === "BUY"
-      ? isBullishEngulfing(prevM5, lastM5) || isBullishPinBar(lastM5)
-      : isBearishEngulfing(prevM5, lastM5) || isBearishPinBar(lastM5);
+      ? isBullishEngulfing(prevM5, lastM5) ||
+        isBullishPinBar(lastM5) ||
+        strongTrigger
+      : isBearishEngulfing(prevM5, lastM5) ||
+        isBearishPinBar(lastM5) ||
+        strongTrigger;
   if (!trigger) {
     return {
       signal: null,
-      reason: `M5 ${direction} trigger blocked: no engulfing/pin bar on closed candle`,
+      reason: `M5 ${direction} trigger blocked: no engulfing/pin bar/strong close on closed candle`,
+    };
+  }
+  if (setupMode === "EARLY_TREND" && !strongTrigger) {
+    return {
+      signal: null,
+      reason: `M5 ${direction} early-trend trigger blocked: ADX ${h1Adx} requires strong-close candle`,
     };
   }
 
@@ -338,10 +367,11 @@ function buildXauTrendPullbackSignal(
         : structuralTp + 0.2 * m15Atr;
   const rawReward = direction === "BUY" ? wantedTp - entry : entry - wantedTp;
   const rawRr = rawReward / risk;
-  if (!Number.isFinite(rawRr) || rawRr < 1.3) {
+  const minRr = setupMode === "EARLY_TREND" || kind === "BREAKOUT_CONTINUATION" ? 1.5 : 1.3;
+  if (!Number.isFinite(rawRr) || rawRr < minRr) {
     return {
       signal: null,
-      reason: `${direction} blocked: structural RR ${Number(rawRr.toFixed(2))} < 1.3`,
+      reason: `${direction} blocked: structural RR ${Number(rawRr.toFixed(2))} < ${minRr}`,
     };
   }
 
@@ -358,7 +388,7 @@ function buildXauTrendPullbackSignal(
       entry: round(entry),
       stopLoss: round(stopLoss),
       takeProfit: round(takeProfit),
-      reason: `XAUUSD Trend Pullback: H1 filter ${direction}, M15 EMA21-50 pullback RSI ${m15Rsi}, M5 engulfing/pin trigger, SL 1.5 ATR M15 adjusted by swing, TP structure/capped 2.5R`,
+      reason: `XAUUSD Adaptive (${kind}/${setupMode}): H1 ADX ${h1Adx}, H1 filter ${direction}, M15 setup RSI ${m15Rsi}, M5 trigger, SL 1.5 ATR M15 adjusted by swing, TP structure/capped 2.5R`,
     },
     reason: "signal found",
   };
@@ -369,6 +399,70 @@ function oppositeTrend(left: ReturnType<typeof trend>, right: ReturnType<typeof 
     (left === "UPTREND" && right === "DOWNTREND") ||
     (left === "DOWNTREND" && right === "UPTREND")
   );
+}
+
+function resolveXauH1Direction(
+  close: number,
+  ema50: number,
+  ema200: number,
+): {
+  direction: "BUY" | "SELL";
+  kind: XauTrendPullbackSetup["kind"];
+} | null {
+  if (ema50 > ema200 && close > ema200) {
+    return { direction: "BUY", kind: "TREND_PULLBACK" };
+  }
+  if (ema50 < ema200 && close < ema200) {
+    return { direction: "SELL", kind: "TREND_PULLBACK" };
+  }
+  if (ema50 > ema200 && close < ema200) {
+    return { direction: "SELL", kind: "BREAKOUT_CONTINUATION" };
+  }
+  if (ema50 < ema200 && close > ema200) {
+    return { direction: "BUY", kind: "BREAKOUT_CONTINUATION" };
+  }
+  return null;
+}
+
+function isStrongContinuationCandle(
+  candle: Candle,
+  direction: "BUY" | "SELL",
+): boolean {
+  const range = candle.high - candle.low;
+  if (range <= 0) return false;
+  const bullishBody = candle.close - candle.open;
+  const bearishBody = candle.open - candle.close;
+  return direction === "BUY"
+    ? bullishBody > 0 && bullishBody / range >= 0.45 && candle.close >= candle.low + range * 0.65
+    : bearishBody > 0 && bearishBody / range >= 0.45 && candle.close <= candle.low + range * 0.35;
+}
+
+function hasRecentM15PullbackTouch(
+  candles: Candle[],
+  direction: "BUY" | "SELL",
+  ema21: number,
+  ema50: number,
+  tolerance: number,
+): boolean {
+  const recent = candles.slice(-3);
+  const lower = Math.min(ema21, ema50) - tolerance;
+  const upper = Math.max(ema21, ema50) + tolerance;
+  return recent.some((candle) =>
+    direction === "BUY"
+      ? candle.low <= upper && candle.low >= lower
+      : candle.high >= lower && candle.high <= upper,
+  );
+}
+
+function hasVeryStrongM5Trigger(
+  candles: Candle[] | undefined,
+  direction: "BUY" | "SELL",
+): boolean {
+  const last = candles?.at(-1);
+  if (!last) return false;
+  return direction === "BUY"
+    ? isVeryStrongBullishTrigger(last)
+    : isVeryStrongBearishTrigger(last);
 }
 
 function resolveBiasTrend(
@@ -784,6 +878,20 @@ function isBullishPinBar(candle: Candle): boolean {
   return lowerWick >= 2 * Math.max(body, 0.000001) && candle.close >= candle.low + range * (2 / 3);
 }
 
+function isStrongBullishTrigger(candle: Candle): boolean {
+  const range = candle.high - candle.low;
+  if (range <= 0) return false;
+  const body = candle.close - candle.open;
+  return body > 0 && body / range >= 0.55 && candle.close >= candle.low + range * 0.7;
+}
+
+function isVeryStrongBullishTrigger(candle: Candle): boolean {
+  const range = candle.high - candle.low;
+  if (range <= 0) return false;
+  const body = candle.close - candle.open;
+  return body > 0 && body / range >= 0.65 && candle.close >= candle.low + range * 0.78;
+}
+
 function isBullishConfirmation(
   prev: Candle,
   last: Candle,
@@ -812,6 +920,20 @@ function isBearishPinBar(candle: Candle): boolean {
   if (range <= 0) return false;
   const upperWick = candle.high - Math.max(candle.open, candle.close);
   return upperWick >= 2 * Math.max(body, 0.000001) && candle.close <= candle.low + range / 3;
+}
+
+function isStrongBearishTrigger(candle: Candle): boolean {
+  const range = candle.high - candle.low;
+  if (range <= 0) return false;
+  const body = candle.open - candle.close;
+  return body > 0 && body / range >= 0.55 && candle.close <= candle.low + range * 0.3;
+}
+
+function isVeryStrongBearishTrigger(candle: Candle): boolean {
+  const range = candle.high - candle.low;
+  if (range <= 0) return false;
+  const body = candle.open - candle.close;
+  return body > 0 && body / range >= 0.65 && candle.close <= candle.low + range * 0.22;
 }
 
 function isBearishConfirmation(

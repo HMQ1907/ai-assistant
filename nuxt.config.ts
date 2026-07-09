@@ -12,7 +12,7 @@ export default defineNuxtConfig({
     aiTimeoutMs: Number(process.env.AI_TIMEOUT_MS || 90000),
     accountSizeUsd: Number(process.env.ACCOUNT_SIZE_USD || 200),
     maxLossPercentPerTrade: Number(
-      process.env.MAX_LOSS_PERCENT_PER_TRADE || 1,
+      process.env.MAX_LOSS_PERCENT_PER_TRADE || 20,
     ),
     maxDailyLossPercent: Number(process.env.MAX_DAILY_LOSS_PERCENT || 15),
     marketDataProvider: process.env.MARKET_DATA_PROVIDER || "twelvedata",
@@ -35,8 +35,8 @@ export default defineNuxtConfig({
     tradeScannerEnabled: process.env.TRADE_SCANNER_ENABLED === "true",
     tradeScannerTimezone: process.env.TRADE_SCANNER_TIMEZONE || "Asia/Saigon",
     tradeScannerWindows: process.env.TRADE_SCANNER_WINDOWS || "",
-    tradeScannerStartHour: Number(process.env.TRADE_SCANNER_START_HOUR || 19),
-    tradeScannerEndHour: Number(process.env.TRADE_SCANNER_END_HOUR || 23),
+    tradeScannerStartHour: Number(process.env.TRADE_SCANNER_START_HOUR || 0),
+    tradeScannerEndHour: Number(process.env.TRADE_SCANNER_END_HOUR || 24),
     tradeScannerIntervalMinutes: Number(
       process.env.TRADE_SCANNER_INTERVAL_MINUTES || 15,
     ),
@@ -55,8 +55,8 @@ export default defineNuxtConfig({
     // Auto-bot (Rules Engine H1). AUTO_TRADE=true -> tự đặt lệnh; false -> hệ báo tín hiệu cũ.
     autoTradeEnabled: process.env.AUTO_TRADE === "true",
     // 2 mức: setup đẹp -> good; setup rất đẹp (conviction >= 2/3) -> veryGood.
-    autoLotGood: Number(process.env.AUTO_LOT_GOOD || 0.03),
-    autoLotVeryGood: Number(process.env.AUTO_LOT_VERY_GOOD || 0.05),
+    autoLotGood: Number(process.env.AUTO_LOT_GOOD || 0.01),
+    autoLotVeryGood: Number(process.env.AUTO_LOT_VERY_GOOD || 0.01),
     autoVeryGoodMinConviction: Number(process.env.AUTO_VERYGOOD_MIN_CONVICTION || 2),
     autoMaxTradesPerDay: Number(process.env.AUTO_MAX_TRADES_PER_DAY || 3),
     autoMaxDailyLossPercent: Number(process.env.AUTO_MAX_DAILY_LOSS_PERCENT || 25),
