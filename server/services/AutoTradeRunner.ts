@@ -409,13 +409,19 @@ export class AutoTradeRunner {
               `[auto-bot] AI veto ALLOW with warnings: ${veto.parsed.warnings.join(" | ")}`,
             );
           }
+          const spreadBlock = highSpreadBlockReason(snapshot);
+          if (spreadBlock) {
+            console.info(`[auto-bot] ${spreadBlock}`);
+            await this.notifyAction(spreadBlock);
+            return;
+          }
           const riskCheck = checkAutoRisk({
             symbol,
             entry: signal.entry,
             stopLoss: signal.stopLoss,
             lot: finalLot,
             accountSizeUsd: config.accountSizeUsd,
-            maxLossPercentPerTrade: config.maxLossPercentPerTrade,
+            maxLossPercentPerTrade: riskPercentForSignal(signal, config.maxLossPercentPerTrade),
           });
           console.info(
             `[auto-bot] risk check ${activeSymbolLabel}: estimated loss ${riskCheck.estimatedLossUsd} USD, max allowed ${riskCheck.maxLossUsd} USD.`,
@@ -522,13 +528,19 @@ export class AutoTradeRunner {
         console.info(`[auto-bot] rules signal invalid -> skip: ${validationError}`);
         return;
       }
+      const spreadBlock = highSpreadBlockReason(snapshot);
+      if (spreadBlock) {
+        console.info(`[auto-bot] ${spreadBlock}`);
+        await this.notifyAction(spreadBlock);
+        return;
+      }
       const riskCheck = checkAutoRisk({
         symbol,
         entry: signal.entry,
         stopLoss: signal.stopLoss,
         lot,
         accountSizeUsd: config.accountSizeUsd,
-        maxLossPercentPerTrade: config.maxLossPercentPerTrade,
+        maxLossPercentPerTrade: riskPercentForSignal(signal, config.maxLossPercentPerTrade),
       });
       console.info(
         `[auto-bot] risk check ${activeSymbolLabel}: estimated loss ${riskCheck.estimatedLossUsd} USD, max allowed ${riskCheck.maxLossUsd} USD.`,
@@ -715,6 +727,67 @@ export class AutoTradeRunner {
       conviction >= config.autoVeryGoodMinConviction
         ? config.autoLotVeryGood
         : config.autoLotGood;
+    const indicators = new IndicatorService().calculateMany(input.market.snapshots);
+    const payload = new OpportunityPayloadBuilder().build(
+      input.market,
+      indicators,
+      emptyNews(),
+      config.accountSizeUsd,
+      config.maxLossPercentPerTrade,
+    );
+
+    if (config.autoUseAiVetoOnBump) {
+      try {
+        const aiService = new AiAnalysisService({
+          apiKey: config.evolinkApiKey,
+          model: config.evolinkModel,
+          baseUrl: config.evolinkBaseUrl,
+          timeoutMs: config.aiTimeoutMs,
+        });
+        const veto = await aiService.reviewAutoTradeVeto({
+          payload,
+          signal: input.signal,
+          entryTimeframe: input.entryTf,
+          conviction,
+          lot,
+          minRiskReward: tradingRules.minRiskReward,
+          allowedLots: uniqueLots([config.autoLotGood, config.autoLotVeryGood]),
+        });
+        if (veto.parsed.decision === "BLOCK") {
+          console.info(
+            `[auto-bot] AI veto BLOCK -> skip pending trigger ${input.entryTf}: ${veto.parsed.blocker_reasons.join(" | ") || veto.parsed.summary}`,
+          );
+          return false;
+        }
+        console.info("[auto-bot] AI veto ALLOW for pending trigger; keeping rules-engine entry/SL/TP unchanged.");
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (!config.autoTradeOnAiError) {
+          console.warn("[auto-bot] AI auto-veto error -> skip pending trigger:", msg);
+          await this.notifyError(
+            config,
+            "ai-pending",
+            `AI auto-veto failed, so SKIP pending trigger ${input.entryTf} ${input.signal.direction}. Error: ${msg.slice(0, 200)}`,
+          );
+          return false;
+        }
+        console.warn("[auto-bot] AI auto-veto error, fallback pending trigger to Rule Engine:", msg);
+        await this.notifyError(
+          config,
+          "ai-pending-fallback",
+          [
+            "AI auto-veto failed for pending trigger but AUTO_TRADE_ON_AI_ERROR=true, so bot will continue with Rule Engine.",
+            `Symbol: ${input.activeSymbolLabel}`,
+            `Setup: ${input.entryTf} ${input.signal.direction}`,
+            `Entry: ${input.signal.entry}`,
+            `SL: ${input.signal.stopLoss}`,
+            `TP: ${input.signal.takeProfit}`,
+            `AI error: ${msg.slice(0, 200)}`,
+          ].join("\n"),
+        );
+      }
+    }
+
     const validationError = validateAdjustedAutoTrade(
       input.signal.direction,
       {
@@ -739,13 +812,20 @@ export class AutoTradeRunner {
       return false;
     }
 
+    const spreadBlock = highSpreadBlockReason(input.snapshot);
+    if (spreadBlock) {
+      console.info(`[auto-bot] ${spreadBlock}`);
+      await this.notifyAction(spreadBlock);
+      return false;
+    }
+
     const riskCheck = checkAutoRisk({
       symbol: input.symbol,
       entry: input.signal.entry,
       stopLoss: input.signal.stopLoss,
       lot,
       accountSizeUsd: config.accountSizeUsd,
-      maxLossPercentPerTrade: config.maxLossPercentPerTrade,
+      maxLossPercentPerTrade: riskPercentForSignal(input.signal, config.maxLossPercentPerTrade),
     });
     console.info(
       `[auto-bot] pending trigger risk check ${input.activeSymbolLabel}: estimated loss ${riskCheck.estimatedLossUsd} USD, max allowed ${riskCheck.maxLossUsd} USD.`,
@@ -772,14 +852,6 @@ export class AutoTradeRunner {
     );
 
     try {
-      const indicators = new IndicatorService().calculateMany(input.market.snapshots);
-      const payload = new OpportunityPayloadBuilder().build(
-        input.market,
-        indicators,
-        emptyNews(),
-        config.accountSizeUsd,
-        config.maxLossPercentPerTrade,
-      );
       const historyService = new AnalysisHistoryService(
         new SupabaseService({
           url: config.supabaseUrl,
@@ -1181,6 +1253,23 @@ function rewardRisk(
     ? takeProfit - entry
     : entry - takeProfit;
   return reward / risk;
+}
+
+function riskPercentForSignal(
+  signal: RuleSignal,
+  defaultMaxLossPercent: number,
+): number {
+  return signal.strategyKind === "MOMENTUM_SCALP"
+    ? Math.min(defaultMaxLossPercent, 15)
+    : defaultMaxLossPercent;
+}
+
+function highSpreadBlockReason(snapshot: MarketSnapshot): string | null {
+  if (snapshot.spread === null || !Number.isFinite(snapshot.spread)) return null;
+  const maxSpread = snapshot.symbol === "XAUUSD" ? 1.5 : 0.0003;
+  return snapshot.spread > maxSpread
+    ? `SKIP: spread ${snapshot.spread} exceeds max allowed ${maxSpread}`
+    : null;
 }
 
 interface AutoRiskCheckInput {

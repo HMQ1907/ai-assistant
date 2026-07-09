@@ -58,6 +58,7 @@ export interface RuleSignal {
   stopLoss: number;
   takeProfit: number;
   reason: string;
+  strategyKind?: "SETUP" | "MOMENTUM_SCALP";
 }
 
 export interface XauTrendPullbackSetup {
@@ -218,7 +219,11 @@ export function evaluateXauTrendPullbackSignal(
   m15: Candle[],
   h1: Candle[],
 ): RuleSignal | null {
-  return buildXauTrendPullbackSignal(m5, m15, h1)?.signal ?? null;
+  return (
+    buildXauTrendPullbackSignal(m5, m15, h1)?.signal ??
+    buildXauMomentumScalpSignal(m5, m15, h1)?.signal ??
+    null
+  );
 }
 
 export function explainXauTrendPullbackRejection(
@@ -226,7 +231,10 @@ export function explainXauTrendPullbackRejection(
   m15: Candle[],
   h1: Candle[],
 ): string | null {
-  return buildXauTrendPullbackSignal(m5, m15, h1)?.reason ?? null;
+  const setup = buildXauTrendPullbackSignal(m5, m15, h1);
+  if (setup.signal) return setup.reason;
+  const scalp = buildXauMomentumScalpSignal(m5, m15, h1);
+  return scalp.signal ? scalp.reason : `${setup.reason}; scalp: ${scalp.reason}`;
 }
 
 function buildXauTrendPullbackSignal(
@@ -319,8 +327,8 @@ function buildXauTrendPullbackSignal(
   if (!prevM5 || !lastM5) return { signal: null, reason: "M5 missing trigger candles" };
   const strongTrigger =
     direction === "BUY"
-      ? isStrongBullishTrigger(lastM5)
-      : isStrongBearishTrigger(lastM5);
+      ? isStrongBullishTrigger(lastM5) || isBullishMomentumBreak(prevM5, lastM5)
+      : isStrongBearishTrigger(lastM5) || isBearishMomentumBreak(prevM5, lastM5);
   const trigger =
     direction === "BUY"
       ? isBullishEngulfing(prevM5, lastM5) ||
@@ -332,7 +340,7 @@ function buildXauTrendPullbackSignal(
   if (!trigger) {
     return {
       signal: null,
-      reason: `M5 ${direction} trigger blocked: no engulfing/pin bar/strong close on closed candle`,
+      reason: `M5 ${direction} trigger blocked: no engulfing/pin bar/strong close/momentum break on closed candle`,
     };
   }
   if (setupMode === "EARLY_TREND" && !strongTrigger) {
@@ -389,8 +397,84 @@ function buildXauTrendPullbackSignal(
       stopLoss: round(stopLoss),
       takeProfit: round(takeProfit),
       reason: `XAUUSD Adaptive (${kind}/${setupMode}): H1 ADX ${h1Adx}, H1 filter ${direction}, M15 setup RSI ${m15Rsi}, M5 trigger, SL 1.5 ATR M15 adjusted by swing, TP structure/capped 2.5R`,
+      strategyKind: "SETUP",
     },
     reason: "signal found",
+  };
+}
+
+function buildXauMomentumScalpSignal(
+  m5: Candle[],
+  m15: Candle[],
+  h1: Candle[],
+): { signal: RuleSignal | null; reason: string } {
+  if (h1.length < 220) return { signal: null, reason: `H1 candles ${h1.length} < 220` };
+  if (m15.length < 60) return { signal: null, reason: `M15 candles ${m15.length} < 60` };
+  if (m5.length < 8) return { signal: null, reason: `M5 candles ${m5.length} < 8` };
+
+  const h1Closes = h1.map((candle) => candle.close);
+  const h1Ema200 = ema(h1Closes, 200);
+  const h1Adx = adx(h1, 14);
+  const h1Last = h1.at(-1);
+  if (!h1Last || h1Ema200 === null || h1Adx === null) {
+    return { signal: null, reason: "scalp H1 EMA200/ADX unavailable" };
+  }
+  if (h1Adx <= 15) return { signal: null, reason: `scalp H1 ADX ${h1Adx} <= 15` };
+
+  const m15Closes = m15.map((candle) => candle.close);
+  const m15Atr = atr(m15, 14);
+  const m15Rsi = rsi(m15Closes, 14);
+  if (m15Atr === null || m15Atr <= 0 || m15Rsi === null) {
+    return { signal: null, reason: "scalp M15 ATR/RSI unavailable" };
+  }
+
+  const prevM5 = m5.at(-2);
+  const lastM5 = m5.at(-1);
+  if (!prevM5 || !lastM5) return { signal: null, reason: "scalp missing M5 trigger candles" };
+
+  const buyAllowed = h1Last.close > h1Ema200 && m15Rsi >= 60 && m15Rsi <= 78;
+  const sellAllowed = h1Last.close < h1Ema200 && m15Rsi >= 22 && m15Rsi <= 40;
+  const buyTrigger =
+    isBullishMomentumBreak(prevM5, lastM5) ||
+    isVeryStrongBullishTrigger(lastM5) ||
+    isBullishScalpMomentumCandle(lastM5);
+  const sellTrigger =
+    isBearishMomentumBreak(prevM5, lastM5) ||
+    isVeryStrongBearishTrigger(lastM5) ||
+    isBearishScalpMomentumCandle(lastM5);
+
+  const direction: "BUY" | "SELL" | null =
+    buyAllowed && buyTrigger ? "BUY" : sellAllowed && sellTrigger ? "SELL" : null;
+  if (direction === null) {
+    return {
+      signal: null,
+      reason: `scalp blocked: H1/M15 momentum or M5 scalp candle not aligned (RSI ${m15Rsi}, close ${h1Last.close}, EMA200 ${h1Ema200})`,
+    };
+  }
+
+  const entry = lastM5.close;
+  const m5Swing = direction === "BUY"
+    ? Math.min(...m5.slice(-6).map((candle) => candle.low))
+    : Math.max(...m5.slice(-6).map((candle) => candle.high));
+  const atrStop = direction === "BUY" ? entry - m15Atr : entry + m15Atr;
+  const swingStop = direction === "BUY" ? m5Swing - 0.1 * m15Atr : m5Swing + 0.1 * m15Atr;
+  const stopLoss = direction === "BUY" ? Math.min(atrStop, swingStop) : Math.max(atrStop, swingStop);
+  const risk = Math.abs(entry - stopLoss);
+  if (!Number.isFinite(risk) || risk <= 0) {
+    return { signal: null, reason: `scalp ${direction} blocked: invalid SL/risk` };
+  }
+
+  const takeProfit = direction === "BUY" ? entry + 1.5 * risk : entry - 1.5 * risk;
+  return {
+    signal: {
+      direction,
+      entry: round(entry),
+      stopLoss: round(stopLoss),
+      takeProfit: round(takeProfit),
+      reason: `XAUUSD MOMENTUM_SCALP: H1 close ${direction === "BUY" ? "above" : "below"} EMA200, M15 RSI ${m15Rsi}, M5 momentum/scalp candle, TP 1.5R`,
+      strategyKind: "MOMENTUM_SCALP",
+    },
+    reason: "scalp signal found",
   };
 }
 
@@ -892,6 +976,25 @@ function isVeryStrongBullishTrigger(candle: Candle): boolean {
   return body > 0 && body / range >= 0.65 && candle.close >= candle.low + range * 0.78;
 }
 
+function isBullishMomentumBreak(prev: Candle, last: Candle): boolean {
+  const range = last.high - last.low;
+  if (range <= 0) return false;
+  const body = last.close - last.open;
+  return (
+    body > 0 &&
+    last.close > prev.high &&
+    body / range >= 0.4 &&
+    last.close >= last.low + range * 0.55
+  );
+}
+
+function isBullishScalpMomentumCandle(candle: Candle): boolean {
+  const range = candle.high - candle.low;
+  if (range <= 0) return false;
+  const body = candle.close - candle.open;
+  return body > 0 && body / range >= 0.45 && candle.close >= candle.low + range * 0.6;
+}
+
 function isBullishConfirmation(
   prev: Candle,
   last: Candle,
@@ -934,6 +1037,25 @@ function isVeryStrongBearishTrigger(candle: Candle): boolean {
   if (range <= 0) return false;
   const body = candle.open - candle.close;
   return body > 0 && body / range >= 0.65 && candle.close <= candle.low + range * 0.22;
+}
+
+function isBearishMomentumBreak(prev: Candle, last: Candle): boolean {
+  const range = last.high - last.low;
+  if (range <= 0) return false;
+  const body = last.open - last.close;
+  return (
+    body > 0 &&
+    last.close < prev.low &&
+    body / range >= 0.4 &&
+    last.close <= last.low + range * 0.45
+  );
+}
+
+function isBearishScalpMomentumCandle(candle: Candle): boolean {
+  const range = candle.high - candle.low;
+  if (range <= 0) return false;
+  const body = candle.open - candle.close;
+  return body > 0 && body / range >= 0.45 && candle.close <= candle.low + range * 0.4;
 }
 
 function isBearishConfirmation(
