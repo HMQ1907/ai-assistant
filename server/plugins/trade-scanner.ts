@@ -13,11 +13,14 @@ declare global {
   var __autoTradeLastSlot: string | undefined;
   // eslint-disable-next-line no-var
   var __autoTradeManagementLastSlot: string | undefined;
+  // eslint-disable-next-line no-var
+  var __scalpBotLastSlot: string | undefined;
 }
 
 export default defineNitroPlugin((nitroApp) => {
   const config = useRuntimeConfig();
   const autoMode = config.autoTradeEnabled;
+  const scalpMode = autoMode && config.autoTradeScalp;
 
   if (!autoMode && !config.tradeScannerEnabled) {
     console.info("[trade-loop] disabled (AUTO_TRADE=false, TRADE_SCANNER_ENABLED=false)");
@@ -50,6 +53,19 @@ export default defineNitroPlugin((nitroApp) => {
     }
 
     if (autoMode) {
+      // Scalp-bot mode: AUTO_TRADE=true + AUTO_TRADE_SCALP=true
+      // Quét mỗi 1 phút bằng reversal scalp engine, không AI veto, lot 0.01.
+      if (scalpMode) {
+        if (isOneMinSlot(now, tz)) {
+          const scalpSlot = slotKey(now, tz);
+          if (globalThis.__scalpBotLastSlot !== scalpSlot) {
+            globalThis.__scalpBotLastSlot = scalpSlot;
+            void autoBot.runScalpOnce();
+          }
+        }
+        return;
+      }
+
       // Auto-bot loop 1: every 5 minutes + a few seconds after candle close.
       if (isFiveMinSlot(now, tz)) {
         const autoSlot = slotKey(now, tz);
@@ -86,7 +102,11 @@ export default defineNitroPlugin((nitroApp) => {
     }
   });
 
-  if (autoMode) {
+  if (scalpMode) {
+    console.info(
+      `[trade-loop] AUTO-SCALP enabled (Reversal Scalp M1/M5/M15/H1, no AI veto) - entries in ${config.tradeScannerWindows || `${config.tradeScannerStartHour}:00-${config.tradeScannerEndHour}:00`} ${tz}, lot 0.01 fixed`,
+    );
+  } else if (autoMode) {
     console.info(
       `[trade-loop] AUTO-BOT enabled (Rules Engine H1) - entries in ${config.tradeScannerWindows || `${config.tradeScannerStartHour}:00-${config.tradeScannerEndHour}:00`} ${tz}, lots ${config.autoLotGood}/${config.autoLotVeryGood}, maxDailyLoss ${config.autoMaxDailyLossPercent}%`,
     );

@@ -12,13 +12,15 @@ import {
   convictionScore,
   defaultRuleStrategyConfig,
   evaluateBalancedM5Signal,
+  evaluateManualReversalScalpSignal,
   evaluateRuleSignal,
   evaluateXauTrendPullbackSetup,
   evaluateXauTrendPullbackSignal,
   evaluateXauTrendPullbackTriggerSignal,
-  explainXauPendingSetupInvalidation,
   explainBalancedM5Rejection,
+  explainManualReversalScalpRejection,
   explainRuleSignalRejection,
+  explainXauPendingSetupInvalidation,
   explainXauTrendPullbackRejection,
   type RuleSignal,
   type XauTrendPullbackSetup,
@@ -51,9 +53,11 @@ interface PendingXauSetup {
 
 export class AutoTradeRunner {
   private running = false;
+  private runningScalp = false;
   private lastEvaluatedH1 = "";
   private lastEvaluatedM15 = "";
   private lastEvaluatedM5 = "";
+  private lastM1ScalpTime = "";
   private dayKey = "";
   private dayBaselineEquity = 0;
   private tradesToday = 0;
@@ -64,6 +68,269 @@ export class AutoTradeRunner {
   private hadActiveOrders = false;
   private lastOrderClosedAt = 0;
   private pendingSetup: PendingXauSetup | null = null;
+
+  /**
+   * Scalp auto-bot: chạy mỗi 1 phút khi AUTO_TRADE=true + AUTO_TRADE_SCALP=true.
+   * Dùng cùng engine với MANUAL_SCALP (evaluateManualReversalScalpSignal).
+   * Lot cố định 0.01, không qua AI veto.
+   */
+  async runScalpOnce(): Promise<void> {
+    if (this.runningScalp) return;
+    this.runningScalp = true;
+    try {
+      const config = useRuntimeConfig();
+      const symbol = symbolCodeFromMt5Symbol(config.mt5Symbol);
+      const activeSymbolLabel = symbolLabel(config.mt5Symbol);
+      console.info(`[scalp-bot] scanning ${activeSymbolLabel}`);
+
+      const orderService = new Mt5OrderService({
+        bridgeUrl: config.mt5BridgeUrl,
+        symbol: config.mt5Symbol,
+      });
+
+      // Kiểm tra AutoTrading trên MT5
+      const account = await orderService.getAccount();
+      this.rollDay(config.tradeScannerTimezone, account.equity);
+      if (!account.tradeAllowed) {
+        console.warn("[scalp-bot] AutoTrading is OFF in MT5.");
+        return;
+      }
+      if (this.haltedForDay) {
+        console.info("[scalp-bot] daily trade/loss limit reached, stop opening new trades.");
+        return;
+      }
+      if (
+        this.dayBaselineEquity > 0 &&
+        account.equity <= this.dayBaselineEquity * (1 - config.autoMaxDailyLossPercent / 100)
+      ) {
+        this.haltedForDay = true;
+        console.warn(
+          `[scalp-bot] kill-switch: equity ${account.equity} <= daily loss threshold ${config.autoMaxDailyLossPercent}%.`,
+        );
+        return;
+      }
+
+      // Nếu đang có lệnh mở thì không scan setup mới
+      const activeOrders = await orderService.getActiveOrders();
+      if (activeOrders.length > 0) {
+        console.info(
+          `[scalp-bot] skipped new scan: ${activeOrders.length} active ${activeSymbolLabel} order(s). Managing current order(s) only.`,
+        );
+        if (shouldFlatBeforeSessionClose(config.tradeScannerTimezone)) {
+          await this.closeOrdersForSessionEnd(orderService, activeOrders);
+        } else {
+          await this.closeStaleOrders(orderService, activeOrders, config.autoMaxHoldHours);
+        }
+        return;
+      }
+
+      // Reset tracking khi không còn lệnh
+      if (this.hadActiveOrders) {
+        this.hadActiveOrders = false;
+        this.lastOrderClosedAt = Date.now();
+        const cooldownMinutes = Number(
+          config.autoCooldownM15Candles
+            ? config.autoCooldownM15Candles * 15
+            : config.autoCooldownMinutes,
+        );
+        console.info(
+          `[scalp-bot] detected ${activeSymbolLabel} order closed; starting ${cooldownMinutes}m cooldown.`,
+        );
+      }
+
+      // Cooldown sau lệnh vừa đóng
+      const cooldownMinutes = Number(
+        config.autoCooldownM15Candles
+          ? config.autoCooldownM15Candles * 15
+          : config.autoCooldownMinutes,
+      );
+      const cooldownRemainingMs =
+        this.lastOrderClosedAt > 0
+          ? cooldownMinutes * 60_000 - (Date.now() - this.lastOrderClosedAt)
+          : 0;
+      if (cooldownRemainingMs > 0) {
+        console.info(
+          `[scalp-bot] skipped: cooldown active for ${Math.ceil(cooldownRemainingMs / 60_000)} more minute(s).`,
+        );
+        return;
+      }
+
+      if (this.tradesToday >= config.autoMaxTradesPerDay) {
+        console.info("[scalp-bot] max trades/day reached.");
+        return;
+      }
+
+      const timeBlockReason = getAutoTradeTimeBlockReason(config.tradeScannerTimezone);
+      if (timeBlockReason) {
+        console.info(`[scalp-bot] skipped: ${timeBlockReason}`);
+        return;
+      }
+
+      // Fetch market data
+      const marketService = new MarketDataService({
+        providerName: config.marketDataProvider,
+        apiKey: config.marketDataApiKey,
+        baseUrl: config.marketDataBaseUrl,
+        mt5BridgeUrl: config.mt5BridgeUrl,
+        mt5Symbol: config.mt5Symbol,
+        maxQuoteAgeSeconds: config.maxQuoteAgeSeconds,
+        debug: false,
+      });
+      const market = await marketService.collectAll([symbol]);
+      const snapshot = market.snapshots[0];
+      if (!snapshot || snapshot.data_quality === "LOW") {
+        console.info("[scalp-bot] skipped: data_quality LOW or missing snapshot.");
+        return;
+      }
+
+      const m1 = snapshot.candles.M1 ?? [];
+      const m5 = snapshot.candles.M5;
+      const m15 = snapshot.candles.M15;
+      const h1 = snapshot.candles.H1;
+
+      // Dedup: không đặt lệnh 2 lần trên cùng cây nến M1
+      const latestM1Time = m1.at(-1)?.time ?? "";
+      if (latestM1Time && latestM1Time === this.lastM1ScalpTime) {
+        console.info(`[scalp-bot] skipped: already evaluated M1 candle ${latestM1Time}.`);
+        return;
+      }
+
+      // Evaluate scalp signal
+      const signal = evaluateManualReversalScalpSignal(m1, m5, m15, h1);
+      if (!signal) {
+        const reason =
+          explainManualReversalScalpRejection(m1, m5, m15, h1) ??
+          "scalp diagnostics returned no reason";
+        console.info(`[scalp-bot] no scalp signal for ${activeSymbolLabel}: ${reason}`);
+        // Vẫn mark nến này đã xét để tránh spam log
+        if (latestM1Time) this.lastM1ScalpTime = latestM1Time;
+        return;
+      }
+
+      // Cập nhật dedup sau khi tìm được signal
+      if (latestM1Time) this.lastM1ScalpTime = latestM1Time;
+
+      console.info(
+        `[scalp-bot] signal found ${activeSymbolLabel}: M1 ${signal.direction} entry ${signal.entry} SL ${signal.stopLoss} TP ${signal.takeProfit}`,
+      );
+
+      // Kiểm tra spread
+      const spreadBlock = highSpreadBlockReason(snapshot);
+      if (spreadBlock) {
+        console.info(`[scalp-bot] ${spreadBlock}`);
+        return;
+      }
+
+      // Lot cố định 0.01
+      const lot = 0.01;
+
+      // Kiểm tra risk
+      const riskCheck = checkAutoRisk({
+        symbol,
+        entry: signal.entry,
+        stopLoss: signal.stopLoss,
+        lot,
+        accountSizeUsd: config.accountSizeUsd,
+        maxLossPercentPerTrade: riskPercentForSignal(signal, config.maxLossPercentPerTrade),
+      });
+      console.info(
+        `[scalp-bot] risk check ${activeSymbolLabel}: estimated loss ${riskCheck.estimatedLossUsd} USD, max allowed ${riskCheck.maxLossUsd} USD.`,
+      );
+      if (!riskCheck.allowed) {
+        const message = `SKIP: estimated loss ${riskCheck.estimatedLossUsd} USD exceeds max loss ${riskCheck.maxLossUsd} USD`;
+        console.info(`[scalp-bot] ${message}`);
+        return;
+      }
+
+      // Đặt lệnh
+      const placed = await orderService.placeOrder({
+        direction: signal.direction,
+        orderType: "MARKET",
+        volume: lot,
+        price: null,
+        stopLoss: signal.stopLoss,
+        takeProfit: signal.takeProfit,
+        comment: `scalp-m1`,
+      });
+      this.tradesToday += 1;
+      this.hadActiveOrders = true;
+      console.info(
+        `[scalp-bot] PLACED M1 ${signal.direction} ${lot} lot @${placed.price} SL ${signal.stopLoss} TP ${signal.takeProfit} (ticket ${placed.ticket})`,
+      );
+
+      // Ghi history
+      try {
+        const indicators = new IndicatorService().calculateMany(market.snapshots);
+        const payload = new OpportunityPayloadBuilder().build(
+          market,
+          indicators,
+          emptyNews(),
+          config.accountSizeUsd,
+          config.maxLossPercentPerTrade,
+        );
+        const historyService = new AnalysisHistoryService(
+          new SupabaseService({
+            url: config.supabaseUrl,
+            serviceRoleKey: config.supabaseServiceRoleKey,
+          }).getClient(),
+        );
+        const record = await historyService.create({
+          requestPayload: payload,
+          aiResponseRaw: "scalp-bot auto reversal scalp (no AI veto)",
+          parsedResult: buildAutoRecommendation(
+            signal,
+            lot,
+            1,
+            snapshot.price,
+            payload,
+            tradingRules.minRiskReward,
+          ),
+        });
+        await historyService.markOrderPlaced(record.id, {
+          mt5_ticket: placed.ticket,
+          order_type: placed.orderType,
+          order_state: "FILLED",
+        });
+      } catch (error) {
+        console.warn(
+          "[scalp-bot] failed writing history:",
+          error instanceof Error ? error.message : error,
+        );
+      }
+
+      // Telegram thông báo
+      try {
+        if (config.telegramBotToken && config.telegramChatId) {
+          await new TelegramService({
+            botToken: config.telegramBotToken,
+            chatId: config.telegramChatId,
+          }).sendMessage(
+            [
+              `🤖 Scalp-bot PLACED order:`,
+              `Symbol: ${activeSymbolLabel}`,
+              `Direction: ${signal.direction}`,
+              `Entry: ${placed.price}`,
+              `SL: ${signal.stopLoss}`,
+              `TP: ${signal.takeProfit}`,
+              `Lot: ${lot}`,
+              `Ticket: #${placed.ticket}`,
+              `Reason: ${signal.reason.slice(0, 200)}`,
+            ].join("\n"),
+          );
+        }
+      } catch (error) {
+        console.warn(
+          "[scalp-bot] failed sending Telegram notification:",
+          error instanceof Error ? error.message : error,
+        );
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.warn("[scalp-bot] tick error:", msg);
+    } finally {
+      this.runningScalp = false;
+    }
+  }
 
   async runManagementOnce(): Promise<void> {
     if (this.running) return;

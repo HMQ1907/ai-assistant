@@ -71,6 +71,10 @@ export default defineNuxtConfig({
     // Nhánh scalp dự phòng trong mode xau_trend_pullback. Mặc định TẮT:
     // chỉ vào lệnh khi có setup trend-pullback sạch, không rơi xuống scalp chất lượng thấp.
     autoAllowScalp: process.env.AUTO_ALLOW_SCALP === "true",
+    // Auto-scalp: khi bật AUTO_TRADE=true + AUTO_TRADE_SCALP=true, bot chuyển sang
+    // chế độ reversal scalp tự động mỗi 1 phút (M1/M5/M15/H1), lot cố định 0.01,
+    // không qua AI veto. Dùng cùng engine với MANUAL_SCALP nhưng đặt lệnh tự động.
+    autoTradeScalp: process.env.AUTO_TRADE_SCALP === "true",
     // Manual-only: khi bấm "Quét setup Rule Engine", chuyển sang reversal scalp
     // M1/M5/M15/H1 để tìm đỉnh/đáy ngắn hạn. Không ảnh hưởng auto-bot.
     manualScalp: process.env.MANUAL_SCALP === "true",
