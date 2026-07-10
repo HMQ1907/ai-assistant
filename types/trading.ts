@@ -1,6 +1,6 @@
 export const SYMBOLS = ["XAUUSD", "EURUSD"] as const;
 
-export const TIMEFRAMES = ["M5", "M15", "H1", "H4"] as const;
+export const TIMEFRAMES = ["M1", "M5", "M15", "H1", "H4"] as const;
 
 export type SymbolCode = (typeof SYMBOLS)[number];
 export type Timeframe = (typeof TIMEFRAMES)[number];

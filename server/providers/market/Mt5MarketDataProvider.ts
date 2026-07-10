@@ -126,7 +126,7 @@ export class Mt5MarketDataProvider implements MarketDataProvider {
       filteredCandles[timeframe] = parsed.diagnostics.filteredCount;
       candleDiagnostics[timeframe] = parsed.diagnostics;
 
-      if (parsed.candles.length === 0) {
+      if (parsed.candles.length === 0 && timeframe !== "M1") {
         criticalErrors.push(`${timeframe}: MT5 bridge khong tra candle hop le.`);
       }
       if (parsed.diagnostics.filteredCount > 0) {
@@ -285,13 +285,15 @@ function aggregateMarketQuality(input: {
     input.criticalErrors.length > 0 ||
     input.quoteAgeSeconds === null ||
     input.quoteAgeSeconds > input.maxQuoteAgeSeconds ||
-    Object.values(input.timeframeQuality).some((item) => item.quality === "LOW")
+    Object.values(input.timeframeQuality).some(
+      (item) => item.timeframe !== "M1" && item.quality === "LOW",
+    )
   ) {
     return "LOW";
   }
   if (
     Object.values(input.timeframeQuality).some(
-      (item) => item.quality === "MEDIUM",
+      (item) => item.timeframe !== "M1" && item.quality === "MEDIUM",
     )
   ) {
     return "MEDIUM";

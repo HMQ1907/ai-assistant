@@ -27,6 +27,7 @@ const m5FreshnessGraceSeconds = 5 * 60;
 const quoteToCandleToleranceRatio = 0.0005;
 
 const timeframeIntervals: Record<Timeframe, string> = {
+  M1: "1min",
   M5: "5min",
   M15: "15min",
   H1: "1h",
@@ -34,6 +35,7 @@ const timeframeIntervals: Record<Timeframe, string> = {
 };
 
 const timeframeDurationMs: Record<Timeframe, number> = {
+  M1: 60 * 1000,
   M5: 5 * 60 * 1000,
   M15: 15 * 60 * 1000,
   H1: 60 * 60 * 1000,
@@ -511,14 +513,16 @@ function aggregateMarketQuality(input: {
     !input.quoteTimestampReliable ||
     input.quoteAgeSeconds === null ||
     input.quoteAgeSeconds > input.maxQuoteAgeSeconds ||
-    Object.values(input.timeframeQuality).some((item) => item.quality === "LOW")
+    Object.values(input.timeframeQuality).some(
+      (item) => item.timeframe !== "M1" && item.quality === "LOW",
+    )
   ) {
     return "LOW";
   }
   if (
     input.bidAskStatus !== "AVAILABLE" ||
     Object.values(input.timeframeQuality).some(
-      (item) => item.quality === "MEDIUM",
+      (item) => item.timeframe !== "M1" && item.quality === "MEDIUM",
     )
   ) {
     return "MEDIUM";

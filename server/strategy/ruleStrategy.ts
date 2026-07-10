@@ -58,7 +58,7 @@ export interface RuleSignal {
   stopLoss: number;
   takeProfit: number;
   reason: string;
-  strategyKind?: "SETUP" | "MOMENTUM_SCALP";
+  strategyKind?: "SETUP" | "MOMENTUM_SCALP" | "REVERSAL_SCALP";
 }
 
 export interface XauTrendPullbackSetup {
@@ -244,6 +244,152 @@ export function explainXauTrendPullbackRejection(
   if (!options.allowScalp) return setup.reason;
   const scalp = buildXauMomentumScalpSignal(m5, m15, h1);
   return scalp.signal ? scalp.reason : `${setup.reason}; scalp: ${scalp.reason}`;
+}
+
+export function evaluateManualReversalScalpSignal(
+  m1: Candle[],
+  m5: Candle[],
+  m15: Candle[],
+  h1: Candle[],
+): RuleSignal | null {
+  return buildManualReversalScalpSignal(m1, m5, m15, h1).signal;
+}
+
+export function explainManualReversalScalpRejection(
+  m1: Candle[],
+  m5: Candle[],
+  m15: Candle[],
+  h1: Candle[],
+): string | null {
+  return buildManualReversalScalpSignal(m1, m5, m15, h1).reason;
+}
+
+function buildManualReversalScalpSignal(
+  m1: Candle[],
+  m5: Candle[],
+  m15: Candle[],
+  h1: Candle[],
+): { signal: RuleSignal | null; reason: string } {
+  if (m1.length < 60) return { signal: null, reason: `M1 candles ${m1.length} < 60` };
+  if (m5.length < 80) return { signal: null, reason: `M5 candles ${m5.length} < 80` };
+  if (m15.length < 80) return { signal: null, reason: `M15 candles ${m15.length} < 80` };
+  if (h1.length < 60) return { signal: null, reason: `H1 candles ${h1.length} < 60` };
+
+  const m15Closes = m15.map((candle) => candle.close);
+  const m5Closes = m5.map((candle) => candle.close);
+  const h1Closes = h1.map((candle) => candle.close);
+  const m15Rsi = rsi(m15Closes, 14);
+  const m5Rsi = rsi(m5Closes, 14);
+  const m15Atr = atr(m15, 14);
+  const m5Atr = atr(m5, 14);
+  const h1Adx = adx(h1, 14);
+  const h1Ema200 = ema(h1Closes, 200);
+  const m15Bands = bollingerBands(m15Closes, 20, 2);
+  const lastM15 = m15.at(-1);
+  const lastM5 = m5.at(-1);
+  const prevM5 = m5.at(-2);
+  const lastM1 = m1.at(-1);
+  const prevM1 = m1.at(-2);
+  const lastH1 = h1.at(-1);
+
+  if (
+    m15Rsi === null ||
+    m5Rsi === null ||
+    m15Atr === null ||
+    m15Atr <= 0 ||
+    m5Atr === null ||
+    m5Atr <= 0 ||
+    h1Adx === null ||
+    m15Bands === null ||
+    !lastM15 ||
+    !lastM5 ||
+    !prevM5 ||
+    !lastM1 ||
+    !prevM1 ||
+    !lastH1
+  ) {
+    return { signal: null, reason: "manual scalp indicator/candle data unavailable" };
+  }
+
+  if (h1Adx > 38) {
+    return {
+      signal: null,
+      reason: `manual scalp blocked: H1 ADX ${h1Adx} > 38, trend quá mạnh để bắt đỉnh/đáy`,
+    };
+  }
+
+  const buyExtreme =
+    m15Rsi <= 34 &&
+    (lastM15.low <= m15Bands.lower || lastM15.close <= m15Bands.lower + 0.15 * m15Atr);
+  const sellExtreme =
+    m15Rsi >= 66 &&
+    (lastM15.high >= m15Bands.upper || lastM15.close >= m15Bands.upper - 0.15 * m15Atr);
+  const buyTrigger =
+    (hasBullishSweep(m1, 12) || hasBullishSweep(m5, 8)) &&
+    isBullishManualScalpConfirm(lastM1) &&
+    m5Rsi <= 45 &&
+    isMomentumRecovering(m5, "BUY");
+  const sellTrigger =
+    (hasBearishSweep(m1, 12) || hasBearishSweep(m5, 8)) &&
+    isBearishManualScalpConfirm(lastM1) &&
+    m5Rsi >= 55 &&
+    isMomentumRecovering(m5, "SELL");
+
+  const direction: "BUY" | "SELL" | null =
+    buyExtreme && buyTrigger ? "BUY" : sellExtreme && sellTrigger ? "SELL" : null;
+  if (direction === null) {
+    return {
+      signal: null,
+      reason:
+        `manual scalp blocked: need M15 extreme + M1/M5 sweep + M1 momentum/pinbar trigger ` +
+        `(M15 RSI ${m15Rsi}, M5 RSI ${m5Rsi}, H1 ADX ${h1Adx})`,
+    };
+  }
+
+  if (
+    direction === "BUY" &&
+    h1Ema200 !== null &&
+    lastH1.close < h1Ema200 &&
+    h1Adx > 30
+  ) {
+    return { signal: null, reason: "manual scalp BUY blocked: H1 downtrend still too strong" };
+  }
+  if (
+    direction === "SELL" &&
+    h1Ema200 !== null &&
+    lastH1.close > h1Ema200 &&
+    h1Adx > 30
+  ) {
+    return { signal: null, reason: "manual scalp SELL blocked: H1 uptrend still too strong" };
+  }
+
+  const entry = lastM1.close;
+  const recentM1 = m1.slice(-20);
+  const sweepLow = Math.min(...recentM1.map((candle) => candle.low));
+  const sweepHigh = Math.max(...recentM1.map((candle) => candle.high));
+  const stopLoss =
+    direction === "BUY"
+      ? Math.min(sweepLow - 0.25 * m5Atr, entry - 0.6 * m15Atr)
+      : Math.max(sweepHigh + 0.25 * m5Atr, entry + 0.6 * m15Atr);
+  const risk = Math.abs(entry - stopLoss);
+  if (!Number.isFinite(risk) || risk <= 0) {
+    return { signal: null, reason: `manual scalp ${direction} blocked: invalid SL/risk` };
+  }
+
+  const takeProfit = direction === "BUY" ? entry + 1.5 * risk : entry - 1.5 * risk;
+  return {
+    signal: {
+      direction,
+      entry: round(entry),
+      stopLoss: round(stopLoss),
+      takeProfit: round(takeProfit),
+      reason:
+        `MANUAL REVERSAL_SCALP: M15 extreme RSI ${m15Rsi} + Bollinger band touch, ` +
+        `M1/M5 liquidity sweep trigger, M5 RSI ${m5Rsi}, H1 ADX ${h1Adx}, TP 1.5R`,
+      strategyKind: "REVERSAL_SCALP",
+    },
+    reason: "manual reversal scalp signal found",
+  };
 }
 
 function buildXauTrendPullbackSignal(
@@ -1006,6 +1152,16 @@ function isBullishScalpMomentumCandle(candle: Candle): boolean {
   return body > 0 && body / range >= 0.45 && candle.close >= candle.low + range * 0.6;
 }
 
+function isBullishManualScalpConfirm(candle: Candle): boolean {
+  const range = candle.high - candle.low;
+  if (range <= 0) return false;
+  const body = Math.abs(candle.close - candle.open);
+  const isMomentumBuy =
+    body / range >= 0.45 && candle.close >= candle.low + range * 0.6;
+  const isPinbarBuy = candle.close >= candle.low + range * 0.75;
+  return isMomentumBuy || isPinbarBuy;
+}
+
 function isBullishConfirmation(
   prev: Candle,
   last: Candle,
@@ -1067,6 +1223,64 @@ function isBearishScalpMomentumCandle(candle: Candle): boolean {
   if (range <= 0) return false;
   const body = candle.open - candle.close;
   return body > 0 && body / range >= 0.45 && candle.close <= candle.low + range * 0.4;
+}
+
+function isBearishManualScalpConfirm(candle: Candle): boolean {
+  const range = candle.high - candle.low;
+  if (range <= 0) return false;
+  const body = Math.abs(candle.close - candle.open);
+  const isMomentumSell =
+    body / range >= 0.45 && candle.close <= candle.low + range * 0.4;
+  const isPinbarSell = candle.close <= candle.low + range * 0.25;
+  return isMomentumSell || isPinbarSell;
+}
+
+function hasBullishSweep(candles: Candle[], lookback: number): boolean {
+  const last = candles.at(-1);
+  if (!last || candles.length < lookback + 2) return false;
+  const previous = candles.slice(-lookback - 1, -1);
+  const previousLow = Math.min(...previous.map((candle) => candle.low));
+  return last.low < previousLow && last.close > previousLow && last.close > last.open;
+}
+
+function hasBearishSweep(candles: Candle[], lookback: number): boolean {
+  const last = candles.at(-1);
+  if (!last || candles.length < lookback + 2) return false;
+  const previous = candles.slice(-lookback - 1, -1);
+  const previousHigh = Math.max(...previous.map((candle) => candle.high));
+  return last.high > previousHigh && last.close < previousHigh && last.close < last.open;
+}
+
+function isMomentumRecovering(
+  candles: Candle[],
+  direction: "BUY" | "SELL",
+): boolean {
+  if (candles.length < 4) return false;
+  const recent = candles.slice(-4);
+  const previousMove = recent[2]!.close - recent[0]!.open;
+  const latestMove = recent[3]!.close - recent[2]!.open;
+  return direction === "BUY"
+    ? latestMove > 0 || latestMove > previousMove
+    : latestMove < 0 || latestMove < previousMove;
+}
+
+function bollingerBands(
+  values: number[],
+  period: number,
+  multiplier: number,
+): { middle: number; upper: number; lower: number } | null {
+  const clean = values.filter(Number.isFinite);
+  if (clean.length < period) return null;
+  const recent = clean.slice(-period);
+  const middle = recent.reduce((sum, value) => sum + value, 0) / period;
+  const variance =
+    recent.reduce((sum, value) => sum + (value - middle) ** 2, 0) / period;
+  const stdev = Math.sqrt(variance);
+  return {
+    middle: round(middle),
+    upper: round(middle + multiplier * stdev),
+    lower: round(middle - multiplier * stdev),
+  };
 }
 
 function isBearishConfirmation(

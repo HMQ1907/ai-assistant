@@ -9,10 +9,12 @@ import {
   convictionScore,
   defaultRuleStrategyConfig,
   evaluateBalancedM5Signal,
+  evaluateManualReversalScalpSignal,
   evaluateRuleSignal,
   evaluateXauTrendPullbackSetup,
   evaluateXauTrendPullbackSignal,
   explainBalancedM5Rejection,
+  explainManualReversalScalpRejection,
   explainRuleSignalRejection,
   explainXauTrendPullbackRejection,
   type RuleSignal,
@@ -130,15 +132,17 @@ export async function runRuleSignalScan(input: RuleSignalScanInput) {
 
   if (!evaluation.signal) {
     // Kèo mạo hiểm tất định: thử nhánh scalp (vốn bị tắt khỏi luồng chính).
-    const scalpRisky = buildScalpRiskyCandidate({
-      autoStrategyMode: config.autoStrategyMode,
-      autoAllowScalp: config.autoAllowScalp,
-      lot: config.autoLotGood,
-      maxLossPercentPerTrade: config.maxLossPercentPerTrade,
-      snapshot,
-      symbol,
-      accountSizeUsd,
-    });
+    const scalpRisky = config.manualScalp
+      ? null
+      : buildScalpRiskyCandidate({
+          autoStrategyMode: config.autoStrategyMode,
+          autoAllowScalp: config.autoAllowScalp,
+          lot: config.autoLotGood,
+          maxLossPercentPerTrade: config.maxLossPercentPerTrade,
+          snapshot,
+          symbol,
+          accountSizeUsd,
+        });
     return saveAndReturn(
       historyService,
       payload,
@@ -325,7 +329,7 @@ export async function runRuleSignalScan(input: RuleSignalScanInput) {
 }
 
 export interface StrategyEvaluation {
-  mode: "xau_trend_pullback" | "balanced" | "strict";
+  mode: "manual_scalp" | "xau_trend_pullback" | "balanced" | "strict";
   signal: RuleSignal | null;
   entryTf: string;
   entryCandles: Candle[];
@@ -338,12 +342,14 @@ export interface StrategyEvaluation {
 // Export để unit-test được (hàm thuần: config con + snapshot -> kết quả).
 export function evaluateByStrategyMode(
   config: {
+    manualScalp?: boolean;
     autoStrategyMode: string;
     autoUseM15: boolean;
     autoAllowScalp: boolean;
   },
   snapshot: MarketSnapshot,
 ): StrategyEvaluation {
+  const m1 = snapshot.candles.M1 ?? [];
   const h1 = snapshot.candles.H1;
   const h4 = snapshot.candles.H4;
   const m15 = snapshot.candles.M15;
@@ -358,6 +364,25 @@ export function evaluateByStrategyMode(
       : String(config.autoStrategyMode).toLowerCase() === "balanced"
         ? "balanced"
         : "strict";
+
+  if (config.manualScalp) {
+    const signal = evaluateManualReversalScalpSignal(m1, m5, m15, h1);
+    return {
+      mode: "manual_scalp",
+      signal,
+      entryTf: "M1",
+      entryCandles: m1.length ? m1 : m5,
+      rejectReasons: signal
+        ? []
+        : [
+            explainManualReversalScalpRejection(m1, m5, m15, h1) ??
+              "manual scalp diagnostics không trả tín hiệu",
+          ],
+      pendingNote: signal
+        ? null
+        : "Manual scalp bắt đỉnh/đáy cần M15 quá đà + M1/M5 sweep xác nhận. Nếu chưa có, quét lại sau 1-5 phút.",
+    };
+  }
 
   if (mode === "xau_trend_pullback") {
     const signal = evaluateXauTrendPullbackSignal(m5, m15, h1, {

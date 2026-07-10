@@ -25,6 +25,7 @@ function flatCandles(count: number, price: number): Candle[] {
 }
 
 function snapshotWith(candles: {
+  M1?: Candle[];
   M5?: Candle[];
   M15?: Candle[];
   H1?: Candle[];
@@ -45,6 +46,7 @@ function snapshotWith(candles: {
     updatedAt: "2026-07-09T10:00:00Z",
     provider: "mt5",
     candles: {
+      M1: candles.M1 ?? [],
       M5: candles.M5 ?? [],
       M15: candles.M15 ?? [],
       H1: candles.H1 ?? [],
@@ -107,6 +109,23 @@ describe("evaluateByStrategyMode (luồng manual rule-signal)", () => {
       snapshot,
     );
     expect(result.mode).toBe("strict");
+  });
+
+  it("MANUAL_SCALP=true chuyển quét tay sang mode bắt đỉnh/đáy manual_scalp", () => {
+    const snapshot = snapshotWith({
+      M1: flatCandles(10, 4200),
+      M5: flatCandles(300, 4200),
+      M15: flatCandles(300, 4200),
+      H1: flatCandles(300, 4200),
+      H4: flatCandles(300, 4200),
+    });
+    const result = evaluateByStrategyMode(
+      { ...baseConfig, manualScalp: true },
+      snapshot,
+    );
+    expect(result.mode).toBe("manual_scalp");
+    expect(result.entryTf).toBe("M1");
+    expect(result.rejectReasons[0]).toMatch(/M1 candles/);
   });
 
   it("thị trường đi ngang (đủ nến) không phát tín hiệu bừa", () => {

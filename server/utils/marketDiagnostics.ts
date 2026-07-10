@@ -217,7 +217,14 @@ function flushRepeatedRun(
 }
 
 function isLowRangeButStandalone(range: number, timeframe: Timeframe): boolean {
-  const minimum = timeframe === "M5" ? 0.05 : timeframe === "M15" ? 0.1 : 0.25;
+  const minimum =
+    timeframe === "M1"
+      ? 0.02
+      : timeframe === "M5"
+        ? 0.05
+        : timeframe === "M15"
+          ? 0.1
+          : 0.25;
   return range < minimum;
 }
 

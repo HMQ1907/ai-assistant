@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AiTradeRecommendation } from "../../types/ai";
-import type { AnalysisPayload } from "../../types/trading";
+import type { AnalysisPayload, Timeframe } from "../../types/trading";
 import { TradeValidationService } from "../../server/services/TradeValidationService";
 
 function recommendation(
@@ -107,21 +107,24 @@ function payloadWithXauMarket(price = 4175, atrM15 = 11): AnalysisPayload {
           providerQuoteTime: "2026-06-09T00:00:00Z",
           quoteAgeSeconds: 1,
           quoteTimestampReliable: true,
-          recent_candles: { M5: [], M15: [], H1: [], H4: [] },
+          recent_candles: { M1: [], M5: [], M15: [], H1: [], H4: [] },
           candle_summary: {
+            M1: summary("M1", price),
             M5: summary("M5", price),
             M15: summary("M15", price),
             H1: summary("H1", price),
             H4: summary("H4", price),
           },
-          candle_patterns: { M5: [], M15: [], H1: [], H4: [] },
+          candle_patterns: { M1: [], M5: [], M15: [], H1: [], H4: [] },
           candle_diagnostics: {
+            M1: diagnostics(),
             M5: diagnostics(),
             M15: diagnostics(),
             H1: diagnostics(),
             H4: diagnostics(),
           },
           timeframe_quality: {
+            M1: timeframeQuality("M1"),
             M5: timeframeQuality("M5"),
             M15: timeframeQuality("M15"),
             H1: timeframeQuality("H1"),
@@ -148,6 +151,7 @@ function payloadWithXauMarket(price = 4175, atrM15 = 11): AnalysisPayload {
           volatilityScore: 50,
           timeframeAlignment: "mixed",
           timeframes: {
+            M1: timeframeIndicator("M1", price, 50, 2),
             M5: timeframeIndicator("M5", price, 50, 5),
             M15: timeframeIndicator("M15", price, 50, atrM15),
             H1: timeframeIndicator("H1", price, 50, atrM15 * 2),
@@ -344,7 +348,7 @@ describe("trade validation", () => {
   });
 });
 
-function summary(timeframe: "M5" | "M15" | "H1" | "H4", price: number) {
+function summary(timeframe: Timeframe, price: number) {
   return {
     timeframe,
     candleCount: 350,
@@ -375,7 +379,7 @@ function diagnostics() {
   };
 }
 
-function timeframeQuality(timeframe: "M5" | "M15" | "H1" | "H4") {
+function timeframeQuality(timeframe: Timeframe) {
   return {
     timeframe,
     quality: "HIGH" as const,
@@ -395,7 +399,7 @@ function timeframeQuality(timeframe: "M5" | "M15" | "H1" | "H4") {
 }
 
 function timeframeIndicator(
-  timeframe: "M5" | "M15" | "H1" | "H4",
+  timeframe: Timeframe,
   price: number,
   momentumScore: number,
   atr14: number,

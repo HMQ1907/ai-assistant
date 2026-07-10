@@ -1268,6 +1268,9 @@ export function riskPercentForSignal(
   signal: RuleSignal,
   defaultMaxLossPercent: number,
 ): number {
+  if (signal.strategyKind === "REVERSAL_SCALP") {
+    return Math.min(defaultMaxLossPercent, 10);
+  }
   return signal.strategyKind === "MOMENTUM_SCALP"
     ? Math.min(defaultMaxLossPercent, 15)
     : defaultMaxLossPercent;

@@ -71,6 +71,9 @@ export default defineNuxtConfig({
     // Nhánh scalp dự phòng trong mode xau_trend_pullback. Mặc định TẮT:
     // chỉ vào lệnh khi có setup trend-pullback sạch, không rơi xuống scalp chất lượng thấp.
     autoAllowScalp: process.env.AUTO_ALLOW_SCALP === "true",
+    // Manual-only: khi bấm "Quét setup Rule Engine", chuyển sang reversal scalp
+    // M1/M5/M15/H1 để tìm đỉnh/đáy ngắn hạn. Không ảnh hưởng auto-bot.
+    manualScalp: process.env.MANUAL_SCALP === "true",
   },
   typescript: {
     strict: true,

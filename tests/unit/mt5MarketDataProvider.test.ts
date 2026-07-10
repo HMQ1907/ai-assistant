@@ -33,6 +33,7 @@ describe("MT5 market data provider", () => {
     expect(snapshot?.bid).toBe(4218.665);
     expect(snapshot?.ask).toBe(4218.945);
     expect(snapshot?.spread).toBe(0.28);
+    expect(snapshot?.candles.M1).toHaveLength(350);
     expect(snapshot?.candles.M5).toHaveLength(350);
     expect(snapshot?.candles.M15).toHaveLength(350);
     expect(snapshot?.candles.H1).toHaveLength(350);
@@ -72,6 +73,7 @@ function bridgeSnapshot() {
     time_msc: 1_781_297_940_000,
     provider: "mt5-exness",
     candles: {
+      M1: candles(1),
       M5: candles(5),
       M15: candles(15),
       H1: candles(60),
