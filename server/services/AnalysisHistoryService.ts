@@ -65,6 +65,42 @@ interface AnalysisHistoryRow {
   auto_evaluated_at: string | null;
 }
 
+// Tóm tắt kết quả THẬT của các tín hiệu TRADE gần nhất (tracker tự chấm),
+// bơm ngược vào prompt để AI tự hiệu chỉnh confidence/win-probability
+// thay vì đoán mò lạc quan. Chỉ gồm outcome đã ngã ngũ.
+export interface RecentSignalPerformance {
+  resolved: number;
+  wins: number;
+  losses: number;
+  sweptLosses: number; // LOSS bị quét SL xong giá vẫn chạy tới TP (SL quá sát)
+  notFilled: number; // lệnh chờ hết hạn không khớp (entry đặt quá xa)
+  expired: number;
+  winRate: number;
+  recentSignals: Array<{
+    created_at: string;
+    direction: string;
+    order_type: string | null;
+    confidence: number;
+    outcome: string;
+    swept_then_reversed: boolean;
+  }>;
+}
+
+// Bộ lọc thống kê: theo ngày bắt đầu (VN) và theo nguồn phát tín hiệu.
+export type StatsSource = "all" | "rule" | "ai";
+export interface StatsFilter {
+  fromDate?: string | undefined; // YYYY-MM-DD, hiểu theo múi giờ VN
+  source?: StatsSource | undefined;
+}
+
+// Nhận diện record do RULE ENGINE phát (auto-bot hoặc quét manual mới) dựa vào
+// nhãn ai_response_raw — record AI thật chứa raw JSON của model, không bắt đầu
+// bằng các prefix này.
+function isRuleEngineRecord(record: { ai_response_raw: string }): boolean {
+  const raw = record.ai_response_raw.trimStart();
+  return raw.startsWith("auto-bot") || raw.startsWith("manual rule-engine");
+}
+
 export interface HistoryUpdateInput {
   result_status?: ResultStatus;
   actual_entry?: number | null;
@@ -251,12 +287,73 @@ export class AnalysisHistoryService {
       throw new Error(`Không cập nhật được kết quả tự động: ${error.message}`);
   }
 
-  async stats(): Promise<PerformanceStats> {
-    const { data, error } = await this.supabase.from(tableName).select("*");
+  // Kết quả thật của các tín hiệu TRADE gần nhất cho một symbol — dùng làm
+  // context tự hiệu chỉnh trong prompt phân tích. Lỗi ở đây KHÔNG được chặn
+  // phân tích chính (caller phải try/catch).
+  async recentSignalPerformance(
+    symbol: string,
+    limit = 30,
+  ): Promise<RecentSignalPerformance> {
+    const { data, error } = await this.supabase
+      .from(tableName)
+      .select(
+        "created_at,direction,order_type,confidence,auto_outcome,auto_swept_then_reversed",
+      )
+      .eq("decision", "TRADE")
+      .eq("symbol", symbol)
+      .in("auto_outcome", ["WIN", "LOSS", "NOT_FILLED", "EXPIRED"])
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    if (error)
+      throw new Error(`Không tải được hiệu suất tín hiệu gần đây: ${error.message}`);
+
+    const rows = (data ?? []) as Array<{
+      created_at: string;
+      direction: string;
+      order_type: string | null;
+      confidence: number;
+      auto_outcome: string;
+      auto_swept_then_reversed: boolean | null;
+    }>;
+    const wins = rows.filter((row) => row.auto_outcome === "WIN").length;
+    const losses = rows.filter((row) => row.auto_outcome === "LOSS").length;
+    return {
+      resolved: rows.length,
+      wins,
+      losses,
+      sweptLosses: rows.filter(
+        (row) => row.auto_outcome === "LOSS" && row.auto_swept_then_reversed === true,
+      ).length,
+      notFilled: rows.filter((row) => row.auto_outcome === "NOT_FILLED").length,
+      expired: rows.filter((row) => row.auto_outcome === "EXPIRED").length,
+      winRate: percentage(wins, wins + losses),
+      recentSignals: rows.slice(0, 10).map((row) => ({
+        created_at: row.created_at,
+        direction: row.direction,
+        order_type: row.order_type,
+        confidence: Number(row.confidence),
+        outcome: row.auto_outcome,
+        swept_then_reversed: row.auto_swept_then_reversed === true,
+      })),
+    };
+  }
+
+  async stats(filter?: StatsFilter): Promise<PerformanceStats> {
+    let query = this.supabase.from(tableName).select("*");
+    if (filter?.fromDate) {
+      // Ngày người dùng chọn hiểu theo múi giờ VN (ngày giao dịch bắt đầu 00:00 VN).
+      query = query.gte("created_at", `${filter.fromDate}T00:00:00+07:00`);
+    }
+    const { data, error } = await query;
     if (error)
       throw new Error(`Không tải được thống kê hiệu quả: ${error.message}`);
 
-    const records = (data ?? []).map(toRecord);
+    let records = (data ?? []).map(toRecord);
+    if (filter?.source === "rule") {
+      records = records.filter(isRuleEngineRecord);
+    } else if (filter?.source === "ai") {
+      records = records.filter((record) => !isRuleEngineRecord(record));
+    }
     const tradeRecords = records.filter((record) => record.decision === "TRADE");
     const allAnalyses = summarizeRecords(records);
     const tradeAnalyses = summarizeRecords(tradeRecords);

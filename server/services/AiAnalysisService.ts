@@ -20,6 +20,7 @@ import {
 import { buildOrderReviewPrompt } from "../prompts/order-review.prompt";
 import { buildTradingAnalysisPrompt } from "../prompts/trading-analysis.prompt";
 import { extractJsonObject } from "../utils/jsonParser";
+import type { RecentSignalPerformance } from "./AnalysisHistoryService";
 import { TradeValidationService } from "./TradeValidationService";
 
 const entryZoneSchema = z.preprocess(
@@ -257,13 +258,16 @@ export class AiAnalysisService {
     },
   ) {}
 
-  async analyze(payload: AnalysisPayload): Promise<AiAnalysisResult> {
+  async analyze(
+    payload: AnalysisPayload,
+    recentPerformance?: RecentSignalPerformance | null,
+  ): Promise<AiAnalysisResult> {
     if (!this.options.apiKey) {
       throw new Error("Chưa cấu hình Evolink API key.");
     }
 
     console.info("[ai:payload]", JSON.stringify(payload, null, 2));
-    const prompt = buildTradingAnalysisPrompt(payload);
+    const prompt = buildTradingAnalysisPrompt(payload, recentPerformance);
     const raw = await this.callWithRetry(prompt);
     const parsed = this.parseOrNoTrade(raw, payload);
     return { raw, parsed: this.validationService.validate(parsed, payload) };

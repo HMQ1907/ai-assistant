@@ -85,13 +85,20 @@ export function explainXauTrendPullbackSetupRejection(
   return buildXauTrendPullbackSetup(m15, h1, m5).reason;
 }
 
+export interface XauSignalOptions {
+  // Cho phép rơi xuống nhánh momentum-scalp khi không có setup trend-pullback sạch.
+  // Mặc định false: chỉ đánh setup chính, không đánh scalp chất lượng thấp.
+  allowScalp?: boolean;
+}
+
 export function evaluateXauTrendPullbackTriggerSignal(
   m5: Candle[],
   m15: Candle[],
   h1: Candle[],
   setup: XauTrendPullbackSetup,
+  options: XauSignalOptions = {},
 ): RuleSignal | null {
-  const signal = evaluateXauTrendPullbackSignal(m5, m15, h1);
+  const signal = evaluateXauTrendPullbackSignal(m5, m15, h1, options);
   return signal?.direction === setup.direction ? signal : null;
 }
 
@@ -218,21 +225,23 @@ export function evaluateXauTrendPullbackSignal(
   m5: Candle[],
   m15: Candle[],
   h1: Candle[],
+  options: XauSignalOptions = {},
 ): RuleSignal | null {
-  return (
-    buildXauTrendPullbackSignal(m5, m15, h1)?.signal ??
-    buildXauMomentumScalpSignal(m5, m15, h1)?.signal ??
-    null
-  );
+  const trendSignal = buildXauTrendPullbackSignal(m5, m15, h1)?.signal ?? null;
+  if (trendSignal) return trendSignal;
+  if (!options.allowScalp) return null;
+  return buildXauMomentumScalpSignal(m5, m15, h1)?.signal ?? null;
 }
 
 export function explainXauTrendPullbackRejection(
   m5: Candle[],
   m15: Candle[],
   h1: Candle[],
+  options: XauSignalOptions = {},
 ): string | null {
   const setup = buildXauTrendPullbackSignal(m5, m15, h1);
   if (setup.signal) return setup.reason;
+  if (!options.allowScalp) return setup.reason;
   const scalp = buildXauMomentumScalpSignal(m5, m15, h1);
   return scalp.signal ? scalp.reason : `${setup.reason}; scalp: ${scalp.reason}`;
 }
@@ -375,7 +384,9 @@ function buildXauTrendPullbackSignal(
         : structuralTp + 0.2 * m15Atr;
   const rawReward = direction === "BUY" ? wantedTp - entry : entry - wantedTp;
   const rawRr = rawReward / risk;
-  const minRr = setupMode === "EARLY_TREND" || kind === "BREAKOUT_CONTINUATION" ? 1.5 : 1.3;
+  // Một nguồn RR duy nhất: khớp với validateAdjustedAutoTrade (tradingRules.minRiskReward),
+  // tránh sinh tín hiệu RR 1.3-1.5 rồi bị lớp validate loại âm thầm + tốn 1 lần gọi AI.
+  const minRr = tradingRules.minRiskReward;
   if (!Number.isFinite(rawRr) || rawRr < minRr) {
     return {
       signal: null,

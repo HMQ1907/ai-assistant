@@ -2,10 +2,11 @@
   <main class="page">
     <div class="toolbar">
       <div class="heading">
-        <h1>AI XAUUSD Trading Assistant</h1>
+        <h1>XAUUSD Trading Assistant</h1>
         <p>
-          Phân tích XAUUSD bằng dữ liệu thị trường thật và tin tức thật. Công cụ
-          chỉ đưa gợi ý giao dịch thủ công, không đặt lệnh.
+          Tín hiệu chính do Rule Engine tất định phát ra (cùng engine với
+          auto-bot, kèm kiểm tra an toàn + AI veto). Công cụ chỉ đưa gợi ý,
+          không đặt lệnh — bạn tự quyết định trên MT5.
         </p>
       </div>
       <div class="action-panel">
@@ -21,9 +22,16 @@
         </label>
         <AnalyzeButton
           :loading="loading"
-          label="Hiển thị gợi ý XAUUSD"
-          @analyze="analyze"
+          label="Quét setup Rule Engine"
+          @analyze="scanRuleSignal"
         />
+        <button
+          class="button secondary-button"
+          :disabled="loading"
+          @click="analyze"
+        >
+          {{ loading && loadingSource === 'ai' ? "Đang phân tích..." : "Phân tích AI (tham khảo)" }}
+        </button>
       </div>
     </div>
 
@@ -34,9 +42,19 @@
 
     <div v-if="loading" class="card">
       <strong>
-        Đang lấy dữ liệu XAUUSD, tin tức và gửi AI phân tích...
+        {{
+          loadingSource === "rule"
+            ? "Đang lấy dữ liệu MT5 và quét setup bằng Rule Engine..."
+            : "Đang lấy dữ liệu XAUUSD, tin tức và gửi AI phân tích..."
+        }}
       </strong>
-      <p class="muted">Quá trình này có thể mất 60-120 giây.</p>
+      <p class="muted">
+        {{
+          loadingSource === "rule"
+            ? "Thường 5-30 giây (lâu hơn nếu có setup cần AI veto duyệt)."
+            : "Quá trình này có thể mất 60-120 giây."
+        }}
+      </p>
     </div>
 
     <RecommendationCard
@@ -61,6 +79,7 @@ import type { AiTradeRecommendation } from "~/types/ai";
 import type { AnalysisHistoryRecord } from "~/types/trading";
 
 const loading = ref(false);
+const loadingSource = ref<"rule" | "ai">("rule");
 const error = ref("");
 const result = ref<AiTradeRecommendation | null>(null);
 const history = ref<AnalysisHistoryRecord[]>([]);
@@ -72,8 +91,28 @@ const latestHistory = computed(() =>
   result.value ? (history.value[0] ?? null) : null,
 );
 
+// Luồng CHÍNH: tín hiệu tất định từ rule engine (cùng engine với auto-bot).
+async function scanRuleSignal(): Promise<void> {
+  await runScan("rule", "/api/rule-signal", {
+    accountSizeUsd: normalizeAccountSize(accountSizeUsd.value),
+  });
+}
+
+// Luồng phụ: AI phân tích tổng hợp (chỉ để tham khảo thêm góc nhìn/tin tức).
 async function analyze(): Promise<void> {
+  await runScan("ai", "/api/analyze", {
+    accountSizeUsd: normalizeAccountSize(accountSizeUsd.value),
+    symbol: "XAUUSD",
+  });
+}
+
+async function runScan(
+  source: "rule" | "ai",
+  endpoint: string,
+  body: Record<string, unknown>,
+): Promise<void> {
   loading.value = true;
+  loadingSource.value = source;
   error.value = "";
   hasAnalyzed.value = true;
   latestPrice.value = null;
@@ -81,13 +120,7 @@ async function analyze(): Promise<void> {
     const response = await $fetch<{
       result: AiTradeRecommendation;
       history: AnalysisHistoryRecord;
-    }>("/api/analyze", {
-      method: "POST",
-      body: {
-        accountSizeUsd: normalizeAccountSize(accountSizeUsd.value),
-        symbol: "XAUUSD",
-      },
-    });
+    }>(endpoint, { method: "POST", body });
     result.value = response.result;
     history.value = [
       response.history,
@@ -148,6 +181,12 @@ function replaceHistoryRecord(record: AnalysisHistoryRecord): void {
 }
 
 .capital-input {
+  width: 100%;
+}
+
+/* Nút AI tham khảo: mờ hơn nút chính để phân cấp rõ luồng chính/phụ */
+.secondary-button {
+  opacity: 0.75;
   width: 100%;
 }
 

@@ -372,6 +372,7 @@ function formatNumber(value: number | null | undefined): string {
 }
 function riskyOrderLabel(value: string): string {
   const labels: Record<string, string> = {
+    MARKET: "MARKET (vào ngay)",
     BUY_LIMIT: "BUY LIMIT",
     SELL_LIMIT: "SELL LIMIT",
     BUY_STOP: "BUY STOP",

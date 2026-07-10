@@ -1,7 +1,11 @@
 import type { AnalysisPayload } from "../../types/trading";
 import { tradingRules } from "../config/tradingRules";
+import type { RecentSignalPerformance } from "../services/AnalysisHistoryService";
 
-export function buildTradingAnalysisPrompt(payload: AnalysisPayload): string {
+export function buildTradingAnalysisPrompt(
+  payload: AnalysisPayload,
+  recentPerformance?: RecentSignalPerformance | null,
+): string {
   const symbol = payload.symbols[0]?.market.symbol ?? "XAUUSD";
   return [
     `You are an AI ${symbol} Trading Assistant for manual trading only. You never place orders.`,
@@ -17,6 +21,7 @@ export function buildTradingAnalysisPrompt(payload: AnalysisPayload): string {
     "NEVER tighten the stop_loss just to reach the minimum risk_reward. The stop_loss is defined only by where the setup is technically invalidated. If a structurally correct stop makes risk_reward fall below the minimum, return NO_TRADE instead of squeezing the stop.",
     "estimated_win_probability is the AI-estimated chance that the setup reaches TP before SL after the entry condition triggers. It must be realistic, never guaranteed, and must consider trend alignment, price action, volatility, spread, news risk and risk_reward. Do not output 100%.",
     `confidence (0-100) is the degree of certainty that the setup is technically valid and tradable right now: multi-timeframe trend alignment, entry/SL/TP coherence with market structure, price action quality, volatility, spread and news risk. It is NOT the same as estimated_win_probability (which is purely the TP-before-SL odds); confidence measures how clean and coherent the overall setup is. Calibrate it honestly: ${tradingRules.minConfidence} or above means the setup is clean and coherent enough to act on, below ${tradingRules.minConfidence} means there is meaningful ambiguity or conflicting signals. Do not inflate it, but do not be needlessly conservative when the setup is genuinely clean.`,
+    ...buildRecentPerformanceSection(symbol, recentPerformance),
     "The payload sends candle_summary for the full cleaned history and recent_candles for the latest closed price action only.",
     "Timeframe roles are fixed: H1 is the DECISION timeframe (setup, direction, entry, SL and TP are all derived from H1 structure). H4 is the BIAS/context filter. M15 is only for refining entry timing and confirmation. M5 is mostly noise; use it at most to confirm the exact moment of entry, never as a reason.",
     "Trade only WITH the H4 bias: take BUY only when H4 context is bullish or neutral-turning-up, take SELL only when H4 context is bearish or neutral-turning-down. Do not counter-trend the H4 bias.",
@@ -124,4 +129,33 @@ export function buildTradingAnalysisPrompt(payload: AnalysisPayload): string {
     `Normalized ${symbol} analysis payload:`,
     JSON.stringify(payload),
   ].join("\n\n");
+}
+
+// Vòng phản hồi tự hiệu chỉnh: cho AI thấy kết quả THẬT (tracker tự chấm bằng
+// đường đi giá) của chính các tín hiệu nó phát gần đây, kèm chỉ dẫn rút kinh
+// nghiệm theo từng failure mode đã ghi nhận được từ dữ liệu.
+function buildRecentPerformanceSection(
+  symbol: string,
+  performance?: RecentSignalPerformance | null,
+): string[] {
+  if (!performance || performance.resolved === 0) return [];
+  return [
+    [
+      `REAL TRACK RECORD of your own recent ${symbol} signals, measured automatically against actual price paths (not user opinion):`,
+      JSON.stringify({
+        resolved_signals: performance.resolved,
+        wins: performance.wins,
+        losses: performance.losses,
+        actual_win_rate_percent: performance.winRate,
+        losses_where_sl_was_swept_then_price_hit_tp: performance.sweptLosses,
+        pending_orders_never_filled: performance.notFilled,
+        expired_without_hitting_sl_or_tp: performance.expired,
+        latest_signals: performance.recentSignals,
+      }),
+      "Use this track record to CALIBRATE, not to copy: if actual_win_rate_percent is far below your typical estimated_win_probability, your recent estimates were overconfident — lower estimated_win_probability and confidence accordingly, and require a cleaner setup before TRADE.",
+      "If losses_where_sl_was_swept_then_price_hit_tp is high, the recurring mistake is a stop-loss too close to entry for this market's noise: place SL further beyond structure (well past the ATR minimum), or return NO_TRADE when the structurally correct stop would break minimum risk_reward.",
+      "If pending_orders_never_filled is high, recent pending entries were placed too far from price: prefer MARKET after a confirmed closed candle instead of distant limit levels.",
+      "If a very similar setup (same direction, similar zone) just resolved as LOSS in latest_signals, do not re-issue it unchanged — either the structure has genuinely reset, or it is NO_TRADE.",
+    ].join("\n"),
+  ];
 }

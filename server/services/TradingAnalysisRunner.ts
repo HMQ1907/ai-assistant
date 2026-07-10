@@ -55,7 +55,20 @@ export async function runTradingAnalysis(input: {
     input.accountSizeUsd ?? tradingRules.defaultAccountSizeUsd,
     config.maxLossPercentPerTrade,
   );
-  const aiResult = await aiService.analyze(payload);
+
+  // Track record thật của các tín hiệu gần đây -> AI tự hiệu chỉnh.
+  // Lỗi thống kê không được chặn phân tích chính.
+  let recentPerformance = null;
+  try {
+    recentPerformance = await historyService.recentSignalPerformance(input.symbol);
+  } catch (error) {
+    console.warn(
+      "[analysis] không tải được track record gần đây, phân tích tiếp không có nó:",
+      error instanceof Error ? error.message : error,
+    );
+  }
+
+  const aiResult = await aiService.analyze(payload, recentPerformance);
   const history = await historyService.create({
     requestPayload: payload,
     aiResponseRaw: aiResult.raw,

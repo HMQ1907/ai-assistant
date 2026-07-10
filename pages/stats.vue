@@ -5,11 +5,40 @@
         <h1>Thống kê hiệu quả XAUUSD</h1>
         <p>
           So sánh toàn bộ lượt phân tích với riêng các tín hiệu được hệ thống
-          cho phép giao dịch.
+          cho phép giao dịch. Lọc theo nguồn/ngày để tách giai đoạn tiền thật
+          khỏi dữ liệu cũ.
         </p>
       </div>
-      <button class="button" @click="loadStats">Tải lại</button>
+      <div class="filter-panel">
+        <label>
+          <span>Nguồn tín hiệu</span>
+          <select v-model="sourceFilter" class="input" @change="loadStats">
+            <option value="all">Tất cả</option>
+            <option value="rule">Rule Engine (bot + quét tay)</option>
+            <option value="ai">AI phân tích (cũ/tham khảo)</option>
+          </select>
+        </label>
+        <label>
+          <span>Từ ngày (giờ VN)</span>
+          <input
+            v-model="fromDate"
+            class="input"
+            type="date"
+            @change="loadStats"
+          />
+        </label>
+        <div class="filter-actions">
+          <button class="button" @click="setFromToday">Từ hôm nay</button>
+          <button class="button secondary" @click="clearFilters">
+            Toàn bộ lịch sử
+          </button>
+        </div>
+      </div>
     </div>
+
+    <p v-if="activeFilterLabel" class="muted filter-note">
+      Đang lọc: {{ activeFilterLabel }}
+    </p>
 
     <div v-if="error" class="card">
       <strong>Không tải được thống kê</strong>
@@ -18,7 +47,7 @@
 
     <StatsSection
       title="Các phân tích được phép TRADE"
-      description="Chỉ tính những lần AI và validation trả kết quả TRADE."
+      description="Chỉ tính những lần rule engine/AI và validation trả kết quả TRADE."
       :stats="stats.tradeAnalyses"
     />
 
@@ -101,6 +130,37 @@ const stats = ref<PerformanceStats>({
   execution: emptyExecution(),
 });
 const error = ref("");
+const sourceFilter = ref<"all" | "rule" | "ai">("all");
+const fromDate = ref("");
+
+const activeFilterLabel = computed(() => {
+  const parts: string[] = [];
+  if (sourceFilter.value === "rule") parts.push("chỉ tín hiệu Rule Engine");
+  if (sourceFilter.value === "ai") parts.push("chỉ AI phân tích");
+  if (fromDate.value) parts.push(`từ ${fromDate.value} (00:00 VN)`);
+  return parts.join(", ");
+});
+
+// Ngày hôm nay theo múi giờ VN (không dùng toISOString vì lệch UTC).
+function todayInVietnam(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: "Asia/Saigon",
+  }).format(new Date());
+}
+
+function setFromToday(): void {
+  fromDate.value = todayInVietnam();
+  void loadStats();
+}
+
+function clearFilters(): void {
+  sourceFilter.value = "all";
+  fromDate.value = "";
+  void loadStats();
+}
 
 const executionCards = computed(() => {
   const exec = stats.value.execution;
@@ -143,7 +203,10 @@ onMounted(loadStats);
 async function loadStats(): Promise<void> {
   error.value = "";
   try {
-    stats.value = await $fetch<PerformanceStats>("/api/stats");
+    const query: Record<string, string> = {};
+    if (sourceFilter.value !== "all") query.source = sourceFilter.value;
+    if (fromDate.value) query.from = fromDate.value;
+    stats.value = await $fetch<PerformanceStats>("/api/stats", { query });
   } catch (caught) {
     error.value =
       caught instanceof Error ? caught.message : "Lỗi không xác định";
@@ -152,6 +215,43 @@ async function loadStats(): Promise<void> {
 </script>
 
 <style scoped>
+.filter-panel {
+  align-items: end;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto auto auto;
+}
+
+.filter-panel label {
+  color: #9fb4cc;
+  display: grid;
+  font-size: 13px;
+  gap: 6px;
+}
+
+.filter-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.filter-actions .secondary {
+  opacity: 0.75;
+}
+
+.filter-note {
+  margin: 6px 0 0;
+}
+
+@media (max-width: 860px) {
+  .filter-panel {
+    grid-template-columns: 1fr 1fr;
+    width: 100%;
+  }
+  .filter-actions {
+    grid-column: 1 / -1;
+  }
+}
+
 .stats-section {
   margin-top: 18px;
 }

@@ -314,9 +314,10 @@ function formatActiveOrderAlert(order: ActiveMt5Order, review: AiOrderReview): s
 function signalSignature(recommendation: AiTradeRecommendation): string {
   const bucket = (value: number | null): string => {
     if (value === null || !Number.isFinite(value)) return "x";
-    // Vang gom theo $1, cap nho (EURUSD) theo 0.0010 — chenh nho hon coi la cung setup.
+    // Vang gom theo $5, cap nho (EURUSD) theo 0.0010 — chenh nho hon coi la cung setup.
+    // ($1 tung de lot 6 tin hieu gan-giong-nhau trong 3h ngay 23/06 vi entry troi nhe moi lan quet.)
     return Math.abs(value) >= 100
-      ? String(Math.round(value))
+      ? String(Math.round(value / 5) * 5)
       : String(Math.round(value * 1000) / 1000);
   };
   return [

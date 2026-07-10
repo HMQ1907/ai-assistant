@@ -171,7 +171,9 @@ export interface RiskyTradeScenario {
   enabled: boolean;
   title: string;
   direction: Exclude<TradeDirection, "NONE">;
-  order_type: "BUY_LIMIT" | "SELL_LIMIT" | "BUY_STOP" | "SELL_STOP";
+  // MARKET dùng cho kèo mạo hiểm từ rule engine (vào ngay theo giá hiện tại);
+  // AI flow vẫn chỉ trả LIMIT/STOP theo zod schema.
+  order_type: "MARKET" | "BUY_LIMIT" | "SELL_LIMIT" | "BUY_STOP" | "SELL_STOP";
   estimated_win_probability: number;
   entry_zone: {
     from: number;

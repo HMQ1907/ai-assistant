@@ -12,7 +12,9 @@ export const tradingRules = {
   maxPendingEntryAtrMultiplier: 1,
   // SL phai cach entry it nhat bay nhieu lan ATR(H1) — chong "bop SL qua sat de dat RR"
   // khien lenh de bi noise/quet thanh khoan cua vang danh bay.
-  minStopLossAtrMultiple: 0.8,
+  // 2026-07: nang 0.8 -> 1.0 vi du lieu outcome thuc te cho thay 5/7 lenh thua
+  // la SL bi quet xong gia van chay dung huong toi TP (auto_swept_then_reversed).
+  minStopLossAtrMultiple: 1.0,
   // Khung quyet dinh chinh (entry/SL/TP ve theo cau truc khung nay).
   decisionTimeframe: "H1",
   biasTimeframe: "H4",

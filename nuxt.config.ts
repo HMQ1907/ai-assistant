@@ -68,6 +68,9 @@ export default defineNuxtConfig({
     autoStrategyMode: process.env.AUTO_STRATEGY_MODE || "xau_trend_pullback",
     // Cho phép vào lệnh trên M15 (trong trend H1, bias H4) để có nhiều lệnh hơn.
     autoUseM15: process.env.AUTO_USE_M15 !== "false",
+    // Nhánh scalp dự phòng trong mode xau_trend_pullback. Mặc định TẮT:
+    // chỉ vào lệnh khi có setup trend-pullback sạch, không rơi xuống scalp chất lượng thấp.
+    autoAllowScalp: process.env.AUTO_ALLOW_SCALP === "true",
   },
   typescript: {
     strict: true,

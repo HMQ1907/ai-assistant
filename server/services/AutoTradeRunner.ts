@@ -255,7 +255,9 @@ export class AutoTradeRunner {
         const latestM5 = m5.at(-1)?.time ?? "";
         if (latestM5 && latestM5 !== this.lastEvaluatedM5) {
           this.lastEvaluatedM5 = latestM5;
-          const nextSignal = evaluateXauTrendPullbackSignal(m5, m15, h1);
+          const nextSignal = evaluateXauTrendPullbackSignal(m5, m15, h1, {
+            allowScalp: config.autoAllowScalp,
+          });
           if (nextSignal) {
             this.pendingSetup = null;
             signal = nextSignal;
@@ -278,7 +280,9 @@ export class AutoTradeRunner {
               setup
                 ? `pending ${setup.direction} setup; waiting for M5 engulfing/pin trigger`
                 :
-              explainXauTrendPullbackRejection(m5, m15, h1) ??
+              explainXauTrendPullbackRejection(m5, m15, h1, {
+                allowScalp: config.autoAllowScalp,
+              }) ??
               "XAU trend-pullback diagnostics returned no signal";
           }
         }
@@ -621,6 +625,10 @@ export class AutoTradeRunner {
       this.pendingSetup = null;
       return;
     }
+    if (!isInsideTradeScannerWindow()) {
+      console.info("[auto-bot] pending setup on hold: outside trade window, will not trigger new entry.");
+      return;
+    }
     if (this.tradesToday >= config.autoMaxTradesPerDay) {
       console.info("[auto-bot] pending setup cancelled: max trades/day reached.");
       this.pendingSetup = null;
@@ -676,6 +684,7 @@ export class AutoTradeRunner {
       m15,
       h1,
       this.pendingSetup.setup,
+      { allowScalp: config.autoAllowScalp },
     );
     if (!signal) {
       console.info(
@@ -1141,7 +1150,7 @@ export class AutoTradeRunner {
   }
 }
 
-function emptyNews(): NewsSnapshot {
+export function emptyNews(): NewsSnapshot {
   return {
     items: [],
     upcomingEvents: [],
@@ -1182,7 +1191,7 @@ function datePartsInTimeZone(timeZone: string): {
   };
 }
 
-interface AdjustedAutoTrade {
+export interface AdjustedAutoTrade {
   order_type: "MARKET";
   lot: number;
   entry: number;
@@ -1192,12 +1201,12 @@ interface AdjustedAutoTrade {
   reason: string;
 }
 
-function uniqueLots(lots: number[]): number[] {
+export function uniqueLots(lots: number[]): number[] {
   return [...new Set(lots.filter((lot) => Number.isFinite(lot) && lot > 0))]
     .sort((left, right) => left - right);
 }
 
-function validateAdjustedAutoTrade(
+export function validateAdjustedAutoTrade(
   direction: RuleSignal["direction"],
   trade: AdjustedAutoTrade,
   minRiskReward: number,
@@ -1241,7 +1250,7 @@ function validateAdjustedAutoTrade(
   return null;
 }
 
-function rewardRisk(
+export function rewardRisk(
   direction: RuleSignal["direction"],
   entry: number,
   stopLoss: number,
@@ -1255,7 +1264,7 @@ function rewardRisk(
   return reward / risk;
 }
 
-function riskPercentForSignal(
+export function riskPercentForSignal(
   signal: RuleSignal,
   defaultMaxLossPercent: number,
 ): number {
@@ -1264,15 +1273,16 @@ function riskPercentForSignal(
     : defaultMaxLossPercent;
 }
 
-function highSpreadBlockReason(snapshot: MarketSnapshot): string | null {
+export function highSpreadBlockReason(snapshot: MarketSnapshot): string | null {
   if (snapshot.spread === null || !Number.isFinite(snapshot.spread)) return null;
-  const maxSpread = snapshot.symbol === "XAUUSD" ? 1.5 : 0.0003;
+  // Vàng M5: spread > 0.5 USD ăn mòn quá nhiều expectancy của lệnh scalp/pullback.
+  const maxSpread = snapshot.symbol === "XAUUSD" ? 0.5 : 0.0003;
   return snapshot.spread > maxSpread
     ? `SKIP: spread ${snapshot.spread} exceeds max allowed ${maxSpread}`
     : null;
 }
 
-interface AutoRiskCheckInput {
+export interface AutoRiskCheckInput {
   symbol: SymbolCode;
   entry: number;
   stopLoss: number;
@@ -1281,13 +1291,13 @@ interface AutoRiskCheckInput {
   maxLossPercentPerTrade: number;
 }
 
-interface AutoRiskCheck {
+export interface AutoRiskCheck {
   allowed: boolean;
   estimatedLossUsd: number;
   maxLossUsd: number;
 }
 
-function checkAutoRisk(input: AutoRiskCheckInput): AutoRiskCheck {
+export function checkAutoRisk(input: AutoRiskCheckInput): AutoRiskCheck {
   const estimatedLossUsd = estimateLossUsd(input);
   const maxLossUsd = Number(
     (input.accountSizeUsd * (input.maxLossPercentPerTrade / 100)).toFixed(2),
@@ -1515,7 +1525,7 @@ function hasTimeframeVolatilitySpike(
   return averageRange > 0 && latestRange >= averageRange * 2.2;
 }
 
-function buildAutoRecommendation(
+export function buildAutoRecommendation(
   signal: RuleSignal,
   lot: number,
   conviction: number,
