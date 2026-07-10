@@ -171,6 +171,22 @@
       <p class="risky-warning">{{ result.risky_trade.warning }}</p>
     </section>
 
+    <section
+      v-else-if="result.decision === 'NO_TRADE'"
+      class="card no-risky-card"
+    >
+      <h3>Không có trade mạo hiểm hợp lệ</h3>
+      <p class="muted">
+        Rule Engine không tìm được setup chính đủ điều kiện, và nhánh phụ mạo hiểm
+        cũng chưa có entry/SL/TP/RR/risk rõ ràng để cân nhắc. Hệ thống không bịa
+        thêm lệnh chỉ để có tín hiệu.
+      </p>
+      <ul class="list">
+        <li>Scalp dự phòng chưa đạt điều kiện tối thiểu, hoặc đang bị chặn bởi RR/spread/risk-cap.</li>
+        <li>Nếu thị trường đổi cấu trúc hoặc có nến M5/M15 mới rõ hơn, hãy quét lại.</li>
+      </ul>
+    </section>
+
     <div v-if="history" class="card">
       <h3>Dữ liệu gửi AI</h3>
       <div class="kv">
@@ -487,6 +503,18 @@ function formatUsd(value: number | null | undefined): string {
   color: #f8d48a;
   margin: 12px 0 0;
   padding-left: 10px;
+}
+
+.no-risky-card {
+  background:
+    linear-gradient(180deg, rgba(148, 163, 184, 0.07), transparent 38%),
+    var(--panel);
+  border-color: rgba(148, 163, 184, 0.24);
+}
+
+.no-risky-card h3 {
+  color: #cbd5e1;
+  margin-top: 0;
 }
 
 @media (max-width: 800px) {

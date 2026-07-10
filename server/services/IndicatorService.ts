@@ -85,7 +85,7 @@ export class IndicatorService {
       structureTrend: structureTrend(candles),
       momentumScore: this.scoreMomentum(candles, atr14),
       volatilityScore: this.scoreVolatility(atr14, current),
-      marketStructure: supportResistance(candles),
+      marketStructure: supportResistance(candles, fallbackPrice),
     };
   }
 

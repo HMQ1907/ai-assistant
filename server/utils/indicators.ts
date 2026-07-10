@@ -167,7 +167,10 @@ export function adx(candles: Candle[], period = 14): number | null {
   return round(adxValue, 2);
 }
 
-export function supportResistance(candles: Candle[]): SupportResistanceSnapshot {
+export function supportResistance(
+  candles: Candle[],
+  currentPrice?: number,
+): SupportResistanceSnapshot {
   const recent = candles.slice(-80);
   if (recent.length === 0) {
     return {
@@ -180,11 +183,20 @@ export function supportResistance(candles: Candle[]): SupportResistanceSnapshot 
     };
   }
 
-  const current = recent.at(-1)?.close ?? 0;
+  const current =
+    currentPrice !== undefined && Number.isFinite(currentPrice) && currentPrice > 0
+      ? currentPrice
+      : recent.at(-1)?.close ?? 0;
   const atrValue = atr(recent, 14);
   const baseClusterSize =
     atrValue === null ? current * 0.00035 : atrValue * 0.25;
   const clusterSize = Math.min(Math.max(baseClusterSize, 0.5), 12);
+  // Bỏ qua các micro-level quá sát giá hiện tại. Với XAUUSD, các mức chỉ cách
+  // vài chục cent thường là nhiễu ngắn hạn/spread zone, không đáng gọi là
+  // hỗ trợ/kháng cự để ra quyết định trade. Dùng ATR để ngưỡng tự co giãn
+  // theo biến động thị trường.
+  const minDistanceFromCurrent =
+    atrValue === null ? Math.max(current * 0.0005, clusterSize) : atrValue * 0.25;
   const swingWindow = recent.slice(-12);
   const swingHigh = Math.max(...swingWindow.map((candle) => candle.high));
   const swingLow = Math.min(...swingWindow.map((candle) => candle.low));
@@ -193,12 +205,14 @@ export function supportResistance(candles: Candle[]): SupportResistanceSnapshot 
     clusterSize,
     "support",
     current,
+    minDistanceFromCurrent,
   );
   const resistanceLevels = clusterLevels(
     recent.map((candle) => candle.high),
     clusterSize,
     "resistance",
     current,
+    minDistanceFromCurrent,
   );
 
   return {
@@ -272,6 +286,7 @@ function clusterLevels(
   clusterSize: number,
   mode: "support" | "resistance",
   current: number,
+  minDistanceFromCurrent = 0,
 ): SupportResistanceLevel[] {
   const sorted = prices.filter(Number.isFinite).sort((a, b) => a - b);
   const clusters: number[][] = [];
@@ -296,6 +311,7 @@ function clusterLevels(
     .filter((level) =>
       mode === "support" ? level.price <= current : level.price >= current,
     )
+    .filter((level) => Math.abs(level.price - current) >= minDistanceFromCurrent)
     .sort((left, right) =>
       mode === "support" ? right.price - left.price : left.price - right.price,
     )
