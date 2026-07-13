@@ -318,12 +318,14 @@ function buildManualReversalScalpSignal(
     };
   }
 
-  const buyExtreme =
-    m15Rsi <= 34 &&
-    (lastM15.low <= m15Bands.lower || lastM15.close <= m15Bands.lower + 0.15 * m15Atr);
-  const sellExtreme =
-    m15Rsi >= 66 &&
-    (lastM15.high >= m15Bands.upper || lastM15.close >= m15Bands.upper - 0.15 * m15Atr);
+  const buyBandTouch =
+    lastM15.low <= m15Bands.lower || lastM15.close <= m15Bands.lower + 0.15 * m15Atr;
+  const sellBandTouch =
+    lastM15.high >= m15Bands.upper || lastM15.close >= m15Bands.upper - 0.15 * m15Atr;
+  // Auto/manual scalp được nới vừa phải: M15 RSI cực trị là đủ để xét bắt đỉnh/đáy.
+  // Bollinger band touch không còn là điều kiện bắt buộc, chỉ được ghi nhận như điểm cộng.
+  const buyExtreme = m15Rsi <= 34;
+  const sellExtreme = m15Rsi >= 66;
   const buyTrigger =
     (hasBullishSweep(m1, 12) || hasBullishSweep(m5, 8)) &&
     isBullishManualScalpConfirm(lastM1) &&
@@ -341,7 +343,7 @@ function buildManualReversalScalpSignal(
     return {
       signal: null,
       reason:
-        `manual scalp blocked: need M15 extreme + M1/M5 sweep + M1 momentum/pinbar trigger ` +
+        `manual scalp blocked: need M15 RSI extreme + M1/M5 sweep + M1 momentum/pinbar trigger ` +
         `(M15 RSI ${m15Rsi}, M5 RSI ${m5Rsi}, H1 ADX ${h1Adx})`,
     };
   }
@@ -384,7 +386,8 @@ function buildManualReversalScalpSignal(
       stopLoss: round(stopLoss),
       takeProfit: round(takeProfit),
       reason:
-        `MANUAL REVERSAL_SCALP: M15 extreme RSI ${m15Rsi} + Bollinger band touch, ` +
+        `MANUAL REVERSAL_SCALP: M15 extreme RSI ${m15Rsi} ` +
+        `(${direction === "BUY" ? (buyBandTouch ? "near lower band" : "no lower band touch") : (sellBandTouch ? "near upper band" : "no upper band touch")}), ` +
         `M1/M5 liquidity sweep trigger, M5 RSI ${m5Rsi}, H1 ADX ${h1Adx}, TP 1.5R`,
       strategyKind: "REVERSAL_SCALP",
     },
