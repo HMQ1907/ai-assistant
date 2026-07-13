@@ -75,6 +75,8 @@ export default defineNuxtConfig({
     // chế độ reversal scalp tự động mỗi 1 phút (M1/M5/M15/H1), lot cố định 0.01,
     // không qua AI veto. Dùng cùng engine với MANUAL_SCALP nhưng đặt lệnh tự động.
     autoTradeScalp: process.env.AUTO_TRADE_SCALP === "true",
+    autoScalpTpR: Number(process.env.AUTO_SCALP_TP_R || 1.5),
+    autoScalpFrequency: process.env.AUTO_SCALP_FREQUENCY || "normal",
     // Manual-only: khi bấm "Quét setup Rule Engine", chuyển sang reversal scalp
     // M1/M5/M15/H1 để tìm đỉnh/đáy ngắn hạn. Không ảnh hưởng auto-bot.
     manualScalp: process.env.MANUAL_SCALP === "true",

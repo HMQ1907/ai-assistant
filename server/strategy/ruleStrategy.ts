@@ -61,6 +61,11 @@ export interface RuleSignal {
   strategyKind?: "SETUP" | "MOMENTUM_SCALP" | "REVERSAL_SCALP";
 }
 
+export interface ManualReversalScalpOptions {
+  takeProfitR?: number;
+  frequency?: "normal" | "high";
+}
+
 export interface XauTrendPullbackSetup {
   direction: "BUY" | "SELL";
   m15CandleTime: string;
@@ -251,8 +256,9 @@ export function evaluateManualReversalScalpSignal(
   m5: Candle[],
   m15: Candle[],
   h1: Candle[],
+  options: ManualReversalScalpOptions = {},
 ): RuleSignal | null {
-  return buildManualReversalScalpSignal(m1, m5, m15, h1).signal;
+  return buildManualReversalScalpSignal(m1, m5, m15, h1, options).signal;
 }
 
 export function explainManualReversalScalpRejection(
@@ -260,8 +266,9 @@ export function explainManualReversalScalpRejection(
   m5: Candle[],
   m15: Candle[],
   h1: Candle[],
+  options: ManualReversalScalpOptions = {},
 ): string | null {
-  return buildManualReversalScalpSignal(m1, m5, m15, h1).reason;
+  return buildManualReversalScalpSignal(m1, m5, m15, h1, options).reason;
 }
 
 function buildManualReversalScalpSignal(
@@ -269,6 +276,7 @@ function buildManualReversalScalpSignal(
   m5: Candle[],
   m15: Candle[],
   h1: Candle[],
+  options: ManualReversalScalpOptions = {},
 ): { signal: RuleSignal | null; reason: string } {
   if (m1.length < 60) return { signal: null, reason: `M1 candles ${m1.length} < 60` };
   if (m5.length < 80) return { signal: null, reason: `M5 candles ${m5.length} < 80` };
@@ -311,7 +319,9 @@ function buildManualReversalScalpSignal(
     return { signal: null, reason: "manual scalp indicator/candle data unavailable" };
   }
 
-  if (h1Adx > 38) {
+  const highFrequency = options.frequency === "high";
+  const h1AdxMax = highFrequency ? 45 : 38;
+  if (h1Adx > h1AdxMax) {
     return {
       signal: null,
       reason: `manual scalp blocked: H1 ADX ${h1Adx} > 38, trend quá mạnh để bắt đỉnh/đáy`,
@@ -324,17 +334,23 @@ function buildManualReversalScalpSignal(
     lastM15.high >= m15Bands.upper || lastM15.close >= m15Bands.upper - 0.15 * m15Atr;
   // Auto/manual scalp được nới vừa phải: M15 RSI cực trị là đủ để xét bắt đỉnh/đáy.
   // Bollinger band touch không còn là điều kiện bắt buộc, chỉ được ghi nhận như điểm cộng.
-  const buyExtreme = m15Rsi <= 34;
-  const sellExtreme = m15Rsi >= 66;
+  // Aggressive scalp: RSI khong can cuc tri qua sau nua, nhung van bat buoc
+  // co sweep + M1 trigger + M5 momentum recovering de tranh vao bua.
+  const buyExtreme = highFrequency ? m15Rsi <= 55 : m15Rsi <= 40;
+  const sellExtreme = highFrequency ? m15Rsi >= 45 : m15Rsi >= 60;
+  const m1SweepLookback = highFrequency ? 6 : 12;
+  const m5SweepLookback = highFrequency ? 4 : 8;
+  const buyM5RsiMax = highFrequency ? 60 : 50;
+  const sellM5RsiMin = highFrequency ? 40 : 50;
   const buyTrigger =
-    (hasBullishSweep(m1, 12) || hasBullishSweep(m5, 8)) &&
+    (hasBullishSweep(m1, m1SweepLookback) || hasBullishSweep(m5, m5SweepLookback)) &&
     isBullishManualScalpConfirm(lastM1) &&
-    m5Rsi <= 45 &&
+    m5Rsi <= buyM5RsiMax &&
     isMomentumRecovering(m5, "BUY");
   const sellTrigger =
-    (hasBearishSweep(m1, 12) || hasBearishSweep(m5, 8)) &&
+    (hasBearishSweep(m1, m1SweepLookback) || hasBearishSweep(m5, m5SweepLookback)) &&
     isBearishManualScalpConfirm(lastM1) &&
-    m5Rsi >= 55 &&
+    m5Rsi >= sellM5RsiMin &&
     isMomentumRecovering(m5, "SELL");
 
   const direction: "BUY" | "SELL" | null =
@@ -343,7 +359,7 @@ function buildManualReversalScalpSignal(
     return {
       signal: null,
       reason:
-        `manual scalp blocked: need M15 RSI extreme + M1/M5 sweep + M1 momentum/pinbar trigger ` +
+        `manual scalp blocked: need ${highFrequency ? "high-frequency" : "aggressive"} M15 RSI zone + M1/M5 sweep + M1 momentum/pinbar trigger ` +
         `(M15 RSI ${m15Rsi}, M5 RSI ${m5Rsi}, H1 ADX ${h1Adx})`,
     };
   }
@@ -378,7 +394,11 @@ function buildManualReversalScalpSignal(
     return { signal: null, reason: `manual scalp ${direction} blocked: invalid SL/risk` };
   }
 
-  const takeProfit = direction === "BUY" ? entry + 1.5 * risk : entry - 1.5 * risk;
+  const takeProfitR =
+    Number.isFinite(options.takeProfitR) && Number(options.takeProfitR) > 0
+      ? Number(options.takeProfitR)
+      : 1.5;
+  const takeProfit = direction === "BUY" ? entry + takeProfitR * risk : entry - takeProfitR * risk;
   return {
     signal: {
       direction,
@@ -386,9 +406,9 @@ function buildManualReversalScalpSignal(
       stopLoss: round(stopLoss),
       takeProfit: round(takeProfit),
       reason:
-        `MANUAL REVERSAL_SCALP: M15 extreme RSI ${m15Rsi} ` +
+        `MANUAL ${highFrequency ? "HIGH_FREQUENCY" : "AGGRESSIVE"}_REVERSAL_SCALP: M15 RSI ${m15Rsi} ` +
         `(${direction === "BUY" ? (buyBandTouch ? "near lower band" : "no lower band touch") : (sellBandTouch ? "near upper band" : "no upper band touch")}), ` +
-        `M1/M5 liquidity sweep trigger, M5 RSI ${m5Rsi}, H1 ADX ${h1Adx}, TP 1.5R`,
+        `M1/M5 liquidity sweep trigger, M5 RSI ${m5Rsi}, H1 ADX ${h1Adx}, TP ${takeProfitR}R`,
       strategyKind: "REVERSAL_SCALP",
     },
     reason: "manual reversal scalp signal found",

@@ -72,7 +72,7 @@ export class AutoTradeRunner {
   /**
    * Scalp auto-bot: chạy mỗi 1 phút khi AUTO_TRADE=true + AUTO_TRADE_SCALP=true.
    * Dùng cùng engine với MANUAL_SCALP (evaluateManualReversalScalpSignal).
-   * Lot cố định 0.01, không qua AI veto.
+   * Lot lấy từ AUTO_LOT_GOOD, không qua AI veto.
    */
   async runScalpOnce(): Promise<void> {
     if (this.runningScalp) return;
@@ -165,6 +165,12 @@ export class AutoTradeRunner {
         console.info(`[scalp-bot] skipped: ${timeBlockReason}`);
         return;
       }
+      if (!isInsideTradeScannerWindow()) {
+        console.info(
+          `[scalp-bot] skipped: outside trade window ${config.tradeScannerWindows || `${config.tradeScannerStartHour}:00-${config.tradeScannerEndHour}:00`} ${config.tradeScannerTimezone}.`,
+        );
+        return;
+      }
 
       // Fetch market data
       const marketService = new MarketDataService({
@@ -196,10 +202,16 @@ export class AutoTradeRunner {
       }
 
       // Evaluate scalp signal
-      const signal = evaluateManualReversalScalpSignal(m1, m5, m15, h1);
+      const signal = evaluateManualReversalScalpSignal(m1, m5, m15, h1, {
+        takeProfitR: config.autoScalpTpR,
+        frequency: config.autoScalpFrequency === "high" ? "high" : "normal",
+      });
       if (!signal) {
         const reason =
-          explainManualReversalScalpRejection(m1, m5, m15, h1) ??
+          explainManualReversalScalpRejection(m1, m5, m15, h1, {
+            takeProfitR: config.autoScalpTpR,
+            frequency: config.autoScalpFrequency === "high" ? "high" : "normal",
+          }) ??
           "scalp diagnostics returned no reason";
         console.info(`[scalp-bot] no scalp signal for ${activeSymbolLabel}: ${reason}`);
         // Vẫn mark nến này đã xét để tránh spam log
@@ -221,8 +233,8 @@ export class AutoTradeRunner {
         return;
       }
 
-      // Lot cố định 0.01
-      const lot = 0.01;
+      // Auto-scalp dùng lot cấu hình để đổi symbol/risk linh hoạt hơn.
+      const lot = config.autoLotGood;
 
       // Kiểm tra risk
       const riskCheck = checkAutoRisk({

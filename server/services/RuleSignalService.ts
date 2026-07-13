@@ -346,6 +346,8 @@ export function evaluateByStrategyMode(
     autoStrategyMode: string;
     autoUseM15: boolean;
     autoAllowScalp: boolean;
+    autoScalpTpR?: number;
+    autoScalpFrequency?: string;
   },
   snapshot: MarketSnapshot,
 ): StrategyEvaluation {
@@ -366,7 +368,10 @@ export function evaluateByStrategyMode(
         : "strict";
 
   if (config.manualScalp) {
-    const signal = evaluateManualReversalScalpSignal(m1, m5, m15, h1);
+    const signal = evaluateManualReversalScalpSignal(m1, m5, m15, h1, {
+      takeProfitR: config.autoScalpTpR ?? 1.5,
+      frequency: config.autoScalpFrequency === "high" ? "high" : "normal",
+    });
     return {
       mode: "manual_scalp",
       signal,
@@ -375,7 +380,10 @@ export function evaluateByStrategyMode(
       rejectReasons: signal
         ? []
         : [
-            explainManualReversalScalpRejection(m1, m5, m15, h1) ??
+            explainManualReversalScalpRejection(m1, m5, m15, h1, {
+              takeProfitR: config.autoScalpTpR ?? 1.5,
+              frequency: config.autoScalpFrequency === "high" ? "high" : "normal",
+            }) ??
               "manual scalp diagnostics không trả tín hiệu",
           ],
       pendingNote: signal

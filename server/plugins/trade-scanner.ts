@@ -104,7 +104,7 @@ export default defineNitroPlugin((nitroApp) => {
 
   if (scalpMode) {
     console.info(
-      `[trade-loop] AUTO-SCALP enabled (Reversal Scalp M1/M5/M15/H1, no AI veto) - entries in ${config.tradeScannerWindows || `${config.tradeScannerStartHour}:00-${config.tradeScannerEndHour}:00`} ${tz}, lot 0.01 fixed`,
+      `[trade-loop] AUTO-SCALP enabled (Reversal Scalp M1/M5/M15/H1, no AI veto) - entries in ${config.tradeScannerWindows || `${config.tradeScannerStartHour}:00-${config.tradeScannerEndHour}:00`} ${tz}, lot ${config.autoLotGood}, TP ${config.autoScalpTpR}R`,
     );
   } else if (autoMode) {
     console.info(
