@@ -81,7 +81,6 @@ export class AutoTradeRunner {
       const config = useRuntimeConfig();
       const symbol = symbolCodeFromMt5Symbol(config.mt5Symbol);
       const activeSymbolLabel = symbolLabel(config.mt5Symbol);
-      console.info(`[scalp-bot] scanning ${activeSymbolLabel}`);
 
       const orderService = new Mt5OrderService({
         bridgeUrl: config.mt5BridgeUrl,
@@ -143,6 +142,12 @@ export class AutoTradeRunner {
         }
       }
 
+      // Outside the entry session, keep the one-minute tick only for active
+      // order management above. Do not fetch candles, calendar, or evaluate a setup.
+      if (!isInsideTradeScannerWindow()) {
+        return;
+      }
+
       // Daily limits block only new entries. Existing orders above are still
       // managed every minute even when their floating loss crosses the cap.
       if (dailyLossReached) {
@@ -198,12 +203,7 @@ export class AutoTradeRunner {
         console.info(`[scalp-bot] skipped: ${timeBlockReason}`);
         return;
       }
-      if (!isInsideTradeScannerWindow()) {
-        console.info(
-          `[scalp-bot] skipped: outside trade window ${config.tradeScannerWindows || `${config.tradeScannerStartHour}:00-${config.tradeScannerEndHour}:00`} ${config.tradeScannerTimezone}.`,
-        );
-        return;
-      }
+      console.info(`[scalp-bot] scanning ${activeSymbolLabel}`);
 
       // Fetch market data
       const marketService = new MarketDataService({
