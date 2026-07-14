@@ -60,6 +60,7 @@ export default defineNuxtConfig({
     autoVeryGoodMinConviction: Number(process.env.AUTO_VERYGOOD_MIN_CONVICTION || 2),
     autoMaxTradesPerDay: Number(process.env.AUTO_MAX_TRADES_PER_DAY || 10),
     autoMaxDailyLossPercent: Number(process.env.AUTO_MAX_DAILY_LOSS_PERCENT || 25),
+    autoMaxDailyLossUsd: Number(process.env.AUTO_MAX_DAILY_LOSS_USD || 0),
     autoMaxHoldHours: Number(process.env.AUTO_MAX_HOLD_HOURS || 72),
     autoCooldownMinutes: Number(process.env.AUTO_COOLDOWN_MINUTES || 15),
     autoCooldownM15Candles: Number(process.env.AUTO_COOLDOWN_M15_CANDLES || 3),
@@ -77,6 +78,17 @@ export default defineNuxtConfig({
     autoTradeScalp: process.env.AUTO_TRADE_SCALP === "true",
     autoScalpTpR: Number(process.env.AUTO_SCALP_TP_R || 1.5),
     autoScalpFrequency: process.env.AUTO_SCALP_FREQUENCY || "normal",
+    autoScalpMaxHoldMinutes: Number(process.env.AUTO_SCALP_MAX_HOLD_MINUTES || 30),
+    autoScalpMaxOpenTrades: Number(process.env.AUTO_SCALP_MAX_OPEN_TRADES || 2),
+    autoNewsBlackoutEnabled: process.env.AUTO_NEWS_BLACKOUT_ENABLED === "true",
+    autoNewsBlackoutMinutes: Number(process.env.AUTO_NEWS_BLACKOUT_MINUTES || 60),
+    autoNewsBlackoutEvents: process.env.AUTO_NEWS_BLACKOUT_EVENTS || "",
+    autoNewsCalendarUrl:
+      process.env.AUTO_NEWS_CALENDAR_URL ||
+      "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
+    autoNewsCalendarCurrencies: process.env.AUTO_NEWS_CALENDAR_CURRENCIES || "USD,EUR",
+    autoNewsCalendarImpacts: process.env.AUTO_NEWS_CALENDAR_IMPACTS || "High",
+    autoNewsCalendarCacheMinutes: Number(process.env.AUTO_NEWS_CALENDAR_CACHE_MINUTES || 30),
     // Manual-only: khi bấm "Quét setup Rule Engine", chuyển sang reversal scalp
     // M1/M5/M15/H1 để tìm đỉnh/đáy ngắn hạn. Không ảnh hưởng auto-bot.
     manualScalp: process.env.MANUAL_SCALP === "true",

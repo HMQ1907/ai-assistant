@@ -95,37 +95,70 @@ export class AutoTradeRunner {
         console.warn("[scalp-bot] AutoTrading is OFF in MT5.");
         return;
       }
-      if (this.haltedForDay) {
-        console.info("[scalp-bot] daily trade/loss limit reached, stop opening new trades.");
-        return;
-      }
-      if (
+      const dailyLossLimitUsd = resolveDailyLossLimitUsd(
+        this.dayBaselineEquity,
+        config.autoMaxDailyLossUsd,
+        config.autoMaxDailyLossPercent,
+      );
+      const dailyLossReached =
         this.dayBaselineEquity > 0 &&
-        account.equity <= this.dayBaselineEquity * (1 - config.autoMaxDailyLossPercent / 100)
-      ) {
-        this.haltedForDay = true;
-        console.warn(
-          `[scalp-bot] kill-switch: equity ${account.equity} <= daily loss threshold ${config.autoMaxDailyLossPercent}%.`,
-        );
-        return;
-      }
+        account.equity <= this.dayBaselineEquity - dailyLossLimitUsd;
 
       // Nếu đang có lệnh mở thì không scan setup mới
       const activeOrders = await orderService.getActiveOrders();
       if (activeOrders.length > 0) {
+        this.hadActiveOrders = true;
         console.info(
-          `[scalp-bot] skipped new scan: ${activeOrders.length} active ${activeSymbolLabel} order(s). Managing current order(s) only.`,
+          `[scalp-bot] managing ${activeOrders.length}/${config.autoScalpMaxOpenTrades} active ${activeSymbolLabel} order(s) before scanning.`,
         );
-        if (shouldFlatBeforeSessionClose(config.tradeScannerTimezone)) {
-          await this.closeOrdersForSessionEnd(orderService, activeOrders);
-        } else {
-          await this.closeStaleOrders(orderService, activeOrders, config.autoMaxHoldHours);
+        try {
+          await this.manageScalpProfitProtection(
+            orderService,
+            activeOrders,
+            config.autoScalpTpR,
+          );
+        } catch (error) {
+          console.warn(
+            "[scalp-bot] profit-protection check failed:",
+            error instanceof Error ? error.message : error,
+          );
         }
+        if (shouldFlatBeforeSessionClose(config.tradeScannerTimezone)) {
+          const closed = await this.closeOrdersForSessionEnd(orderService, activeOrders);
+          if (closed > 0) return;
+        } else {
+          const closed = await this.closeStaleOrdersByMinutes(
+            orderService,
+            activeOrders,
+            config.autoScalpMaxHoldMinutes,
+            "scalp",
+          );
+          if (closed > 0) return;
+        }
+        if (activeOrders.length >= config.autoScalpMaxOpenTrades) {
+          console.info(
+            `[scalp-bot] skipped new scan: max ${config.autoScalpMaxOpenTrades} concurrent orders reached.`,
+          );
+          return;
+        }
+      }
+
+      // Daily limits block only new entries. Existing orders above are still
+      // managed every minute even when their floating loss crosses the cap.
+      if (dailyLossReached) {
+        this.haltedForDay = true;
+        console.warn(
+          `[scalp-bot] kill-switch: daily equity loss reached ${dailyLossLimitUsd.toFixed(2)} USD.`,
+        );
+        return;
+      }
+      if (this.haltedForDay) {
+        console.info("[scalp-bot] daily trade/loss limit reached, stop opening new trades.");
         return;
       }
 
       // Reset tracking khi không còn lệnh
-      if (this.hadActiveOrders) {
+      if (activeOrders.length === 0 && this.hadActiveOrders) {
         this.hadActiveOrders = false;
         this.lastOrderClosedAt = Date.now();
         const cooldownMinutes = Number(
@@ -160,7 +193,7 @@ export class AutoTradeRunner {
         return;
       }
 
-      const timeBlockReason = getAutoTradeTimeBlockReason(config.tradeScannerTimezone);
+      const timeBlockReason = await getAutoTradeTimeBlockReason(config.tradeScannerTimezone);
       if (timeBlockReason) {
         console.info(`[scalp-bot] skipped: ${timeBlockReason}`);
         return;
@@ -222,6 +255,16 @@ export class AutoTradeRunner {
       // Cập nhật dedup sau khi tìm được signal
       if (latestM1Time) this.lastM1ScalpTime = latestM1Time;
 
+      const oppositeOrder = activeOrders.find(
+        (order) => order.direction !== signal.direction,
+      );
+      if (oppositeOrder) {
+        console.info(
+          `[scalp-bot] SKIP: ${signal.direction} signal conflicts with active ${oppositeOrder.direction} #${oppositeOrder.ticket}; hedge/reversal is disabled.`,
+        );
+        return;
+      }
+
       console.info(
         `[scalp-bot] signal found ${activeSymbolLabel}: M1 ${signal.direction} entry ${signal.entry} SL ${signal.stopLoss} TP ${signal.takeProfit}`,
       );
@@ -255,6 +298,44 @@ export class AutoTradeRunner {
       }
 
       // Đặt lệnh
+      const latestActiveOrders = await orderService.getActiveOrders();
+      if (latestActiveOrders.length >= config.autoScalpMaxOpenTrades) {
+        console.info(
+          `[scalp-bot] SKIP: active order count changed and max ${config.autoScalpMaxOpenTrades} is now reached.`,
+        );
+        return;
+      }
+      const latestOppositeOrder = latestActiveOrders.find(
+        (order) => order.direction !== signal.direction,
+      );
+      if (latestOppositeOrder) {
+        console.info(
+          `[scalp-bot] SKIP: active order state changed; ${latestOppositeOrder.direction} #${latestOppositeOrder.ticket} conflicts with ${signal.direction}.`,
+        );
+        return;
+      }
+      const openRemainingRiskUsd = latestActiveOrders.reduce(
+        (total, order) => total + estimateRemainingOrderDownsideUsd(order, symbol),
+        0,
+      );
+      const latestAccount = await orderService.getAccount();
+      const dailyRiskCheck = checkAggregateDailyRisk({
+        currentEquity: latestAccount.equity,
+        dayBaselineEquity: this.dayBaselineEquity,
+        dailyLossLimitUsd,
+        openRemainingRiskUsd,
+        candidateLossUsd: riskCheck.estimatedLossUsd,
+      });
+      console.info(
+        `[scalp-bot] aggregate risk: open remaining ${dailyRiskCheck.openRemainingRiskUsd} USD + candidate ${dailyRiskCheck.candidateLossUsd} USD; projected worst equity ${dailyRiskCheck.projectedWorstEquity} USD, daily floor ${dailyRiskCheck.dailyFloorEquity} USD.`,
+      );
+      if (!dailyRiskCheck.allowed) {
+        console.info(
+          `[scalp-bot] SKIP: aggregate risk would exceed daily loss limit ${dailyLossLimitUsd.toFixed(2)} USD.`,
+        );
+        return;
+      }
+
       const placed = await orderService.placeOrder({
         direction: signal.direction,
         orderType: "MARKET",
@@ -412,14 +493,18 @@ export class AutoTradeRunner {
         console.info("[auto-bot] daily trade/loss limit reached, stop opening new trades.");
         return;
       }
+      const dailyLossLimitUsd = resolveDailyLossLimitUsd(
+        this.dayBaselineEquity,
+        config.autoMaxDailyLossUsd,
+        config.autoMaxDailyLossPercent,
+      );
       if (
         this.dayBaselineEquity > 0 &&
-        account.equity <=
-          this.dayBaselineEquity * (1 - config.autoMaxDailyLossPercent / 100)
+        account.equity <= this.dayBaselineEquity - dailyLossLimitUsd
       ) {
         this.haltedForDay = true;
         console.warn(
-          `[auto-bot] kill-switch: equity ${account.equity} <= daily loss threshold ${config.autoMaxDailyLossPercent}%.`,
+          `[auto-bot] kill-switch: daily equity loss reached ${dailyLossLimitUsd.toFixed(2)} USD.`,
         );
         return;
       }
@@ -477,7 +562,7 @@ export class AutoTradeRunner {
         console.info("[auto-bot] max trades/day reached.");
         return;
       }
-      const timeBlockReason = getAutoTradeTimeBlockReason(config.tradeScannerTimezone);
+      const timeBlockReason = await getAutoTradeTimeBlockReason(config.tradeScannerTimezone);
       if (timeBlockReason) {
         console.info(`[auto-bot] skipped new scan: ${timeBlockReason}`);
         return;
@@ -898,7 +983,7 @@ export class AutoTradeRunner {
     const config = useRuntimeConfig();
     const symbol = symbolCodeFromMt5Symbol(config.mt5Symbol);
     const activeSymbolLabel = symbolLabel(config.mt5Symbol);
-    const timeBlockReason = getAutoTradeTimeBlockReason(config.tradeScannerTimezone);
+    const timeBlockReason = await getAutoTradeTimeBlockReason(config.tradeScannerTimezone);
     if (timeBlockReason) {
       console.info(`[auto-bot] pending setup cancelled: ${timeBlockReason}`);
       this.pendingSetup = null;
@@ -1203,6 +1288,39 @@ export class AutoTradeRunner {
     return closed;
   }
 
+  private async closeStaleOrdersByMinutes(
+    orderService: Mt5OrderService,
+    orders: { ticket: number; opened_at: string }[],
+    maxHoldMinutes: number,
+    label = "auto",
+  ): Promise<number> {
+    const minutes = Number.isFinite(maxHoldMinutes) && maxHoldMinutes > 0 ? maxHoldMinutes : 30;
+    const now = Date.now();
+    let closed = 0;
+    for (const order of orders) {
+      const openedMs = new Date(order.opened_at).getTime();
+      if (!Number.isFinite(openedMs)) continue;
+      const ageMinutes = (now - openedMs) / 60_000;
+      if (ageMinutes >= minutes) {
+        try {
+          await orderService.cancelOrder(order.ticket);
+          this.lastOrderClosedAt = Date.now();
+          this.hadActiveOrders = false;
+          closed += 1;
+          console.info(
+            `[${label}-bot] closed #${order.ticket}: held longer than ${minutes}m (time-stop).`,
+          );
+        } catch (error) {
+          console.warn(
+            `[${label}-bot] failed closing #${order.ticket}:`,
+            error instanceof Error ? error.message : error,
+          );
+        }
+      }
+    }
+    return closed;
+  }
+
   private async closeOrdersForSessionEnd(
     orderService: Mt5OrderService,
     orders: { ticket: number }[],
@@ -1280,6 +1398,38 @@ export class AutoTradeRunner {
       } catch (error) {
         console.warn(
           `[auto-bot] failed moving #${order.ticket} SL to break-even:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }
+  }
+
+  private async manageScalpProfitProtection(
+    orderService: Mt5OrderService,
+    activeOrders: ActiveMt5Order[],
+    takeProfitR: number,
+  ): Promise<void> {
+    const snapshot = await this.collectActiveOrderSnapshot();
+    for (const order of activeOrders) {
+      const protection = scalpProfitProtectionStop(order, snapshot, takeProfitR);
+      if (protection === null) continue;
+
+      try {
+        const result = await orderService.modifyOrder({
+          ticket: order.ticket,
+          stopLoss: protection.stopLoss,
+          takeProfit: null,
+          comment: `scalp-lock-${protection.stage}`,
+        });
+        const message =
+          protection.stage === "1.5r"
+            ? `Scalp #${order.ticket} reached >= 1.5R; locked about 0.5R at SL ${result.stopLoss}.`
+            : `Scalp #${order.ticket} reached >= 1R; moved SL to break-even at ${result.stopLoss}.`;
+        console.info(`[scalp-bot] ${message}`);
+        await this.notifyAction(message);
+      } catch (error) {
+        console.warn(
+          `[scalp-bot] failed protecting profit for #${order.ticket}:`,
           error instanceof Error ? error.message : error,
         );
       }
@@ -1440,9 +1590,222 @@ export function emptyNews(): NewsSnapshot {
   };
 }
 
-function getAutoTradeTimeBlockReason(timeZone: string): string | null {
-  void timeZone;
+interface CalendarEvent {
+  timeMs: number;
+  label: string;
+  impact: string;
+  currency: string;
+}
+
+let cachedCalendarEvents: CalendarEvent[] = [];
+let cachedCalendarFetchedAt = 0;
+let cachedCalendarKey = "";
+const MAX_STALE_CALENDAR_AGE_MS = 6 * 60 * 60_000;
+
+async function getAutoTradeTimeBlockReason(timeZone: string): Promise<string | null> {
+  const config = useRuntimeConfig();
+  const manualBlock = newsBlackoutBlockReason({
+    now: new Date(),
+    enabled: config.autoNewsBlackoutEnabled,
+    events: config.autoNewsBlackoutEvents,
+    minutes: config.autoNewsBlackoutMinutes,
+    timeZone,
+  });
+  if (manualBlock) return manualBlock;
+
+  const autoEvents = await fetchAutoNewsCalendarEvents({
+    enabled: config.autoNewsBlackoutEnabled,
+    url: config.autoNewsCalendarUrl,
+    currencies: config.autoNewsCalendarCurrencies,
+    impacts: config.autoNewsCalendarImpacts,
+    cacheMinutes: config.autoNewsCalendarCacheMinutes,
+  });
+  if (autoEvents === null) {
+    return "news blackout: economic calendar unavailable, skip new entries for safety";
+  }
+  return newsBlackoutBlockReason({
+    now: new Date(),
+    enabled: config.autoNewsBlackoutEnabled,
+    events: autoEvents
+      .map((event) => `${new Date(event.timeMs).toISOString()}|${event.currency} ${event.impact} ${event.label}`)
+      .join(";"),
+    minutes: config.autoNewsBlackoutMinutes,
+    timeZone,
+  });
+}
+
+async function fetchAutoNewsCalendarEvents(input: {
+  enabled: boolean;
+  url: string;
+  currencies: string;
+  impacts: string;
+  cacheMinutes: number;
+}): Promise<CalendarEvent[] | null> {
+  if (!input.enabled || !input.url) return [];
+  const cacheMinutes =
+    Number.isFinite(input.cacheMinutes) && input.cacheMinutes > 0 ? input.cacheMinutes : 30;
+  const cacheKey = [
+    input.url,
+    input.currencies.toUpperCase(),
+    input.impacts.toUpperCase(),
+  ].join("|");
+  const now = Date.now();
+  if (
+    cachedCalendarKey === cacheKey &&
+    cachedCalendarFetchedAt > 0 &&
+    now - cachedCalendarFetchedAt < cacheMinutes * 60_000
+  ) {
+    return cachedCalendarEvents;
+  }
+
+  try {
+    const response = await fetch(input.url, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000),
+      headers: { accept: "application/json" },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const payload = (await response.json()) as unknown;
+    if (!Array.isArray(payload)) {
+      throw new Error("invalid calendar payload: expected an array");
+    }
+    const events = parseEconomicCalendarEvents(payload, input);
+    cachedCalendarKey = cacheKey;
+    cachedCalendarFetchedAt = now;
+    cachedCalendarEvents = events;
+    console.info(
+      `[auto-bot] economic calendar refreshed: ${events.length} matching high-impact event(s).`,
+    );
+    return events;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[auto-bot] economic calendar fetch failed: ${message}`);
+    const cacheIsFreshEnough =
+      cachedCalendarFetchedAt > 0 &&
+      now - cachedCalendarFetchedAt <= MAX_STALE_CALENDAR_AGE_MS;
+    return cacheIsFreshEnough ? cachedCalendarEvents : null;
+  }
+}
+
+function parseEconomicCalendarEvents(
+  payload: unknown,
+  input: { currencies: string; impacts: string },
+): CalendarEvent[] {
+  if (!Array.isArray(payload)) return [];
+  const currencies = splitUpperSet(input.currencies || "USD,EUR");
+  const impacts = splitUpperSet(input.impacts || "High");
+  return payload
+    .flatMap((raw): CalendarEvent[] => {
+      if (!raw || typeof raw !== "object") return [];
+      const item = raw as Record<string, unknown>;
+      const timeRaw = String(item.date ?? item.time ?? item.datetime ?? "");
+      const timeMs = Date.parse(timeRaw);
+      const currency = String(item.country ?? item.currency ?? item.ccy ?? "").toUpperCase();
+      const impact = String(item.impact ?? item.importance ?? "").trim();
+      const label = String(item.title ?? item.event ?? item.name ?? "high-impact news").trim();
+      if (!Number.isFinite(timeMs)) return [];
+      if (currencies.size > 0 && !currencies.has(currency)) return [];
+      if (!isHighImpactCalendarEvent(label, impact, impacts)) return [];
+      return [{ timeMs, label, impact: impact || "High", currency }];
+    })
+    .sort((a, b) => a.timeMs - b.timeMs);
+}
+
+function splitUpperSet(value: string): Set<string> {
+  return new Set(
+    value
+      .split(",")
+      .map((part) => part.trim().toUpperCase())
+      .filter(Boolean),
+  );
+}
+
+export function isHighImpactCalendarEvent(
+  label: string,
+  impact: string,
+  impacts: Set<string>,
+): boolean {
+  const normalizedImpact = impact.trim().toUpperCase();
+  if (impacts.has(normalizedImpact)) return true;
+  const title = label.toUpperCase();
+  return [
+    "CPI",
+    "PPI",
+    "FOMC",
+    "NON-FARM",
+    "NONFARM",
+    "NFP",
+    "EMPLOYMENT SITUATION",
+    "EMPLOYMENT CHANGE",
+    "UNEMPLOYMENT RATE",
+    "CORE PCE",
+    "PCE PRICE INDEX",
+    "GROSS DOMESTIC PRODUCT",
+    "GDP",
+    "RETAIL SALES",
+    "JOLTS",
+    "ISM MANUFACTURING PMI",
+    "ISM SERVICES PMI",
+    "FED CHAIR",
+    "POWELL",
+    "INTEREST RATE",
+    "RATE STATEMENT",
+  ].some((keyword) => title.includes(keyword));
+}
+
+export function newsBlackoutBlockReason(input: {
+  now: Date;
+  enabled: boolean;
+  events: string;
+  minutes: number;
+  timeZone: string;
+}): string | null {
+  if (!input.enabled) return null;
+  const minutes = Number.isFinite(input.minutes) && input.minutes > 0 ? input.minutes : 60;
+  const windowMs = minutes * 60_000;
+  const nowMs = input.now.getTime();
+  const events = parseNewsBlackoutEvents(input.events);
+  for (const event of events) {
+    const diffMs = nowMs - event.timeMs;
+    if (Math.abs(diffMs) <= windowMs) {
+      const side =
+        diffMs < 0
+          ? `${Math.ceil(Math.abs(diffMs) / 60_000)}m before`
+          : `${Math.ceil(diffMs / 60_000)}m after`;
+      return `news blackout: ${side} ${event.label} (${formatInTimeZone(new Date(event.timeMs), input.timeZone)})`;
+    }
+  }
   return null;
+}
+
+function parseNewsBlackoutEvents(value: string): Array<{ timeMs: number; label: string }> {
+  return value
+    .split(/[;\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => {
+      const [timeRaw, labelRaw] = item.split("|");
+      const timeMs = Date.parse((timeRaw ?? "").trim());
+      return {
+        timeMs,
+        label: (labelRaw ?? "high-impact news").trim() || "high-impact news",
+      };
+    })
+    .filter((event) => Number.isFinite(event.timeMs));
+}
+
+function formatInTimeZone(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone,
+  }).format(date);
 }
 
 function shouldFlatBeforeSessionClose(timeZone: string): boolean {
@@ -1579,6 +1942,24 @@ export interface AutoRiskCheck {
   maxLossUsd: number;
 }
 
+export interface AggregateDailyRiskCheck {
+  allowed: boolean;
+  openRemainingRiskUsd: number;
+  candidateLossUsd: number;
+  projectedWorstEquity: number;
+  dailyFloorEquity: number;
+}
+
+export function resolveDailyLossLimitUsd(
+  baselineEquity: number,
+  fixedUsd: number,
+  percent: number,
+): number {
+  if (Number.isFinite(fixedUsd) && fixedUsd > 0) return fixedUsd;
+  const safePercent = Number.isFinite(percent) && percent > 0 ? percent : 25;
+  return Math.max(0, baselineEquity) * safePercent / 100;
+}
+
 export function checkAutoRisk(input: AutoRiskCheckInput): AutoRiskCheck {
   const estimatedLossUsd = estimateLossUsd(input);
   const maxLossUsd = Number(
@@ -1592,6 +1973,51 @@ export function checkAutoRisk(input: AutoRiskCheckInput): AutoRiskCheck {
     estimatedLossUsd,
     maxLossUsd,
   };
+}
+
+export function checkAggregateDailyRisk(input: {
+  currentEquity: number;
+  dayBaselineEquity: number;
+  dailyLossLimitUsd: number;
+  openRemainingRiskUsd: number;
+  candidateLossUsd: number;
+}): AggregateDailyRiskCheck {
+  const openRemainingRiskUsd = Number(Math.max(0, input.openRemainingRiskUsd).toFixed(2));
+  const candidateLossUsd = Number(Math.max(0, input.candidateLossUsd).toFixed(2));
+  const projectedWorstEquity = Number(
+    (input.currentEquity - openRemainingRiskUsd - candidateLossUsd).toFixed(2),
+  );
+  const dailyFloorEquity = Number(
+    (input.dayBaselineEquity - Math.max(0, input.dailyLossLimitUsd)).toFixed(2),
+  );
+  return {
+    allowed:
+      Number.isFinite(projectedWorstEquity) &&
+      projectedWorstEquity >= dailyFloorEquity,
+    openRemainingRiskUsd,
+    candidateLossUsd,
+    projectedWorstEquity,
+    dailyFloorEquity,
+  };
+}
+
+export function estimateRemainingOrderDownsideUsd(
+  order: ActiveMt5Order,
+  symbol: SymbolCode,
+): number {
+  if (order.stop_loss === null || !Number.isFinite(order.stop_loss)) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const unitsPerPrice =
+    symbol === "EURUSD"
+      ? (10 / 0.0001) * order.volume
+      : tradingRules.xauUsdOuncesPerLot * order.volume;
+  const pnlAtStop =
+    order.direction === "BUY"
+      ? (order.stop_loss - order.price_open) * unitsPerPrice
+      : (order.price_open - order.stop_loss) * unitsPerPrice;
+  const currentProfit = Number.isFinite(order.profit) ? Number(order.profit) : 0;
+  return Number(Math.max(0, currentProfit - pnlAtStop).toFixed(2));
 }
 
 function estimateLossUsd(input: {
@@ -1649,6 +2075,52 @@ function isValidTakeProfit(
   return order.direction === "BUY"
     ? suggested > referencePrice
     : suggested < referencePrice;
+}
+
+export function scalpProfitProtectionStop(
+  order: ActiveMt5Order,
+  snapshot: MarketSnapshot,
+  takeProfitR: number,
+): { stopLoss: number; stage: "1r" | "1.5r" } | null {
+  if (
+    order.state !== "FILLED" ||
+    order.stop_loss === null ||
+    order.take_profit === null ||
+    !Number.isFinite(takeProfitR) ||
+    takeProfitR <= 0
+  ) {
+    return null;
+  }
+
+  // TP is created as a configured R multiple, so it preserves the original
+  // risk distance even after SL has already been moved to break-even.
+  const originalRisk = Math.abs(order.take_profit - order.price_open) / takeProfitR;
+  if (!Number.isFinite(originalRisk) || originalRisk <= 0) return null;
+
+  const favorableMove = order.direction === "BUY"
+    ? snapshot.price - order.price_open
+    : order.price_open - snapshot.price;
+  const reachedR = favorableMove / originalRisk;
+  const thresholdTolerance = 1e-9;
+  if (!Number.isFinite(reachedR) || reachedR + thresholdTolerance < 1) return null;
+
+  const buffer = spreadBuffer(snapshot);
+  const stage = reachedR + thresholdTolerance >= 1.5 ? "1.5r" : "1r";
+  const lockedDistance = stage === "1.5r" ? originalRisk * 0.5 : 0;
+  const desired = order.direction === "BUY"
+    ? order.price_open + lockedDistance + buffer
+    : order.price_open - lockedDistance - buffer;
+  const rounded = roundPrice(desired, snapshot.price);
+
+  // Modify only when the new SL is strictly safer. This also prevents the
+  // one-minute management loop from repeatedly sending the same request.
+  if (order.direction === "BUY") {
+    if (rounded >= snapshot.price || rounded <= order.stop_loss) return null;
+  } else if (rounded <= snapshot.price || rounded >= order.stop_loss) {
+    return null;
+  }
+
+  return { stopLoss: rounded, stage };
 }
 
 function breakEvenStopLoss(
