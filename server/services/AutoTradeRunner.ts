@@ -391,32 +391,7 @@ export class AutoTradeRunner {
         );
       }
 
-      // Telegram thông báo
-      try {
-        if (config.telegramBotToken && config.telegramChatId) {
-          await new TelegramService({
-            botToken: config.telegramBotToken,
-            chatId: config.telegramChatId,
-          }).sendMessage(
-            [
-              `🤖 Scalp-bot PLACED order:`,
-              `Symbol: ${activeSymbolLabel}`,
-              `Direction: ${signal.direction}`,
-              `Entry: ${placed.price}`,
-              `SL: ${signal.stopLoss}`,
-              `TP: ${signal.takeProfit}`,
-              `Lot: ${lot}`,
-              `Ticket: #${placed.ticket}`,
-              `Reason: ${signal.reason.slice(0, 200)}`,
-            ].join("\n"),
-          );
-        }
-      } catch (error) {
-        console.warn(
-          "[scalp-bot] failed sending Telegram notification:",
-          error instanceof Error ? error.message : error,
-        );
-      }
+      // Do not send Telegram on successful entry; the user checks MT5 directly.
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       console.warn("[scalp-bot] tick error:", msg);
