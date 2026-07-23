@@ -237,7 +237,8 @@ def snapshot(
 def candles_history(
     symbol: str = "XAUUSDm",
     timeframe: str = "H1",
-    count: int = Query(default=1500, ge=50, le=6000),
+    count: int = Query(default=1500, ge=50, le=20000),
+    start: int = Query(default=1, ge=1, description="MT5 position offset; 1 = closed bar"),
 ):
     """Tra ve nhieu nen lich su (1 khung) phuc vu backtest. Khong dung cho live."""
     tf = TIMEFRAMES.get(timeframe)
@@ -254,7 +255,7 @@ def candles_history(
                 detail=f"Cannot select symbol {symbol}: {mt5.last_error()}",
             )
         # Position 0 la nen dang hinh thanh -> doc tu position 1 (nen da dong).
-        rates = mt5.copy_rates_from_pos(symbol, tf, 1, count)
+        rates = mt5.copy_rates_from_pos(symbol, tf, start, count)
         if rates is None or len(rates) == 0:
             raise HTTPException(
                 status_code=500,

@@ -12,9 +12,9 @@ export default defineNuxtConfig({
     aiTimeoutMs: Number(process.env.AI_TIMEOUT_MS || 90000),
     accountSizeUsd: Number(process.env.ACCOUNT_SIZE_USD || 200),
     maxLossPercentPerTrade: Number(
-      process.env.MAX_LOSS_PERCENT_PER_TRADE || 20,
+      process.env.MAX_LOSS_PERCENT_PER_TRADE || 10,
     ),
-    maxDailyLossPercent: Number(process.env.MAX_DAILY_LOSS_PERCENT || 15),
+    maxDailyLossPercent: Number(process.env.MAX_DAILY_LOSS_PERCENT || 5),
     marketDataProvider: process.env.MARKET_DATA_PROVIDER || "twelvedata",
     marketDataApiKey: process.env.MARKET_DATA_API_KEY || "",
     marketDataBaseUrl:
@@ -38,7 +38,7 @@ export default defineNuxtConfig({
     tradeScannerStartHour: Number(process.env.TRADE_SCANNER_START_HOUR || 0),
     tradeScannerEndHour: Number(process.env.TRADE_SCANNER_END_HOUR || 24),
     tradeScannerIntervalMinutes: Number(
-      process.env.TRADE_SCANNER_INTERVAL_MINUTES || 15,
+      process.env.TRADE_SCANNER_INTERVAL_MINUTES || 5,
     ),
     tradeScannerMinConfidence: Number(
       process.env.TRADE_SCANNER_MIN_CONFIDENCE || 75,
@@ -52,29 +52,25 @@ export default defineNuxtConfig({
     tradeScannerDedupMinutes: Number(
       process.env.TRADE_SCANNER_DEDUP_MINUTES || 45,
     ),
-    // Auto-bot (Rules Engine H1). AUTO_TRADE=true -> tự đặt lệnh; false -> hệ báo tín hiệu cũ.
+    // Auto-bot: trend-pullback XAU, lot nhỏ cho tài khoản ~$200.
     autoTradeEnabled: process.env.AUTO_TRADE === "true",
-    // 2 mức: setup đẹp -> good; setup rất đẹp (conviction >= 2/3) -> veryGood.
     autoLotGood: Number(process.env.AUTO_LOT_GOOD || 0.01),
     autoLotVeryGood: Number(process.env.AUTO_LOT_VERY_GOOD || 0.01),
     autoVeryGoodMinConviction: Number(process.env.AUTO_VERYGOOD_MIN_CONVICTION || 2),
-    autoMaxTradesPerDay: Number(process.env.AUTO_MAX_TRADES_PER_DAY || 10),
-    autoMaxDailyLossPercent: Number(process.env.AUTO_MAX_DAILY_LOSS_PERCENT || 25),
-    autoMaxDailyLossUsd: Number(process.env.AUTO_MAX_DAILY_LOSS_USD || 0),
-    autoMaxHoldHours: Number(process.env.AUTO_MAX_HOLD_HOURS || 72),
-    autoCooldownMinutes: Number(process.env.AUTO_COOLDOWN_MINUTES || 15),
-    autoCooldownM15Candles: Number(process.env.AUTO_COOLDOWN_M15_CANDLES || 3),
-    autoUseAiVetoOnBump: process.env.AUTO_AI_VETO !== "false",
+    autoMaxTradesPerDay: Number(process.env.AUTO_MAX_TRADES_PER_DAY || 2),
+    autoMaxDailyLossPercent: Number(process.env.AUTO_MAX_DAILY_LOSS_PERCENT || 5),
+    autoMaxDailyLossUsd: Number(process.env.AUTO_MAX_DAILY_LOSS_USD || 10),
+    autoMaxDailyProfitUsd: Number(process.env.AUTO_MAX_DAILY_PROFIT_USD || 0),
+    autoMaxHoldHours: Number(process.env.AUTO_MAX_HOLD_HOURS || 8),
+    autoCooldownMinutes: Number(process.env.AUTO_COOLDOWN_MINUTES || 45),
+    autoCooldownM15Candles: Number(process.env.AUTO_COOLDOWN_M15_CANDLES || 0),
+    // AI veto opt-in — mặc định tắt để bot deterministic + tránh timeout chặn lệnh.
+    autoUseAiVetoOnBump: process.env.AUTO_AI_VETO === "true",
     autoTradeOnAiError: process.env.AUTO_TRADE_ON_AI_ERROR === "true",
     autoStrategyMode: process.env.AUTO_STRATEGY_MODE || "xau_trend_pullback",
-    // Cho phép vào lệnh trên M15 (trong trend H1, bias H4) để có nhiều lệnh hơn.
     autoUseM15: process.env.AUTO_USE_M15 !== "false",
-    // Nhánh scalp dự phòng trong mode xau_trend_pullback. Mặc định TẮT:
-    // chỉ vào lệnh khi có setup trend-pullback sạch, không rơi xuống scalp chất lượng thấp.
     autoAllowScalp: process.env.AUTO_ALLOW_SCALP === "true",
-    // Auto-scalp: khi bật AUTO_TRADE=true + AUTO_TRADE_SCALP=true, bot chuyển sang
-    // chế độ reversal scalp tự động mỗi 1 phút (M1/M5/M15/H1), lot cố định 0.01,
-    // không qua AI veto. Dùng cùng engine với MANUAL_SCALP nhưng đặt lệnh tự động.
+    // Scalp mode bị plugin bỏ qua — giữ flag để tương thích ENV cũ.
     autoTradeScalp: process.env.AUTO_TRADE_SCALP === "true",
     autoScalpTpR: Number(process.env.AUTO_SCALP_TP_R || 1.5),
     autoScalpFrequency: process.env.AUTO_SCALP_FREQUENCY || "normal",
@@ -89,9 +85,8 @@ export default defineNuxtConfig({
     autoNewsCalendarCurrencies: process.env.AUTO_NEWS_CALENDAR_CURRENCIES || "USD,EUR",
     autoNewsCalendarImpacts: process.env.AUTO_NEWS_CALENDAR_IMPACTS || "High",
     autoNewsCalendarCacheMinutes: Number(process.env.AUTO_NEWS_CALENDAR_CACHE_MINUTES || 30),
-    // Manual-only: khi bấm "Quét setup Rule Engine", chuyển sang reversal scalp
-    // M1/M5/M15/H1 để tìm đỉnh/đáy ngắn hạn. Không ảnh hưởng auto-bot.
     manualScalp: process.env.MANUAL_SCALP === "true",
+    autoXauSellTpTarget: Number(process.env.AUTO_XAU_SELL_TP_TARGET || 0),
   },
   typescript: {
     strict: true,

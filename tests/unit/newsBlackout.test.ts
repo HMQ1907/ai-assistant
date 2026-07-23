@@ -21,8 +21,14 @@ describe("auto-trade economic news blackout", () => {
     "ISM Services PMI",
     "FOMC Rate Statement",
     "Fed Chair Testifies",
-  ])("recognizes important USD event even if provider impact is inconsistent: %s", (title) => {
-    expect(isHighImpactCalendarEvent(title, "Medium", highOnly)).toBe(true);
+  ])("recognizes important USD event when provider omits impact: %s", (title) => {
+    expect(isHighImpactCalendarEvent(title, "", highOnly)).toBe(true);
+  });
+
+  it("does not upgrade an explicitly low-impact employment release", () => {
+    expect(
+      isHighImpactCalendarEvent("ADP Weekly Employment Change", "Low", highOnly),
+    ).toBe(false);
   });
 
   it("blocks exactly 60 minutes before and after an event", () => {

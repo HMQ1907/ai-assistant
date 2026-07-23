@@ -96,6 +96,12 @@ export interface XauSignalOptions {
   allowScalp?: boolean;
 }
 
+/** Band RSI setup sạch (không ép tín hiệu mid-range). */
+const XAU_BUY_RSI_MIN = 38;
+const XAU_BUY_RSI_MAX = 60;
+const XAU_SELL_RSI_MIN = 40;
+const XAU_SELL_RSI_MAX = 62;
+
 export function evaluateXauTrendPullbackTriggerSignal(
   m5: Candle[],
   m15: Candle[],
@@ -199,15 +205,21 @@ function buildXauTrendPullbackSetup(
   }
 
   if (direction === "BUY") {
-    if (m15Rsi < 38 || m15Rsi > 60) {
-      return { setup: null, reason: `M15 BUY RSI ${m15Rsi} outside 38-60` };
+    if (m15Rsi < XAU_BUY_RSI_MIN || m15Rsi > XAU_BUY_RSI_MAX) {
+      return {
+        setup: null,
+        reason: `M15 BUY RSI ${m15Rsi} outside ${XAU_BUY_RSI_MIN}-${XAU_BUY_RSI_MAX}`,
+      };
     }
     if (m15Ema21 <= m15Ema200 && m15Last.close <= m15Ema200) {
       return { setup: null, reason: "M15 BUY structure broken: EMA21 <= EMA200 and close <= EMA200" };
     }
   } else {
-    if (m15Rsi < 40 || m15Rsi > 62) {
-      return { setup: null, reason: `M15 SELL RSI ${m15Rsi} outside 40-62` };
+    if (m15Rsi < XAU_SELL_RSI_MIN || m15Rsi > XAU_SELL_RSI_MAX) {
+      return {
+        setup: null,
+        reason: `M15 SELL RSI ${m15Rsi} outside ${XAU_SELL_RSI_MIN}-${XAU_SELL_RSI_MAX}`,
+      };
     }
     if (m15Ema21 >= m15Ema200 && m15Last.close >= m15Ema200) {
       return { setup: null, reason: "M15 SELL structure broken: EMA21 >= EMA200 and close >= EMA200" };
@@ -485,15 +497,21 @@ function buildXauTrendPullbackSignal(
   }
 
   if (direction === "BUY") {
-    if (m15Rsi < 38 || m15Rsi > 60) {
-      return { signal: null, reason: `M15 BUY RSI ${m15Rsi} outside 38-60` };
+    if (m15Rsi < XAU_BUY_RSI_MIN || m15Rsi > XAU_BUY_RSI_MAX) {
+      return {
+        signal: null,
+        reason: `M15 BUY RSI ${m15Rsi} outside ${XAU_BUY_RSI_MIN}-${XAU_BUY_RSI_MAX}`,
+      };
     }
     if (m15Ema21 <= m15Ema200 && m15Last.close <= m15Ema200) {
       return { signal: null, reason: `M15 BUY structure broken: EMA21 <= EMA200 and close <= EMA200` };
     }
   } else {
-    if (m15Rsi < 40 || m15Rsi > 62) {
-      return { signal: null, reason: `M15 SELL RSI ${m15Rsi} outside 40-62` };
+    if (m15Rsi < XAU_SELL_RSI_MIN || m15Rsi > XAU_SELL_RSI_MAX) {
+      return {
+        signal: null,
+        reason: `M15 SELL RSI ${m15Rsi} outside ${XAU_SELL_RSI_MIN}-${XAU_SELL_RSI_MAX}`,
+      };
     }
     if (m15Ema21 >= m15Ema200 && m15Last.close >= m15Ema200) {
       return { signal: null, reason: `M15 SELL structure broken: EMA21 >= EMA200 and close >= EMA200` };
@@ -553,10 +571,9 @@ function buildXauTrendPullbackSignal(
         : structuralTp + 0.2 * m15Atr;
   const rawReward = direction === "BUY" ? wantedTp - entry : entry - wantedTp;
   const rawRr = rawReward / risk;
-  // Một nguồn RR duy nhất: khớp với validateAdjustedAutoTrade (tradingRules.minRiskReward),
-  // tránh sinh tín hiệu RR 1.3-1.5 rồi bị lớp validate loại âm thầm + tốn 1 lần gọi AI.
+  // Setup đẹp: cần RR cấu trúc đạt min — không ép TP giả để ra tín hiệu.
   const minRr = tradingRules.minRiskReward;
-  if (!Number.isFinite(rawRr) || rawRr < minRr) {
+  if (!Number.isFinite(rawRr) || rawRr + 1e-4 < minRr) {
     return {
       signal: null,
       reason: `${direction} blocked: structural RR ${Number(rawRr.toFixed(2))} < ${minRr}`,
@@ -612,6 +629,7 @@ function buildXauMomentumScalpSignal(
   const lastM5 = m5.at(-1);
   if (!prevM5 || !lastM5) return { signal: null, reason: "scalp missing M5 trigger candles" };
 
+  // Scalp dự phòng (chỉ khi allowScalp=true) — vẫn cần momentum rõ, không ép mid-range.
   const buyAllowed = h1Last.close > h1Ema200 && m15Rsi >= 60 && m15Rsi <= 78;
   const sellAllowed = h1Last.close < h1Ema200 && m15Rsi >= 22 && m15Rsi <= 40;
   const buyTrigger =

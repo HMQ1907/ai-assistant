@@ -23,17 +23,19 @@ export async function fetchBacktestCandles(
   symbol: string,
   timeframe: Timeframe,
   count: number,
+  start = 1,
 ): Promise<Candle[]> {
   const url = new URL("/candles", bridgeUrl);
   url.searchParams.set("symbol", symbol);
   url.searchParams.set("timeframe", timeframe);
   url.searchParams.set("count", String(count));
+  url.searchParams.set("start", String(start));
 
   let response: Response;
   try {
     response = await fetch(url, {
       cache: "no-store",
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(60_000),
     });
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown error";
@@ -63,4 +65,37 @@ export async function fetchBacktestCandles(
         Number.isFinite(candle.low) &&
         Number.isFinite(candle.close),
     );
+}
+
+/**
+ * Lấy nhiều hơn giới hạn 1 lần gọi bằng cách ghép các trang `start`.
+ * Trả về ascending (cũ -> mới), đã dedupe theo time.
+ */
+export async function fetchBacktestCandlesPaged(
+  bridgeUrl: string,
+  symbol: string,
+  timeframe: Timeframe,
+  totalCount: number,
+  pageSize = 6000,
+): Promise<Candle[]> {
+  const pages: Candle[][] = [];
+  let remaining = totalCount;
+  let start = 1;
+  while (remaining > 0) {
+    const take = Math.min(pageSize, remaining);
+    const chunk = await fetchBacktestCandles(bridgeUrl, symbol, timeframe, take, start);
+    if (chunk.length === 0) break;
+    pages.push(chunk);
+    if (chunk.length < take) break;
+    start += chunk.length;
+    remaining -= chunk.length;
+  }
+
+  const byTime = new Map<string, Candle>();
+  for (const page of pages.reverse()) {
+    for (const candle of page) byTime.set(candle.time, candle);
+  }
+  return [...byTime.values()].sort(
+    (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime(),
+  );
 }

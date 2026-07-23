@@ -1,10 +1,11 @@
 export const tradingRules = {
+  // Auto-bot micro account ($200): lot tối thiểu 0.01, risk/ngày siết chặt qua ENV.
   defaultAccountSizeUsd: 200,
-  maxLossPercentPerTrade: 15,
-  maxDailyLossPercent: 15,
+  maxLossPercentPerTrade: 10,
+  maxDailyLossPercent: 5,
   minConfidence: 65,
   minRiskReward: 1.5,
-  // Intraday-swing: vao theo khung H1, giu vai gio, dong trong phien (khong qua dem).
+  // Trend-pullback intraday: bias H1, entry M5, đóng trong phiên.
   maxHoldingMinutes: 240,
   maxSpreadPercent: 0.08,
   maxQuoteAgeSeconds: 180,

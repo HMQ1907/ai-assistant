@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fetchBacktestCandles } from "../../server/backtest/backtestData";
+import { fetchBacktestCandlesPaged } from "../../server/backtest/backtestData";
 import {
   defaultXauPullbackConfig,
   runXauPullbackBacktest,
@@ -11,7 +11,23 @@ import type { Candle } from "../../types/trading";
 
 const BRIDGE = process.env.MT5_BRIDGE_URL || "http://127.0.0.1:8765";
 const SYMBOL = process.env.MT5_SYMBOL || "XAUUSDm";
-const COUNT = 6000;
+/** ~2 tháng lịch: ~60 ngày * ~288 nến M5/ngày giao dịch ≈ 14k–17k; lấy dư. */
+const M5_COUNT = Number(process.env.BACKTEST_M5_BARS || 17000);
+const M15_COUNT = Number(process.env.BACKTEST_M15_BARS || 6000);
+const H1_COUNT = Number(process.env.BACKTEST_H1_BARS || 2000);
+
+/** Config khớp live auto-bot hiện tại (.env). */
+const liveConfig: XauPullbackBacktestConfig = {
+  ...defaultXauPullbackConfig,
+  spreadPrice: Number(process.env.BACKTEST_SPREAD_PRICE || 0.3),
+  maxHoldBars: Number(process.env.BACKTEST_MAX_HOLD_BARS || 96), // 8h * 12 M5
+  cooldownBars: Number(process.env.BACKTEST_COOLDOWN_BARS || 9), // 45'
+  breakEvenAtR: 1,
+  allowScalp: false,
+  lot: Number(process.env.BACKTEST_LOT || 0.01),
+  accountStartUsd: Number(process.env.BACKTEST_ACCOUNT_SIZE_USD || 200),
+  maxLossPercentPerTrade: Number(process.env.BACKTEST_MAX_LOSS_PERCENT || 10),
+};
 
 function line(label: string, r: XauBacktestResult): string {
   return [
@@ -58,83 +74,161 @@ function statOf(trades: XauBacktestTrade[]) {
   };
 }
 
+function monthlyBuckets(trades: XauBacktestTrade[]) {
+  const map = new Map<string, XauBacktestTrade[]>();
+  for (const trade of trades) {
+    const month = trade.entryTime.slice(0, 7);
+    const list = map.get(month) ?? [];
+    list.push(trade);
+    map.set(month, list);
+  }
+  return [...map.entries()].map(([month, list]) => ({ month, ...statOf(list) }));
+}
+
 describe("XAUUSD trend-pullback (mode auto-bot thật) - backtest dữ liệu MT5 thật", () => {
-  it("đo expectancy + walk-forward", async () => {
-    let m5: Candle[];
-    let m15: Candle[];
-    let h1: Candle[];
-    try {
-      [m5, m15, h1] = await Promise.all([
-        fetchBacktestCandles(BRIDGE, SYMBOL, "M5", COUNT),
-        fetchBacktestCandles(BRIDGE, SYMBOL, "M15", COUNT),
-        fetchBacktestCandles(BRIDGE, SYMBOL, "H1", COUNT),
-      ]);
-    } catch (error) {
-      console.warn("[backtest] Không lấy được nến từ bridge -> bỏ qua:", (error as Error).message);
-      return;
-    }
+  it(
+    "đo expectancy ~2 tháng + walk-forward (config live)",
+    async () => {
+      let m5: Candle[];
+      let m15: Candle[];
+      let h1: Candle[];
+      try {
+        [m5, m15, h1] = await Promise.all([
+          fetchBacktestCandlesPaged(BRIDGE, SYMBOL, "M5", M5_COUNT),
+          fetchBacktestCandlesPaged(BRIDGE, SYMBOL, "M15", M15_COUNT),
+          fetchBacktestCandlesPaged(BRIDGE, SYMBOL, "H1", H1_COUNT),
+        ]);
+      } catch (error) {
+        console.warn("[backtest] Không lấy được nến từ bridge -> bỏ qua:", (error as Error).message);
+        return;
+      }
 
-    console.log(`\n=== DỮ LIỆU (${SYMBOL}) ===`);
-    console.log(`M5 : ${m5.length} nến  ${m5[0]?.time} -> ${m5.at(-1)?.time}`);
-    console.log(`M15: ${m15.length} nến  H1: ${h1.length} nến`);
-    const days = (new Date(m5.at(-1)!.time).getTime() - new Date(m5[0]!.time).getTime()) / 86_400_000;
-    console.log(`Khoảng M5 ~ ${days.toFixed(1)} ngày lịch`);
-
-    console.log(`\n=== BASELINE theo spread (lot ${defaultXauPullbackConfig.lot}, vốn $${defaultXauPullbackConfig.accountStartUsd}, scalp OFF) ===`);
-    for (const spread of [0.15, 0.3, 0.5]) {
-      const r = runXauPullbackBacktest(m5, m15, h1, { ...defaultXauPullbackConfig, spreadPrice: spread });
-      console.log(line(`spread=${spread}`, r));
-    }
-
-    console.log(`\n=== ẢNH HƯỞNG NHÁNH SCALP (spread=0.3) ===`);
-    for (const allowScalp of [false, true]) {
-      const r = runXauPullbackBacktest(m5, m15, h1, { ...defaultXauPullbackConfig, spreadPrice: 0.3, allowScalp });
-      console.log(line(`scalp=${allowScalp}`, r));
-    }
-
-    console.log(`\n=== WALK-FORWARD (spread=0.3, scalp OFF, chia 60/40 theo thời gian) ===`);
-    const { splitTime, isTrades, oosTrades } = splitByTime(
-      m5, m15, h1, { ...defaultXauPullbackConfig, spreadPrice: 0.3 }, 0.6,
-    );
-    console.log(`Mốc chia: ${splitTime}`);
-    console.log(`In-sample : ${JSON.stringify(statOf(isTrades))}`);
-    console.log(`Out-sample: ${JSON.stringify(statOf(oosTrades))}`);
-    const allTrades = [...isTrades, ...oosTrades];
-    const maxRisk = allTrades.length ? Math.max(...allTrades.map((t) => t.riskUsd)) : 0;
-    console.log(`Risk/lệnh: max=$${maxRisk.toFixed(2)}  (cap 15% vốn $200 = $30 -> ${maxRisk <= 30 ? "không bind" : "BIND, vài lệnh bị bỏ"})`);
-
-    console.log(`\n=== QUÉT THEO CAP LỖ/LỆNH tại VỐN $200 (spread=0.3, scalp OFF) — tìm mức cap không bóp chết bot ===`);
-    for (const capPct of [5, 8, 10, 12, 15, 18, 20]) {
-      const r = runXauPullbackBacktest(m5, m15, h1, {
-        ...defaultXauPullbackConfig,
-        spreadPrice: 0.3,
-        accountStartUsd: 200,
-        maxLossPercentPerTrade: capPct,
-      });
-      const avgRiskUsd = r.tradeList.length
-        ? r.tradeList.reduce((s, t) => s + t.riskUsd, 0) / r.tradeList.length
-        : 0;
-      const retPct = ((r.endEquityUsd - 200) / 200) * 100;
+      console.log(`\n=== DỮ LIỆU (${SYMBOL}) — luồng chính xau_trend_pullback ===`);
+      console.log(`M5 : ${m5.length} nến  ${m5[0]?.time} -> ${m5.at(-1)?.time}`);
+      console.log(`M15: ${m15.length} nến  H1: ${h1.length} nến`);
+      const days =
+        (new Date(m5.at(-1)!.time).getTime() - new Date(m5[0]!.time).getTime()) / 86_400_000;
+      console.log(`Khoảng M5 ~ ${days.toFixed(1)} ngày lịch (~${(days / 30).toFixed(2)} tháng)`);
       console.log(
-        `cap=${String(capPct).padStart(2)}% ($${(200 * capPct / 100).toFixed(0)})  capSkip=${String(r.skippedByRiskCap).padStart(2)}  n=${String(r.trades).padStart(2)}  ` +
-        `avgRisk=$${avgRiskUsd.toFixed(1)}(${((avgRiskUsd / 200) * 100).toFixed(1)}%)  ` +
-        `net$=${r.netUsd.toFixed(2)}  return=${retPct.toFixed(1)}%  ddUsd=${r.maxDrawdownUsd.toFixed(2)}(${(r.maxDrawdownUsd / 200 * 100).toFixed(1)}%)`,
+        `Live config: lot=${liveConfig.lot}, vốn=$${liveConfig.accountStartUsd}, ` +
+          `maxLoss=${liveConfig.maxLossPercentPerTrade}%, hold=${liveConfig.maxHoldBars} M5 bars, ` +
+          `cooldown=${liveConfig.cooldownBars} bars, spread=$${liveConfig.spreadPrice}, scalp=OFF`,
       );
-    }
 
-    const base = runXauPullbackBacktest(m5, m15, h1, { ...defaultXauPullbackConfig, spreadPrice: 0.3 });
-    console.log(`\n=== ĐÁNH GIÁ ===`);
-    const verdict =
-      base.trades < 20
-        ? `MẪU QUÁ NHỎ (${base.trades} lệnh, ~${days.toFixed(0)} ngày) — chưa đủ để kết luận.`
-        : base.expectancyR > 0.05
-          ? `Expectancy DƯƠNG (${base.expectancyR}R/lệnh) trên mẫu này.`
-          : base.expectancyR > 0
-            ? `Expectancy dương mỏng (${base.expectancyR}R) — chưa đủ bù chi phí/độ trượt thực tế.`
-            : `Expectancy ÂM (${base.expectancyR}R/lệnh) — chưa có edge trên mẫu này.`;
-    console.log(verdict);
+      console.log(`\n=== BASELINE theo spread (config live) ===`);
+      for (const spread of [0.15, 0.3, 0.5]) {
+        const r = runXauPullbackBacktest(m5, m15, h1, { ...liveConfig, spreadPrice: spread });
+        console.log(line(`spread=${spread}`, r));
+      }
 
-    // Không assert điều kiện lãi/lỗ — test này để ĐO, không phải để pass/fail theo kết quả thị trường.
-    expect(base.trades).toBeGreaterThanOrEqual(0);
-  });
+      console.log(`\n=== ẢNH HƯỞNG NHÁNH SCALP (spread=0.3) ===`);
+      for (const allowScalp of [false, true]) {
+        const r = runXauPullbackBacktest(m5, m15, h1, {
+          ...liveConfig,
+          spreadPrice: 0.3,
+          allowScalp,
+        });
+        console.log(line(`scalp=${allowScalp}`, r));
+      }
+
+      console.log(`\n=== WALK-FORWARD (spread=0.3, scalp OFF, chia 60/40 theo thời gian) ===`);
+      const { splitTime, isTrades, oosTrades } = splitByTime(
+        m5,
+        m15,
+        h1,
+        { ...liveConfig, spreadPrice: 0.3 },
+        0.6,
+      );
+      console.log(`Mốc chia: ${splitTime}`);
+      console.log(`In-sample : ${JSON.stringify(statOf(isTrades))}`);
+      console.log(`Out-sample: ${JSON.stringify(statOf(oosTrades))}`);
+
+      const base = runXauPullbackBacktest(m5, m15, h1, { ...liveConfig, spreadPrice: 0.3 });
+      const maxRisk = base.tradeList.length
+        ? Math.max(...base.tradeList.map((t) => t.riskUsd))
+        : 0;
+      const riskCapUsd = (liveConfig.accountStartUsd * liveConfig.maxLossPercentPerTrade) / 100;
+      console.log(
+        `Risk/lệnh: max=$${maxRisk.toFixed(2)}  (cap ${liveConfig.maxLossPercentPerTrade}% vốn $${liveConfig.accountStartUsd} = $${riskCapUsd} -> ${maxRisk <= riskCapUsd ? "không bind" : "có lệnh bị skip"})`,
+      );
+
+      console.log(`\n=== THEO THÁNG ===`);
+      for (const row of monthlyBuckets(base.tradeList)) {
+        console.log(
+          `${row.month}  n=${row.n}  win%=${row.winRate}  expR=${row.expR}  totR=${row.totalR}  net$=${row.net}`,
+        );
+      }
+
+      console.log(`\n=== QUÉT CAP LỖ/LỆNH tại VỐN $${liveConfig.accountStartUsd} ===`);
+      for (const capPct of [5, 8, 10, 12, 15, 18, 20]) {
+        const r = runXauPullbackBacktest(m5, m15, h1, {
+          ...liveConfig,
+          spreadPrice: 0.3,
+          maxLossPercentPerTrade: capPct,
+        });
+        const avgRiskUsd = r.tradeList.length
+          ? r.tradeList.reduce((s, t) => s + t.riskUsd, 0) / r.tradeList.length
+          : 0;
+        const retPct =
+          ((r.endEquityUsd - liveConfig.accountStartUsd) / liveConfig.accountStartUsd) * 100;
+        console.log(
+          `cap=${String(capPct).padStart(2)}% ($${(liveConfig.accountStartUsd * capPct / 100).toFixed(0)})  ` +
+            `capSkip=${String(r.skippedByRiskCap).padStart(2)}  n=${String(r.trades).padStart(2)}  ` +
+            `avgRisk=$${avgRiskUsd.toFixed(1)}(${((avgRiskUsd / liveConfig.accountStartUsd) * 100).toFixed(1)}%)  ` +
+            `net$=${r.netUsd.toFixed(2)}  return=${retPct.toFixed(1)}%  ddUsd=${r.maxDrawdownUsd.toFixed(2)}(${((r.maxDrawdownUsd / liveConfig.accountStartUsd) * 100).toFixed(1)}%)`,
+        );
+      }
+
+      console.log(`\n=== KẾT QUẢ CHÍNH (config live, spread $0.30) ===`);
+      console.log(
+        JSON.stringify(
+          {
+            periodDays: Number(days.toFixed(1)),
+            periodMonths: Number((days / 30).toFixed(2)),
+            from: m5[0]?.time,
+            to: m5.at(-1)?.time,
+            signalsRaw: base.signalsRaw,
+            skippedByRiskCap: base.skippedByRiskCap,
+            trades: base.trades,
+            wins: base.wins,
+            losses: base.losses,
+            breakeven: base.breakeven,
+            timestop: base.timestop,
+            winRate: base.winRate,
+            expectancyR: base.expectancyR,
+            profitFactor: base.profitFactor,
+            totalR: base.totalR,
+            maxDrawdownR: base.maxDrawdownR,
+            startEquity: liveConfig.accountStartUsd,
+            endEquity: base.endEquityUsd,
+            netUsd: base.netUsd,
+            netPct: Number(
+              (
+                ((base.endEquityUsd - liveConfig.accountStartUsd) / liveConfig.accountStartUsd) *
+                100
+              ).toFixed(2),
+            ),
+            maxDrawdownUsd: base.maxDrawdownUsd,
+            recentTrades: base.tradeList.slice(-8),
+          },
+          null,
+          2,
+        ),
+      );
+
+      console.log(`\n=== ĐÁNH GIÁ ===`);
+      const verdict =
+        base.trades < 20
+          ? `MẪU QUÁ NHỎ (${base.trades} lệnh, ~${days.toFixed(0)} ngày) — chưa đủ để kết luận.`
+          : base.expectancyR > 0.05
+            ? `Expectancy DƯƠNG (${base.expectancyR}R/lệnh) trên mẫu ~${(days / 30).toFixed(1)} tháng.`
+            : base.expectancyR > 0
+              ? `Expectancy dương mỏng (${base.expectancyR}R) — chưa đủ bù chi phí/độ trượt thực tế.`
+              : `Expectancy ÂM (${base.expectancyR}R/lệnh) — chưa có edge trên mẫu này.`;
+      console.log(verdict);
+
+      expect(base.trades).toBeGreaterThanOrEqual(0);
+    },
+    300_000,
+  );
 });

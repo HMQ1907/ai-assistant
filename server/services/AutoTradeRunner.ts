@@ -25,6 +25,11 @@ import {
   type RuleSignal,
   type XauTrendPullbackSetup,
 } from "../strategy/ruleStrategy";
+import {
+  evaluateXauMicroScalpSignal,
+  explainXauMicroScalpRejection,
+  microScalpConfigForSymbol,
+} from "../strategy/xauMicroScalpStrategy";
 import { AiAnalysisService } from "./AiAnalysisService";
 import {
   runActiveSymbolOrderReviews,
@@ -36,7 +41,6 @@ import { MarketDataService } from "./MarketDataService";
 import { Mt5OrderService } from "./Mt5OrderService";
 import { OpportunityPayloadBuilder } from "./OpportunityPayloadBuilder";
 import { SupabaseService } from "./SupabaseService";
-import { TelegramService } from "./TelegramService";
 import { isInsideTradeScannerWindow, isScannerSlot } from "./TradeScannerService";
 import { symbolCodeFromMt5Symbol, symbolLabel } from "../utils/symbols";
 
@@ -57,6 +61,7 @@ export class AutoTradeRunner {
   private lastEvaluatedH1 = "";
   private lastEvaluatedM15 = "";
   private lastEvaluatedM5 = "";
+  private lastEvaluatedM1 = "";
   private lastM1ScalpTime = "";
   private dayKey = "";
   private dayBaselineEquity = 0;
@@ -455,6 +460,10 @@ export class AutoTradeRunner {
 
       const account = await orderService.getAccount();
       this.rollDay(config.tradeScannerTimezone, account.equity);
+      const riskAccountUsd = resolveRiskAccountUsd(
+        account.equity,
+        config.accountSizeUsd,
+      );
       if (!account.tradeAllowed) {
         console.warn("[auto-bot] AutoTrading is OFF in MT5.");
         await this.notifyError(
@@ -465,7 +474,7 @@ export class AutoTradeRunner {
         return;
       }
       if (this.haltedForDay) {
-        console.info("[auto-bot] daily trade/loss limit reached, stop opening new trades.");
+        console.info("[auto-bot] daily trade/loss/profit limit reached, stop opening new trades.");
         return;
       }
       const dailyLossLimitUsd = resolveDailyLossLimitUsd(
@@ -473,6 +482,21 @@ export class AutoTradeRunner {
         config.autoMaxDailyLossUsd,
         config.autoMaxDailyLossPercent,
       );
+      const dailyProfitTargetUsd = Number(config.autoMaxDailyProfitUsd || 0);
+      if (
+        dailyProfitTargetUsd > 0 &&
+        this.dayBaselineEquity > 0 &&
+        account.equity >= this.dayBaselineEquity + dailyProfitTargetUsd
+      ) {
+        this.haltedForDay = true;
+        console.info(
+          `[auto-bot] daily profit target reached (+${dailyProfitTargetUsd.toFixed(2)} USD) — stop new trades.`,
+        );
+        await this.notifyAction(
+          `Daily profit target hit (+${dailyProfitTargetUsd.toFixed(2)} USD). Auto-bot paused for today.`,
+        );
+        return;
+      }
       if (
         this.dayBaselineEquity > 0 &&
         account.equity <= this.dayBaselineEquity - dailyLossLimitUsd
@@ -545,7 +569,7 @@ export class AutoTradeRunner {
       if (!isInsideTradeScannerWindow()) return;
       if (!isScannerSlot()) {
         console.info(
-          `[auto-bot] skipped new setup scan: waiting for ${config.tradeScannerIntervalMinutes}m scan slot. Active-order management still runs every 5m.`,
+          `[auto-bot] skipped new setup scan: waiting for ${config.tradeScannerIntervalMinutes}m scan slot. Active-order management still runs every 1m.`,
         );
         return;
       }
@@ -570,6 +594,7 @@ export class AutoTradeRunner {
       const h4 = snapshot.candles.H4;
       const m15 = snapshot.candles.M15;
       const m5 = snapshot.candles.M5;
+      const m1 = snapshot.candles.M1 ?? [];
       const strategy = {
         ...defaultRuleStrategyConfig,
         rrTarget: tradingRules.minRiskReward,
@@ -583,13 +608,35 @@ export class AutoTradeRunner {
         ? "M15 candle not evaluated yet"
         : "M15 disabled";
       const strategyMode =
-        String(config.autoStrategyMode).toLowerCase() === "xau_trend_pullback"
-          ? "xau_trend_pullback"
-          : String(config.autoStrategyMode).toLowerCase() === "balanced"
-            ? "balanced"
-            : "strict";
+        String(config.autoStrategyMode).toLowerCase() === "xau_micro_scalp"
+          ? "xau_micro_scalp"
+          : String(config.autoStrategyMode).toLowerCase() === "xau_trend_pullback"
+            ? "xau_trend_pullback"
+            : String(config.autoStrategyMode).toLowerCase() === "balanced"
+              ? "balanced"
+              : "strict";
+      const minRr =
+        strategyMode === "xau_micro_scalp"
+          ? microScalpConfigForSymbol(config.mt5Symbol).minRr
+          : tradingRules.minRiskReward;
 
-      if (strategyMode === "xau_trend_pullback") {
+      if (strategyMode === "xau_micro_scalp") {
+        h1RejectReason = "micro-scalp uses H1+M15 EMA50 bias filter";
+        const scalpConfig = microScalpConfigForSymbol(config.mt5Symbol);
+        const latestM1 = m1.at(-1)?.time ?? "";
+        if (latestM1 && latestM1 !== this.lastEvaluatedM1) {
+          this.lastEvaluatedM1 = latestM1;
+          const nextSignal = evaluateXauMicroScalpSignal(m1, m15, h1, scalpConfig);
+          if (nextSignal) {
+            this.pendingSetup = null;
+            signal = nextSignal;
+            entryCandles = m1;
+            entryTf = "M1";
+          } else {
+            m15RejectReason = explainXauMicroScalpRejection(m1, m15, h1, scalpConfig);
+          }
+        }
+      } else if (strategyMode === "xau_trend_pullback") {
         h1RejectReason = "XAU rule uses H1 as trend filter";
         const latestM5 = m5.at(-1)?.time ?? "";
         if (latestM5 && latestM5 !== this.lastEvaluatedM5) {
@@ -677,11 +724,23 @@ export class AutoTradeRunner {
         }
       }
       if (!signal) {
-        const secondaryLabel = strategyMode === "balanced" ? "Balanced" : "M15";
+        const secondaryLabel =
+          strategyMode === "balanced"
+            ? "Balanced"
+            : strategyMode === "xau_micro_scalp"
+              ? "MicroScalp"
+              : "M15";
         console.info(
           `[auto-bot] no setup for ${activeSymbolLabel} (${strategyMode}). H1: ${h1RejectReason}. ${secondaryLabel}: ${m15RejectReason}.`,
         );
         return;
+      }
+      if (strategyMode !== "xau_micro_scalp") {
+        signal = applyXauSellTpTarget(
+          signal,
+          config.autoXauSellTpTarget,
+          minRr,
+        );
       }
       console.info(
         `[auto-bot] setup found ${activeSymbolLabel} (${strategyMode}): ${entryTf} ${signal.direction} entry ${signal.entry} SL ${signal.stopLoss} TP ${signal.takeProfit}`,
@@ -698,7 +757,7 @@ export class AutoTradeRunner {
         market,
         indicators,
         emptyNews(),
-        config.accountSizeUsd,
+        riskAccountUsd,
         config.maxLossPercentPerTrade,
       );
 
@@ -716,7 +775,7 @@ export class AutoTradeRunner {
             entryTimeframe: entryTf,
             conviction,
             lot,
-            minRiskReward: tradingRules.minRiskReward,
+            minRiskReward: minRr,
             allowedLots: uniqueLots([config.autoLotGood, config.autoLotVeryGood]),
           });
 
@@ -740,8 +799,8 @@ export class AutoTradeRunner {
           const validationError = validateAdjustedAutoTrade(
             signal.direction,
             adjusted,
-            tradingRules.minRiskReward,
-            [config.autoLotGood, config.autoLotVeryGood],
+            minRr,
+            uniqueLots([config.autoLotGood, config.autoLotVeryGood]),
           );
           if (validationError) {
             console.info(`[auto-bot] rules-engine trade invalid after AI ALLOW -> skip: ${validationError}`);
@@ -763,11 +822,11 @@ export class AutoTradeRunner {
             entry: signal.entry,
             stopLoss: signal.stopLoss,
             lot: finalLot,
-            accountSizeUsd: config.accountSizeUsd,
+            accountSizeUsd: riskAccountUsd,
             maxLossPercentPerTrade: riskPercentForSignal(signal, config.maxLossPercentPerTrade),
           });
           console.info(
-            `[auto-bot] risk check ${activeSymbolLabel}: estimated loss ${riskCheck.estimatedLossUsd} USD, max allowed ${riskCheck.maxLossUsd} USD.`,
+            `[auto-bot] risk check ${activeSymbolLabel}: estimated loss ${riskCheck.estimatedLossUsd} USD, max allowed ${riskCheck.maxLossUsd} USD (equity ${riskAccountUsd}).`,
           );
           if (!riskCheck.allowed) {
             const message = `SKIP: estimated loss ${riskCheck.estimatedLossUsd} USD exceeds max loss ${riskCheck.maxLossUsd} USD`;
@@ -864,7 +923,7 @@ export class AutoTradeRunner {
           risk_reward: rewardRisk(signal.direction, signal.entry, signal.stopLoss, signal.takeProfit),
           reason: signal.reason,
         },
-        tradingRules.minRiskReward,
+        minRr,
         [config.autoLotGood, config.autoLotVeryGood],
       );
       if (validationError) {
@@ -882,11 +941,11 @@ export class AutoTradeRunner {
         entry: signal.entry,
         stopLoss: signal.stopLoss,
         lot,
-        accountSizeUsd: config.accountSizeUsd,
+        accountSizeUsd: riskAccountUsd,
         maxLossPercentPerTrade: riskPercentForSignal(signal, config.maxLossPercentPerTrade),
       });
       console.info(
-        `[auto-bot] risk check ${activeSymbolLabel}: estimated loss ${riskCheck.estimatedLossUsd} USD, max allowed ${riskCheck.maxLossUsd} USD.`,
+        `[auto-bot] risk check ${activeSymbolLabel}: estimated loss ${riskCheck.estimatedLossUsd} USD, max allowed ${riskCheck.maxLossUsd} USD (equity ${riskAccountUsd}).`,
       );
       if (!riskCheck.allowed) {
         const message = `SKIP: estimated loss ${riskCheck.estimatedLossUsd} USD exceeds max loss ${riskCheck.maxLossUsd} USD`;
@@ -1018,7 +1077,7 @@ export class AutoTradeRunner {
       return;
     }
 
-    const signal = evaluateXauTrendPullbackTriggerSignal(
+    let signal = evaluateXauTrendPullbackTriggerSignal(
       m5,
       m15,
       h1,
@@ -1031,6 +1090,12 @@ export class AutoTradeRunner {
       );
       return;
     }
+
+    signal = applyXauSellTpTarget(
+      signal,
+      config.autoXauSellTpTarget,
+      tradingRules.minRiskReward,
+    );
 
     console.info(
       `[auto-bot] pending setup triggered: ${activeSymbolLabel} M5 ${signal.direction} entry ${signal.entry} SL ${signal.stopLoss} TP ${signal.takeProfit}`,
@@ -1061,6 +1126,11 @@ export class AutoTradeRunner {
     symbol: SymbolCode;
   }): Promise<boolean> {
     const config = useRuntimeConfig();
+    const account = await input.orderService.getAccount();
+    const riskAccountUsd = resolveRiskAccountUsd(
+      account.equity,
+      config.accountSizeUsd,
+    );
     const strategy = {
       ...defaultRuleStrategyConfig,
       rrTarget: tradingRules.minRiskReward,
@@ -1080,7 +1150,7 @@ export class AutoTradeRunner {
       input.market,
       indicators,
       emptyNews(),
-      config.accountSizeUsd,
+      riskAccountUsd,
       config.maxLossPercentPerTrade,
     );
 
@@ -1172,11 +1242,11 @@ export class AutoTradeRunner {
       entry: input.signal.entry,
       stopLoss: input.signal.stopLoss,
       lot,
-      accountSizeUsd: config.accountSizeUsd,
+      accountSizeUsd: riskAccountUsd,
       maxLossPercentPerTrade: riskPercentForSignal(input.signal, config.maxLossPercentPerTrade),
     });
     console.info(
-      `[auto-bot] pending trigger risk check ${input.activeSymbolLabel}: estimated loss ${riskCheck.estimatedLossUsd} USD, max allowed ${riskCheck.maxLossUsd} USD.`,
+      `[auto-bot] pending trigger risk check ${input.activeSymbolLabel}: estimated loss ${riskCheck.estimatedLossUsd} USD, max allowed ${riskCheck.maxLossUsd} USD (equity ${riskAccountUsd}).`,
     );
     if (!riskCheck.allowed) {
       const message = `SKIP pending trigger: estimated loss ${riskCheck.estimatedLossUsd} USD exceeds max loss ${riskCheck.maxLossUsd} USD`;
@@ -1498,44 +1568,23 @@ export class AutoTradeRunner {
   }
 
   private async notifyError(
-    config: { telegramBotToken: string; telegramChatId: string },
+    _config: { telegramBotToken: string; telegramChatId: string },
     key: string,
     message: string,
   ): Promise<void> {
-    if (!config.telegramBotToken || !config.telegramChatId) return;
+    // Auto-bot enters silently — log only, no Telegram.
     const now = Date.now();
     if (this.lastErrorKey === key && now - this.lastErrorNotifyAt < 30 * 60_000) {
       return;
     }
     this.lastErrorKey = key;
     this.lastErrorNotifyAt = now;
-    try {
-      await new TelegramService({
-        botToken: config.telegramBotToken,
-        chatId: config.telegramChatId,
-      }).sendMessage(`Auto-bot: ${message}`);
-    } catch (error) {
-      console.warn(
-        "[auto-bot] failed sending Telegram alert:",
-        error instanceof Error ? error.message : error,
-      );
-    }
+    console.warn(`[auto-bot] ${message}`);
   }
 
   private async notifyAction(message: string): Promise<void> {
-    const config = useRuntimeConfig();
-    if (!config.telegramBotToken || !config.telegramChatId) return;
-    try {
-      await new TelegramService({
-        botToken: config.telegramBotToken,
-        chatId: config.telegramChatId,
-      }).sendMessage(`Auto-bot order management:\n${message}`);
-    } catch (error) {
-      console.warn(
-        "[auto-bot] failed sending order-management Telegram message:",
-        error instanceof Error ? error.message : error,
-      );
-    }
+    // Auto-bot manages orders silently — log only, no Telegram.
+    console.info(`[auto-bot] ${message}`);
   }
 
   private rollDay(timeZone: string, equity: number): void {
@@ -1703,7 +1752,13 @@ export function isHighImpactCalendarEvent(
   impacts: Set<string>,
 ): boolean {
   const normalizedImpact = impact.trim().toUpperCase();
-  if (impacts.has(normalizedImpact)) return true;
+  // Khi calendar đã cung cấp mức impact thì tôn trọng cấu hình người dùng.
+  // Ví dụ: "ADP Weekly Employment Change" có thể mang tên giống tin lao động
+  // quan trọng, nhưng nếu provider đánh dấu Low thì không được tự nâng lên High.
+  if (normalizedImpact) return impacts.has(normalizedImpact);
+
+  // Chỉ suy đoán theo tên khi provider không có field impact (một số calendar
+  // cũ/incomplete). Đây là fallback an toàn cho các tin thực sự quan trọng.
   const title = label.toUpperCase();
   return [
     "CPI",
@@ -1848,7 +1903,7 @@ export function validateAdjustedAutoTrade(
     trade.stop_loss,
     trade.take_profit,
   );
-  if (!Number.isFinite(actualRr) || actualRr < minRiskReward) {
+  if (!Number.isFinite(actualRr) || actualRr + 1e-4 < minRiskReward) {
     return `actual RR ${actualRr.toFixed(2)} is below minimum 1:${minRiskReward}`;
   }
 
@@ -1881,10 +1936,41 @@ export function rewardRisk(
   return reward / risk;
 }
 
+export function applyXauSellTpTarget(
+  signal: RuleSignal,
+  target: number,
+  minRiskReward: number,
+): RuleSignal {
+  if (
+    signal.direction !== "SELL" ||
+    !Number.isFinite(target) ||
+    target <= 0 ||
+    signal.entry <= target
+  ) {
+    return signal;
+  }
+  const rr = rewardRisk("SELL", signal.entry, signal.stopLoss, target);
+  if (!Number.isFinite(rr) || rr < minRiskReward) {
+    return signal;
+  }
+  return {
+    ...signal,
+    takeProfit: target,
+    reason: `${signal.reason}; SELL TP set to ${target}`,
+  };
+}
+
 export function riskPercentForSignal(
   signal: RuleSignal,
   defaultMaxLossPercent: number,
 ): number {
+  // Micro-scalp vàng trên acc rất nhỏ cần % cao; EURUSD lot 0.05 / SL 5 pip nhẹ hơn.
+  if (signal.reason.includes("MICRO_SCALP")) {
+    if (signal.reason.includes("EURUSD")) {
+      return Math.max(defaultMaxLossPercent, 15);
+    }
+    return Math.max(defaultMaxLossPercent, 40);
+  }
   if (signal.strategyKind === "REVERSAL_SCALP") {
     return Math.min(defaultMaxLossPercent, 10);
   }
@@ -1895,7 +1981,7 @@ export function riskPercentForSignal(
 
 export function highSpreadBlockReason(snapshot: MarketSnapshot): string | null {
   if (snapshot.spread === null || !Number.isFinite(snapshot.spread)) return null;
-  // Vàng M5: spread > 0.5 USD ăn mòn quá nhiều expectancy của lệnh scalp/pullback.
+  // Vàng: spread > 0.5 USD; EURUSD: > 3 pip (0.0003) ăn mòn scalp 5 pip.
   const maxSpread = snapshot.symbol === "XAUUSD" ? 0.5 : 0.0003;
   return snapshot.spread > maxSpread
     ? `SKIP: spread ${snapshot.spread} exceeds max allowed ${maxSpread}`
@@ -1948,6 +2034,19 @@ export function checkAutoRisk(input: AutoRiskCheckInput): AutoRiskCheck {
     estimatedLossUsd,
     maxLossUsd,
   };
+}
+
+/** Ưu tiên equity MT5 thật; fallback ACCOUNT_SIZE_USD khi bridge chưa có số. */
+export function resolveRiskAccountUsd(
+  liveEquity: number | null | undefined,
+  configuredAccountSizeUsd: number,
+): number {
+  if (Number.isFinite(liveEquity) && Number(liveEquity) > 0) {
+    return Number(liveEquity);
+  }
+  return Number.isFinite(configuredAccountSizeUsd) && configuredAccountSizeUsd > 0
+    ? configuredAccountSizeUsd
+    : tradingRules.defaultAccountSizeUsd;
 }
 
 export function checkAggregateDailyRisk(input: {

@@ -1,20 +1,17 @@
-import type { AiOrderReview, AiTradeRecommendation, OrderReviewAction } from "../../types/ai";
-import type { ActiveMt5Order } from "../../types/trading";
+import type { AiTradeRecommendation } from "../../types/ai";
 import { tradingRules } from "../config/tradingRules";
 import { parseRiskReward } from "../utils/risk";
-import { runActiveSymbolOrderReviews } from "./ActiveOrderReviewRunner";
-import { Mt5OrderService } from "./Mt5OrderService";
-import { runTradingAnalysis } from "./TradingAnalysisRunner";
+import { runRuleSignalScan } from "./RuleSignalService";
 import { TelegramService } from "./TelegramService";
 
+/**
+ * Manual signal scanner: mỗi N phút (mặc định 5, sau khi nến M5 đóng) chạy
+ * Rule Engine. Chỉ gửi Telegram khi có TRADE hợp lệ. Không đặt lệnh MT5.
+ */
 export class TradeScannerService {
   private running = false;
   private lastSignalSignature: string | null = null;
   private lastSignalAt = 0;
-  // Focus mode: khi dang co lenh tren MT5, theo doi lenh do thay vi quet tin hieu moi.
-  private focusLastReviewAt = 0;
-  private focusNextCheckMin = 0;
-  private readonly focusSentSignatures = new Map<number, string>();
 
   async scanOnce(): Promise<void> {
     if (this.running) return;
@@ -23,37 +20,12 @@ export class TradeScannerService {
     try {
       const config = useRuntimeConfig();
 
-      // 1) Co lenh XAUUSD dang cho/dang mo tren MT5 chua? (probe re, khong goi AI)
-      let activeOrders: ActiveMt5Order[] = [];
-      try {
-        activeOrders = await new Mt5OrderService({
-          bridgeUrl: config.mt5BridgeUrl,
-          symbol: config.mt5Symbol,
-        }).getActiveOrders();
-      } catch (error) {
-        console.warn(
-          "[trade-scanner] focus probe failed, fallback to scan:",
-          error instanceof Error ? error.message : error,
-        );
-      }
-
-      // 2) Co lenh -> focus theo doi lenh do, KHONG quet tin hieu moi (chay ca ngoai khung gio).
-      if (activeOrders.length > 0) {
-        await this.monitorActiveOrders(config);
-        return;
-      }
-      this.resetFocus();
-
-      // 3) Khong co lenh: chi quet tim setup moi trong khung gio cho phep.
       if (!isInsideTradeScannerWindow()) {
         console.info("[trade-scanner] silent: ngoài khung giờ quét");
         return;
       }
 
-      const analysis = await runTradingAnalysis({
-        symbol: "XAUUSD",
-        accountSizeUsd: config.accountSizeUsd,
-      });
+      const analysis = await runRuleSignalScan({});
 
       const reason = this.rejectReason(analysis.result);
       if (reason) {
@@ -71,7 +43,6 @@ export class TradeScannerService {
         chatId: config.telegramChatId,
       });
       await telegram.sendMessage(formatTelegramAlert(analysis.result, analysis.history.id));
-      await telegram.sendMessage(formatCheckCommand(analysis.history.id));
       console.info("[trade-scanner] telegram alert sent");
     } catch (error) {
       await this.notifyFailure(error);
@@ -99,11 +70,11 @@ export class TradeScannerService {
         [
           "XAUUSD scanner error",
           "",
-          "Scanner đang tới giờ chạy nhưng bị lỗi, nên không tạo được tín hiệu.",
+          "Scanner tới giờ chạy nhưng lỗi — không gửi được tín hiệu.",
           "",
           `Lỗi: ${safeMessage}`,
           "",
-          "Kiểm tra lại npm run mt5:bridge, MT5 terminal, Gemini/Evolink API key hoặc network.",
+          "Kiểm tra: npm run mt5:bridge, MT5 terminal, Supabase, network.",
         ].join("\n"),
       );
     } catch (telegramError) {
@@ -114,56 +85,6 @@ export class TradeScannerService {
     }
   }
 
-  // Focus mode: review cac lenh dang active, day Telegram "nen lam gi tiep".
-  // Gian nhip goi AI theo next_check_minutes de tiet kiem quota.
-  private async monitorActiveOrders(config: {
-    telegramBotToken: string;
-    telegramChatId: string;
-  }): Promise<void> {
-    const now = Date.now();
-    if (
-      this.focusLastReviewAt > 0 &&
-      now - this.focusLastReviewAt < this.focusNextCheckMin * 60_000
-    ) {
-      console.info("[trade-scanner] focus: chưa tới giờ review lại lệnh");
-      return;
-    }
-
-    const { reviews } = await runActiveSymbolOrderReviews();
-    if (reviews.length === 0) return;
-
-    this.focusLastReviewAt = now;
-    this.focusNextCheckMin = Math.max(
-      5,
-      Math.min(...reviews.map((item) => item.review.next_check_minutes || 15)),
-    );
-
-    const telegram = new TelegramService({
-      botToken: config.telegramBotToken,
-      chatId: config.telegramChatId,
-    });
-
-    for (const item of reviews) {
-      const signature = reviewSignature(item.review);
-      const actionable = isActionableReview(item.review.recommended_action);
-      // Khuyen nghi can hanh dong -> luon bao. Khong thi chi bao khi loi khuyen DOI.
-      if (!actionable && this.focusSentSignatures.get(item.order.ticket) === signature) {
-        continue;
-      }
-      this.focusSentSignatures.set(item.order.ticket, signature);
-      await telegram.sendMessage(formatActiveOrderAlert(item.order, item.review));
-    }
-    console.info(`[trade-scanner] focus: reviewed ${reviews.length} active order(s)`);
-  }
-
-  private resetFocus(): void {
-    this.focusLastReviewAt = 0;
-    this.focusNextCheckMin = 0;
-    this.focusSentSignatures.clear();
-  }
-
-  // Cung mot setup H1 song nhieu gio nen se hien ra o nhieu lan quet lien tiep.
-  // Chi bao mot lan trong cua so dedup; setup moi/doi (huong, entry, SL khac) thi bao lai.
   private isDuplicateSignal(
     recommendation: AiTradeRecommendation,
     dedupMinutes: number,
@@ -181,17 +102,9 @@ export class TradeScannerService {
 
   private rejectReason(recommendation: AiTradeRecommendation): string | null {
     const config = useRuntimeConfig();
-    if (recommendation.decision !== "TRADE") return "NO_TRADE";
-    if (recommendation.confidence < config.tradeScannerMinConfidence) {
-      return `confidence ${recommendation.confidence} < ${config.tradeScannerMinConfidence}`;
-    }
-    if (
-      (recommendation.estimated_win_probability ?? recommendation.confidence) <
-      config.tradeScannerMinWinProbability
-    ) {
-      return `win probability ${
-        recommendation.estimated_win_probability ?? recommendation.confidence
-      } < ${config.tradeScannerMinWinProbability}`;
+    if (recommendation.decision !== "TRADE") {
+      const detail = recommendation.no_trade_reason || recommendation.summary || "NO_TRADE";
+      return detail.slice(0, 160);
     }
     const riskReward = parseRiskReward(recommendation.risk_reward ?? "");
     if (riskReward < config.tradeScannerMinRiskReward) {
@@ -234,88 +147,24 @@ export function isInsideTradeScannerWindow(date = new Date()): boolean {
   );
 }
 
+/** Slot ngay sau khi nến đóng (giây 3–12) theo chu kỳ INTERVAL phút. */
 export function isScannerSlot(date = new Date()): boolean {
   const config = useRuntimeConfig();
   const parts = new Intl.DateTimeFormat("en-US", {
     minute: "2-digit",
     second: "2-digit",
+    hour12: false,
     timeZone: config.tradeScannerTimezone,
   }).formatToParts(date);
   const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
   const second = Number(parts.find((part) => part.type === "second")?.value ?? 0);
-  return second < 10 && minute % config.tradeScannerIntervalMinutes === 0;
-}
-
-const ACTION_LABEL: Record<OrderReviewAction, string> = {
-  KEEP_ORDER: "Giữ nguyên lệnh",
-  CANCEL_ORDER: "HỦY lệnh chờ",
-  MOVE_SL: "Dời Stop Loss",
-  MOVE_TP: "Dời Take Profit",
-  MOVE_SL_TP: "Dời cả SL và TP",
-  WAIT: "Chờ thêm",
-  CLOSE_MANUALLY: "ĐÓNG lệnh thủ công",
-  TRADE_COMPLETED: "Lệnh đã kết thúc",
-};
-
-const STATUS_LABEL: Record<string, string> = {
-  LIKELY_NOT_FILLED: "Nhiều khả năng chưa khớp",
-  LIKELY_FILLED: "Nhiều khả năng đã khớp",
-  ALREADY_INVALIDATED: "Setup đã bị vô hiệu",
-  UNCLEAR: "Chưa rõ",
-};
-
-function isActionableReview(action: OrderReviewAction): boolean {
-  return (
-    action === "CANCEL_ORDER" ||
-    action === "CLOSE_MANUALLY" ||
-    action === "MOVE_SL" ||
-    action === "MOVE_TP" ||
-    action === "MOVE_SL_TP" ||
-    action === "TRADE_COMPLETED"
-  );
-}
-
-function reviewSignature(review: AiOrderReview): string {
-  return [
-    review.recommended_action,
-    review.order_status_assessment,
-    review.stop_loss_plan.suggested_stop_loss ?? "x",
-    review.take_profit_plan.suggested_take_profit ?? "x",
-  ].join("|");
-}
-
-function formatActiveOrderAlert(order: ActiveMt5Order, review: AiOrderReview): string {
-  const lines = [
-    `XAUUSD theo dõi lệnh #${order.ticket}`,
-    "",
-    `${order.direction} ${order.type} @ ${order.price_open}`,
-    `Trạng thái: ${STATUS_LABEL[review.order_status_assessment] ?? review.order_status_assessment}`,
-    `Khuyến nghị: ${ACTION_LABEL[review.recommended_action] ?? review.recommended_action}`,
-    "",
-    review.action_reason || review.summary,
-  ];
-
-  if (!review.stop_loss_plan.keep_current && review.stop_loss_plan.suggested_stop_loss !== null) {
-    lines.push(`SL đề xuất: ${review.stop_loss_plan.suggested_stop_loss} (${review.stop_loss_plan.reason})`);
-  }
-  if (!review.take_profit_plan.keep_current && review.take_profit_plan.suggested_take_profit !== null) {
-    lines.push(`TP đề xuất: ${review.take_profit_plan.suggested_take_profit} (${review.take_profit_plan.reason})`);
-  }
-  if (review.cancellation_conditions.length > 0) {
-    lines.push("", "Điều kiện hủy:");
-    lines.push(...review.cancellation_conditions.map((item) => `- ${item}`));
-  }
-
-  lines.push("", `Check lại sau: ${review.next_check_minutes} phút`);
-  lines.push("Đây là theo dõi tự động lệnh bạn đang ôm, không phải lệnh tự động.");
-  return lines.join("\n");
+  const interval = Math.max(1, config.tradeScannerIntervalMinutes);
+  return second >= 3 && second < 13 && minute % interval === 0;
 }
 
 function signalSignature(recommendation: AiTradeRecommendation): string {
   const bucket = (value: number | null): string => {
     if (value === null || !Number.isFinite(value)) return "x";
-    // Vang gom theo $5, cap nho (EURUSD) theo 0.0010 — chenh nho hon coi la cung setup.
-    // ($1 tung de lot 6 tin hieu gan-giong-nhau trong 3h ngay 23/06 vi entry troi nhe moi lan quet.)
     return Math.abs(value) >= 100
       ? String(Math.round(value / 5) * 5)
       : String(Math.round(value * 1000) / 1000);
@@ -331,39 +180,36 @@ function signalSignature(recommendation: AiTradeRecommendation): string {
 
 function formatTelegramAlert(recommendation: AiTradeRecommendation, historyId: string): string {
   const entry = recommendation.entry_zone
-    ? `${recommendation.entry_zone.from} - ${recommendation.entry_zone.to}`
+    ? `${recommendation.entry_zone.from}`
     : "N/A";
-  const winProbability =
-    recommendation.estimated_win_probability ?? recommendation.confidence;
   const cancelAfter = recommendation.cancel_after_minutes
     ? `${recommendation.cancel_after_minutes} phút`
     : "Theo invalid conditions";
 
   return [
-    "XAUUSD setup alert",
+    "XAUUSD Rule Engine signal",
     "",
     `${recommendation.direction} ${recommendation.order_type}`,
-    `Confidence: ${recommendation.confidence}%`,
-    `Win probability: ${winProbability}%`,
     `RR: ${recommendation.risk_reward ?? `>= 1:${tradingRules.minRiskReward}`}`,
-    `Current: ${recommendation.current_price}`,
+    `Giá hiện tại: ${recommendation.current_price}`,
     `Entry: ${entry}`,
     `SL: ${recommendation.stop_loss}`,
     `TP: ${recommendation.take_profit}`,
-    `Cancel after: ${cancelAfter}`,
+    `Hủy sau: ${cancelAfter}`,
     "",
     `Lý do: ${recommendation.trade_reason || recommendation.summary}`,
     "",
     "Điều kiện hủy:",
-    ...recommendation.invalid_conditions.map((item) => `- ${item}`),
+    ...(recommendation.invalid_conditions.length
+      ? recommendation.invalid_conditions.map((item) => `- ${item}`)
+      : ["- (không có)"]),
     "",
+    ...(recommendation.risk_factors.length
+      ? ["Cảnh báo:", ...recommendation.risk_factors.map((item) => `- ${item}`), ""]
+      : []),
     `Signal ID: ${historyId}`,
-    "Đây là alert để bạn tự duyệt, không phải lệnh tự động.",
+    "Chỉ là tín hiệu — bạn tự quyết định lot và vào lệnh trên MT5.",
   ].join("\n");
-}
-
-function formatCheckCommand(historyId: string): string {
-  return `/check "${historyId}"`;
 }
 
 function parseTradeScannerWindows(

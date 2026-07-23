@@ -19,16 +19,19 @@ import {
   explainXauTrendPullbackRejection,
   type RuleSignal,
 } from "../strategy/ruleStrategy";
+import {
+  evaluateXauMicroScalpSignal,
+  explainXauMicroScalpRejection,
+  microScalpConfigForSymbol,
+} from "../strategy/xauMicroScalpStrategy";
 import { symbolCodeFromMt5Symbol, symbolLabel } from "../utils/symbols";
 import { AiAnalysisService } from "./AiAnalysisService";
 import { AnalysisHistoryService } from "./AnalysisHistoryService";
 import {
   buildAutoRecommendation,
-  checkAutoRisk,
   emptyNews,
   highSpreadBlockReason,
   rewardRisk,
-  riskPercentForSignal,
   uniqueLots,
   validateAdjustedAutoTrade,
 } from "./AutoTradeRunner";
@@ -39,19 +42,15 @@ import { SupabaseService } from "./SupabaseService";
 import { isInsideTradeScannerWindow } from "./TradeScannerService";
 
 /**
- * Luồng manual "Quét setup theo Rule Engine": CÙNG rules engine + CÙNG chuỗi
- * kiểm tra an toàn với auto-bot (validate RR, spread, quote-age, risk-cap,
- * AI veto), nhưng chạy theo một lần bấm nút và KHÔNG đặt lệnh — người dùng
- * tự quyết định trên MT5.
+ * Luồng manual signal (UI + Telegram scanner): Rule Engine tìm setup đẹp,
+ * KHÔNG đặt lệnh. Người dùng tự quản trị vốn/lot trên MT5.
  *
- * Khác biệt có chủ đích so với auto-bot:
- *   - Không dedupe theo nến (bấm lúc nào đánh giá nến đóng mới nhất lúc đó).
- *   - Không chặn ngoài khung giờ quét — chỉ CẢNH BÁO, vì người bấm tự chịu
- *     trách nhiệm; bot thì bị chặn cứng.
- *   - AI veto lỗi (timeout/quota) -> vẫn trả tín hiệu kèm cảnh báo đỏ, vì
- *     người dùng chính là lớp phê duyệt cuối; bot thì fail-closed.
- * Kết quả trả về đúng shape AiTradeRecommendation nên UI + SignalOutcomeTracker
- * + vòng tự hiệu chỉnh dùng lại nguyên vẹn.
+ * Kiểm tra còn giữ: data quality, quote age, RR/SL/TP geometry, spread.
+ * Không chặn theo risk-cap/lot (bạn tự size). AI veto chỉ chạy nếu AUTO_AI_VETO=true.
+ *
+ * Khác scanner nền:
+ *   - Bấm tay: không dedupe; ngoài khung giờ chỉ CẢNH BÁO.
+ *   - Scanner: cứng trong khung giờ + dedupe trước khi gửi Telegram.
  */
 export interface RuleSignalScanInput {
   accountSizeUsd?: number | undefined;
@@ -129,6 +128,10 @@ export async function runRuleSignalScan(input: RuleSignalScanInput) {
 
   // ===== Đánh giá rule engine theo đúng mode của bot =====
   const evaluation = evaluateByStrategyMode(config, snapshot);
+  const minRr =
+    evaluation.mode === "xau_micro_scalp"
+      ? microScalpConfigForSymbol(config.mt5Symbol).minRr
+      : tradingRules.minRiskReward;
 
   if (!evaluation.signal) {
     // Kèo mạo hiểm tất định: thử nhánh scalp (vốn bị tắt khỏi luồng chính).
@@ -160,7 +163,7 @@ export async function runRuleSignalScan(input: RuleSignalScanInput) {
   const entryTf = evaluation.entryTf;
   const strategy = {
     ...defaultRuleStrategyConfig,
-    rrTarget: tradingRules.minRiskReward,
+    rrTarget: minRr,
   };
   const conviction = convictionScore(
     evaluation.entryCandles,
@@ -168,19 +171,16 @@ export async function runRuleSignalScan(input: RuleSignalScanInput) {
     signal,
     strategy,
   );
-  const lot =
-    conviction >= config.autoVeryGoodMinConviction
-      ? config.autoLotVeryGood
-      : config.autoLotGood;
+  // Lot chỉ để validate geometry / AI veto schema — UI/Telegram không ép size.
+  const displayLot = config.autoLotGood;
 
-  // ===== Chuỗi kiểm tra an toàn tất định (đúng bộ của auto-bot) =====
   const hardBlockReasons: string[] = [];
 
   const validationError = validateAdjustedAutoTrade(
     signal.direction,
     {
       order_type: "MARKET",
-      lot,
+      lot: displayLot,
       entry: signal.entry,
       stop_loss: signal.stopLoss,
       take_profit: signal.takeProfit,
@@ -192,30 +192,13 @@ export async function runRuleSignalScan(input: RuleSignalScanInput) {
       ),
       reason: signal.reason,
     },
-    tradingRules.minRiskReward,
+    minRr,
     uniqueLots([config.autoLotGood, config.autoLotVeryGood]),
   );
   if (validationError) hardBlockReasons.push(`validate: ${validationError}`);
 
   const spreadBlock = highSpreadBlockReason(snapshot);
   if (spreadBlock) hardBlockReasons.push(spreadBlock);
-
-  const riskCheck = checkAutoRisk({
-    symbol,
-    entry: signal.entry,
-    stopLoss: signal.stopLoss,
-    lot,
-    accountSizeUsd,
-    maxLossPercentPerTrade: riskPercentForSignal(
-      signal,
-      config.maxLossPercentPerTrade,
-    ),
-  });
-  if (!riskCheck.allowed) {
-    hardBlockReasons.push(
-      `risk-cap: lỗ ước tính ${riskCheck.estimatedLossUsd} USD vượt mức cho phép ${riskCheck.maxLossUsd} USD (vốn ${accountSizeUsd} USD, lot ${lot})`,
-    );
-  }
 
   if (hardBlockReasons.length > 0) {
     return saveAndReturn(
@@ -224,29 +207,28 @@ export async function runRuleSignalScan(input: RuleSignalScanInput) {
       `manual rule-engine scan (${evaluation.mode}): setup found but blocked`,
       buildRuleNoTrade(symbol, snapshot, payload, {
         reasons: hardBlockReasons,
-        summaryTitle: `Có setup ${signal.direction} ${entryTf} nhưng bị chặn bởi kiểm tra an toàn`,
+        summaryTitle: `Có setup ${signal.direction} ${entryTf} nhưng bị chặn bởi kiểm tra chất lượng tín hiệu`,
         rejectedSignal: { signal, entryTf },
         riskyTrade: buildRuleRiskyTrade({
           signal,
           entryTf,
-          title: `Kèo mạo hiểm: setup ${signal.direction} ${entryTf} bị kiểm tra an toàn chặn`,
+          title: `Kèo mạo hiểm: setup ${signal.direction} ${entryTf} bị chặn`,
           winProbability: 50,
           reason:
-            "Setup gốc đạt tiêu chí rule engine chính (backtest nhánh chính ~62% win) nhưng bị lớp kiểm tra an toàn từ chối — xem lý do ở điều kiện hủy. Xác suất thắng khi cố tình bỏ qua lớp chặn là KHÔNG được kiểm chứng.",
+            "Setup rule engine có tín hiệu nhưng bị lớp kiểm tra chất lượng (RR/spread/geometry) từ chối — xem lý do hủy. Bạn tự quyết nếu vẫn muốn vào.",
           blockReasons: hardBlockReasons,
-          lot: config.autoLotGood,
-          estimatedLossUsd: riskCheck.estimatedLossUsd,
+          lot: displayLot,
+          estimatedLossUsd: 0,
           accountSizeUsd,
         }),
       }),
     );
   }
 
-  // ===== AI veto (lớp chặn cuối, giống bot; lỗi thì cảnh báo chứ không giấu) =====
   const warnings: string[] = [];
   if (!isInsideTradeScannerWindow()) {
     warnings.push(
-      "Ngoài khung giờ London–NY (14:00–24:00 VN) mà bot dùng để vào lệnh — thanh khoản/spread có thể xấu hơn thống kê backtest.",
+      "Ngoài khung giờ quét London–NY — thanh khoản/spread có thể xấu hơn; cân nhắc kỹ trước khi vào.",
     );
   }
 
@@ -263,8 +245,8 @@ export async function runRuleSignalScan(input: RuleSignalScanInput) {
         signal,
         entryTimeframe: entryTf,
         conviction,
-        lot,
-        minRiskReward: tradingRules.minRiskReward,
+        lot: displayLot,
+        minRiskReward: minRr,
         allowedLots: uniqueLots([config.autoLotGood, config.autoLotVeryGood]),
       });
       if (veto.parsed.decision === "BLOCK") {
@@ -285,10 +267,10 @@ export async function runRuleSignalScan(input: RuleSignalScanInput) {
               title: `Kèo mạo hiểm: setup ${signal.direction} ${entryTf} bị AI veto chặn`,
               winProbability: 50,
               reason:
-                "Setup đã qua hết kiểm tra an toàn tất định (RR/spread/risk-cap) nhưng AI veto từ chối — xem lý do ở điều kiện hủy. Nếu bạn không đồng tình với AI, đây là kèo để tự cân nhắc.",
+                "Setup đã qua kiểm tra tất định nhưng AI veto từ chối. Nếu không đồng tình với AI, tự cân nhắc.",
               blockReasons: blockReasons.map((reason) => `AI veto: ${reason}`),
-              lot,
-              estimatedLossUsd: riskCheck.estimatedLossUsd,
+              lot: displayLot,
+              estimatedLossUsd: 0,
               accountSizeUsd,
             }),
           }),
@@ -297,28 +279,28 @@ export async function runRuleSignalScan(input: RuleSignalScanInput) {
       warnings.push(...veto.parsed.warnings.map((item) => `AI veto: ${item}`));
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      // Khác bot (fail-closed): luồng manual vẫn trả tín hiệu vì NGƯỜI DÙNG là
-      // lớp phê duyệt cuối — nhưng cảnh báo phải nổi bật, không được nuốt lỗi.
       warnings.push(
-        `CẢNH BÁO: AI veto không chạy được (${msg.slice(0, 160)}). Tín hiệu này CHƯA qua lớp kiểm tra AI — tự soi tin tức/lịch kinh tế trước khi vào lệnh.`,
+        `CẢNH BÁO: AI veto không chạy được (${msg.slice(0, 160)}). Tự soi tin tức/lịch kinh tế trước khi vào lệnh.`,
       );
     }
   }
 
-  // ===== Kết quả TRADE: format y hệt auto-bot để UI/tracker dùng lại =====
   const recommendation = buildAutoRecommendation(
     signal,
-    lot,
+    displayLot,
     conviction,
     snapshot.price,
     payload,
-    tradingRules.minRiskReward,
+    minRr,
   );
   recommendation.risk_factors = [...recommendation.risk_factors, ...warnings];
-  recommendation.summary = `Rule Engine (${evaluation.mode}) ${entryTf}: ${signal.direction} — entry ${signal.entry}, SL ${signal.stopLoss}, TP ${signal.takeProfit}. Người dùng tự đặt lệnh.`;
+  recommendation.summary = `Rule Engine (${evaluation.mode}) ${entryTf}: ${signal.direction} — entry ${signal.entry}, SL ${signal.stopLoss}, TP ${signal.takeProfit}. Bạn tự quản trị lot và vào lệnh.`;
   recommendation.entry_plan =
-    "Tự đặt lệnh MARKET trên MT5 theo entry/SL/TP ở trên nếu bạn đồng ý với setup. Đây là tín hiệu tất định từ rule engine, không phải AI sáng tác.";
-  recommendation.position_sizing.position_sizing_explanation = `Lot cố định ${lot} theo cấu hình bot (conviction ${conviction}/3). Lỗ ước tính nếu dính SL: ${riskCheck.estimatedLossUsd} USD trên vốn ${accountSizeUsd} USD.`;
+    "Tự đặt lệnh trên MT5 theo entry/SL/TP nếu đồng ý setup. Lot do bạn quyết định — tool không quản trị vốn.";
+  recommendation.position_sizing.suggested_lot = null;
+  recommendation.position_sizing.estimated_loss_if_sl_hit = null;
+  recommendation.position_sizing.position_sizing_explanation =
+    "Bạn tự quản trị vốn/lot. Tool chỉ đưa hướng, entry, SL, TP từ Rule Engine.";
 
   return saveAndReturn(
     historyService,
@@ -329,7 +311,12 @@ export async function runRuleSignalScan(input: RuleSignalScanInput) {
 }
 
 export interface StrategyEvaluation {
-  mode: "manual_scalp" | "xau_trend_pullback" | "balanced" | "strict";
+  mode:
+    | "manual_scalp"
+    | "xau_micro_scalp"
+    | "xau_trend_pullback"
+    | "balanced"
+    | "strict";
   signal: RuleSignal | null;
   entryTf: string;
   entryCandles: Candle[];
@@ -360,12 +347,33 @@ export function evaluateByStrategyMode(
     ...defaultRuleStrategyConfig,
     rrTarget: tradingRules.minRiskReward,
   };
+  const rawMode = String(config.autoStrategyMode).toLowerCase();
   const mode =
-    String(config.autoStrategyMode).toLowerCase() === "xau_trend_pullback"
-      ? "xau_trend_pullback"
-      : String(config.autoStrategyMode).toLowerCase() === "balanced"
-        ? "balanced"
-        : "strict";
+    rawMode === "xau_micro_scalp"
+      ? "xau_micro_scalp"
+      : rawMode === "xau_trend_pullback"
+        ? "xau_trend_pullback"
+        : rawMode === "balanced"
+          ? "balanced"
+          : "strict";
+
+  if (mode === "xau_micro_scalp") {
+    const scalpConfig = microScalpConfigForSymbol(config.mt5Symbol);
+    const micro = evaluateXauMicroScalpSignal(m1, m15, h1, scalpConfig);
+    const signal = micro as RuleSignal | null;
+    return {
+      mode,
+      signal,
+      entryTf: "M1",
+      entryCandles: m1.length ? m1 : m5,
+      rejectReasons: signal
+        ? []
+        : [explainXauMicroScalpRejection(m1, m15, h1, scalpConfig)],
+      pendingNote: signal
+        ? null
+        : `Micro-scalp ${scalpConfig.symbolLabel} M1: cần H1+M15 cùng EMA50 + nến M1 xác nhận. Quét lại sau ~1 phút.`,
+    };
+  }
 
   if (config.manualScalp) {
     const signal = evaluateManualReversalScalpSignal(m1, m5, m15, h1, {
@@ -534,7 +542,7 @@ function buildRuleRiskyTrade(input: {
     entry_conditions: [
       "Chỉ vào MARKET khi giá còn quanh vùng entry (chưa chạy quá xa SL/TP đã tính).",
       "Kiểm tra spread thực tế trên sàn trước khi đặt lệnh.",
-      `Chấp nhận trước mức lỗ ${input.estimatedLossUsd} USD (~${Number(((input.estimatedLossUsd / input.accountSizeUsd) * 100).toFixed(1))}% vốn) nếu dính SL.`,
+      "Bạn tự chọn lot và quản trị rủi ro — tool không ép size.",
     ],
     cancel_conditions: [
       "Hủy kèo nếu chưa vào lệnh sau 30 phút (setup nguội).",
@@ -592,28 +600,15 @@ function buildScalpRiskyCandidate(input: {
   if (validationError) return null;
   if (highSpreadBlockReason(input.snapshot)) return null;
 
-  const riskCheck = checkAutoRisk({
-    symbol: input.symbol,
-    entry: signal.entry,
-    stopLoss: signal.stopLoss,
-    lot: input.lot,
-    accountSizeUsd: input.accountSizeUsd,
-    maxLossPercentPerTrade: riskPercentForSignal(
-      signal,
-      input.maxLossPercentPerTrade,
-    ),
-  });
-  if (!riskCheck.allowed) return null;
-
   return buildRuleRiskyTrade({
     signal,
     entryTf: "M5",
     title: "Kèo scalp mạo hiểm (nhánh dự phòng đã tắt khỏi luồng chính)",
     winProbability: 46,
-    reason: `Không có setup trend-pullback chính, nhưng nhánh momentum-scalp phát tín hiệu ${signal.direction}. Backtest 30 ngày của nhánh này: win ~46%, expectancy +0.11R, drawdown sâu hơn hẳn nhánh chính — vì vậy nó bị tắt khỏi luồng chính và chỉ hiện ở đây như kèo mạo hiểm.`,
+    reason: `Không có setup trend-pullback chính, nhưng nhánh momentum-scalp phát tín hiệu ${signal.direction}. Nhánh này chất lượng thấp hơn — chỉ hiện như kèo mạo hiểm.`,
     blockReasons: [],
     lot: input.lot,
-    estimatedLossUsd: riskCheck.estimatedLossUsd,
+    estimatedLossUsd: 0,
     accountSizeUsd: input.accountSizeUsd,
   });
 }
