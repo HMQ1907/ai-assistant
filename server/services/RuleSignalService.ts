@@ -335,6 +335,7 @@ export function evaluateByStrategyMode(
     autoAllowScalp: boolean;
     autoScalpTpR?: number;
     autoScalpFrequency?: string;
+    mt5Symbol?: string;
   },
   snapshot: MarketSnapshot,
 ): StrategyEvaluation {
@@ -359,7 +360,7 @@ export function evaluateByStrategyMode(
 
   if (mode === "xau_micro_scalp") {
     const scalpConfig = microScalpConfigForSymbol(config.mt5Symbol);
-    const micro = evaluateXauMicroScalpSignal(m1, m15, h1, scalpConfig);
+    const micro = evaluateXauMicroScalpSignal(m1, m15, h1, scalpConfig, m5, h4);
     const signal = micro as RuleSignal | null;
     return {
       mode,
@@ -368,10 +369,10 @@ export function evaluateByStrategyMode(
       entryCandles: m1.length ? m1 : m5,
       rejectReasons: signal
         ? []
-        : [explainXauMicroScalpRejection(m1, m15, h1, scalpConfig)],
+        : [explainXauMicroScalpRejection(m1, m15, h1, scalpConfig, m5, h4)],
       pendingNote: signal
         ? null
-        : `Micro-scalp ${scalpConfig.symbolLabel} M1: cần H1+M15 cùng EMA50 + nến M1 xác nhận. Quét lại sau ~1 phút.`,
+        : `Micro-scalp ${scalpConfig.symbolLabel} M1: cần trend-day (H4 + Asia break/stretch) + H1+M15 EMA50 + nến M1 xác nhận. Quét lại sau ~1 phút.`,
     };
   }
 

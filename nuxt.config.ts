@@ -60,6 +60,7 @@ export default defineNuxtConfig({
     autoMaxTradesPerDay: Number(process.env.AUTO_MAX_TRADES_PER_DAY || 2),
     autoMaxDailyLossPercent: Number(process.env.AUTO_MAX_DAILY_LOSS_PERCENT || 5),
     autoMaxDailyLossUsd: Number(process.env.AUTO_MAX_DAILY_LOSS_USD || 10),
+    autoMaxLossUsdPerTrade: Number(process.env.AUTO_MAX_LOSS_USD_PER_TRADE || 0),
     autoMaxDailyProfitUsd: Number(process.env.AUTO_MAX_DAILY_PROFIT_USD || 0),
     autoMaxHoldHours: Number(process.env.AUTO_MAX_HOLD_HOURS || 8),
     autoCooldownMinutes: Number(process.env.AUTO_COOLDOWN_MINUTES || 45),

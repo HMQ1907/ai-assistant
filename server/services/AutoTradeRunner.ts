@@ -292,6 +292,7 @@ export class AutoTradeRunner {
         lot,
         accountSizeUsd: config.accountSizeUsd,
         maxLossPercentPerTrade: riskPercentForSignal(signal, config.maxLossPercentPerTrade),
+        maxLossUsdPerTrade: config.autoMaxLossUsdPerTrade,
       });
       console.info(
         `[scalp-bot] risk check ${activeSymbolLabel}: estimated loss ${riskCheck.estimatedLossUsd} USD, max allowed ${riskCheck.maxLossUsd} USD.`,
@@ -626,14 +627,28 @@ export class AutoTradeRunner {
         const latestM1 = m1.at(-1)?.time ?? "";
         if (latestM1 && latestM1 !== this.lastEvaluatedM1) {
           this.lastEvaluatedM1 = latestM1;
-          const nextSignal = evaluateXauMicroScalpSignal(m1, m15, h1, scalpConfig);
+          const nextSignal = evaluateXauMicroScalpSignal(
+            m1,
+            m15,
+            h1,
+            scalpConfig,
+            m5,
+            h4,
+          );
           if (nextSignal) {
             this.pendingSetup = null;
             signal = nextSignal;
             entryCandles = m1;
             entryTf = "M1";
           } else {
-            m15RejectReason = explainXauMicroScalpRejection(m1, m15, h1, scalpConfig);
+            m15RejectReason = explainXauMicroScalpRejection(
+              m1,
+              m15,
+              h1,
+              scalpConfig,
+              m5,
+              h4,
+            );
           }
         }
       } else if (strategyMode === "xau_trend_pullback") {
@@ -824,6 +839,7 @@ export class AutoTradeRunner {
             lot: finalLot,
             accountSizeUsd: riskAccountUsd,
             maxLossPercentPerTrade: riskPercentForSignal(signal, config.maxLossPercentPerTrade),
+            maxLossUsdPerTrade: config.autoMaxLossUsdPerTrade,
           });
           console.info(
             `[auto-bot] risk check ${activeSymbolLabel}: estimated loss ${riskCheck.estimatedLossUsd} USD, max allowed ${riskCheck.maxLossUsd} USD (equity ${riskAccountUsd}).`,
@@ -943,6 +959,7 @@ export class AutoTradeRunner {
         lot,
         accountSizeUsd: riskAccountUsd,
         maxLossPercentPerTrade: riskPercentForSignal(signal, config.maxLossPercentPerTrade),
+        maxLossUsdPerTrade: config.autoMaxLossUsdPerTrade,
       });
       console.info(
         `[auto-bot] risk check ${activeSymbolLabel}: estimated loss ${riskCheck.estimatedLossUsd} USD, max allowed ${riskCheck.maxLossUsd} USD (equity ${riskAccountUsd}).`,
@@ -1244,6 +1261,7 @@ export class AutoTradeRunner {
       lot,
       accountSizeUsd: riskAccountUsd,
       maxLossPercentPerTrade: riskPercentForSignal(input.signal, config.maxLossPercentPerTrade),
+      maxLossUsdPerTrade: config.autoMaxLossUsdPerTrade,
     });
     console.info(
       `[auto-bot] pending trigger risk check ${input.activeSymbolLabel}: estimated loss ${riskCheck.estimatedLossUsd} USD, max allowed ${riskCheck.maxLossUsd} USD (equity ${riskAccountUsd}).`,
@@ -1614,136 +1632,18 @@ export function emptyNews(): NewsSnapshot {
   };
 }
 
-interface CalendarEvent {
-  timeMs: number;
-  label: string;
-  impact: string;
-  currency: string;
-}
-
-let cachedCalendarEvents: CalendarEvent[] = [];
-let cachedCalendarFetchedAt = 0;
-let cachedCalendarKey = "";
-const MAX_STALE_CALENDAR_AGE_MS = 6 * 60 * 60_000;
-
+// Blackout tin tức: CHỈ theo sự kiện nhập tay (AUTO_NEWS_BLACKOUT_EVENTS).
+// Đã gỡ phần tự tải lịch kinh tế (ForexFactory/FairEconomy) — người dùng tự
+// theo dõi tin nóng và tắt bot khi cần, nên không chặn/không phụ thuộc mạng nữa.
 async function getAutoTradeTimeBlockReason(timeZone: string): Promise<string | null> {
   const config = useRuntimeConfig();
-  const manualBlock = newsBlackoutBlockReason({
+  return newsBlackoutBlockReason({
     now: new Date(),
     enabled: config.autoNewsBlackoutEnabled,
     events: config.autoNewsBlackoutEvents,
     minutes: config.autoNewsBlackoutMinutes,
     timeZone,
   });
-  if (manualBlock) return manualBlock;
-
-  const autoEvents = await fetchAutoNewsCalendarEvents({
-    enabled: config.autoNewsBlackoutEnabled,
-    url: config.autoNewsCalendarUrl,
-    currencies: config.autoNewsCalendarCurrencies,
-    impacts: config.autoNewsCalendarImpacts,
-    cacheMinutes: config.autoNewsCalendarCacheMinutes,
-  });
-  if (autoEvents === null) {
-    return "news blackout: economic calendar unavailable, skip new entries for safety";
-  }
-  return newsBlackoutBlockReason({
-    now: new Date(),
-    enabled: config.autoNewsBlackoutEnabled,
-    events: autoEvents
-      .map((event) => `${new Date(event.timeMs).toISOString()}|${event.currency} ${event.impact} ${event.label}`)
-      .join(";"),
-    minutes: config.autoNewsBlackoutMinutes,
-    timeZone,
-  });
-}
-
-async function fetchAutoNewsCalendarEvents(input: {
-  enabled: boolean;
-  url: string;
-  currencies: string;
-  impacts: string;
-  cacheMinutes: number;
-}): Promise<CalendarEvent[] | null> {
-  if (!input.enabled || !input.url) return [];
-  const cacheMinutes =
-    Number.isFinite(input.cacheMinutes) && input.cacheMinutes > 0 ? input.cacheMinutes : 30;
-  const cacheKey = [
-    input.url,
-    input.currencies.toUpperCase(),
-    input.impacts.toUpperCase(),
-  ].join("|");
-  const now = Date.now();
-  if (
-    cachedCalendarKey === cacheKey &&
-    cachedCalendarFetchedAt > 0 &&
-    now - cachedCalendarFetchedAt < cacheMinutes * 60_000
-  ) {
-    return cachedCalendarEvents;
-  }
-
-  try {
-    const response = await fetch(input.url, {
-      cache: "no-store",
-      signal: AbortSignal.timeout(15_000),
-      headers: { accept: "application/json" },
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    const payload = (await response.json()) as unknown;
-    if (!Array.isArray(payload)) {
-      throw new Error("invalid calendar payload: expected an array");
-    }
-    const events = parseEconomicCalendarEvents(payload, input);
-    cachedCalendarKey = cacheKey;
-    cachedCalendarFetchedAt = now;
-    cachedCalendarEvents = events;
-    console.info(
-      `[auto-bot] economic calendar refreshed: ${events.length} matching high-impact event(s).`,
-    );
-    return events;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`[auto-bot] economic calendar fetch failed: ${message}`);
-    const cacheIsFreshEnough =
-      cachedCalendarFetchedAt > 0 &&
-      now - cachedCalendarFetchedAt <= MAX_STALE_CALENDAR_AGE_MS;
-    return cacheIsFreshEnough ? cachedCalendarEvents : null;
-  }
-}
-
-function parseEconomicCalendarEvents(
-  payload: unknown,
-  input: { currencies: string; impacts: string },
-): CalendarEvent[] {
-  if (!Array.isArray(payload)) return [];
-  const currencies = splitUpperSet(input.currencies || "USD,EUR");
-  const impacts = splitUpperSet(input.impacts || "High");
-  return payload
-    .flatMap((raw): CalendarEvent[] => {
-      if (!raw || typeof raw !== "object") return [];
-      const item = raw as Record<string, unknown>;
-      const timeRaw = String(item.date ?? item.time ?? item.datetime ?? "");
-      const timeMs = Date.parse(timeRaw);
-      const currency = String(item.country ?? item.currency ?? item.ccy ?? "").toUpperCase();
-      const impact = String(item.impact ?? item.importance ?? "").trim();
-      const label = String(item.title ?? item.event ?? item.name ?? "high-impact news").trim();
-      if (!Number.isFinite(timeMs)) return [];
-      if (currencies.size > 0 && !currencies.has(currency)) return [];
-      if (!isHighImpactCalendarEvent(label, impact, impacts)) return [];
-      return [{ timeMs, label, impact: impact || "High", currency }];
-    })
-    .sort((a, b) => a.timeMs - b.timeMs);
-}
-
-function splitUpperSet(value: string): Set<string> {
-  return new Set(
-    value
-      .split(",")
-      .map((part) => part.trim().toUpperCase())
-      .filter(Boolean),
-  );
 }
 
 export function isHighImpactCalendarEvent(
@@ -1995,6 +1895,8 @@ export interface AutoRiskCheckInput {
   lot: number;
   accountSizeUsd: number;
   maxLossPercentPerTrade: number;
+  /** Nếu > 0: dùng làm trần lỗ USD/lệnh thay vì % equity. */
+  maxLossUsdPerTrade?: number;
 }
 
 export interface AutoRiskCheck {
@@ -2023,9 +1925,14 @@ export function resolveDailyLossLimitUsd(
 
 export function checkAutoRisk(input: AutoRiskCheckInput): AutoRiskCheck {
   const estimatedLossUsd = estimateLossUsd(input);
-  const maxLossUsd = Number(
+  const percentCap = Number(
     (input.accountSizeUsd * (input.maxLossPercentPerTrade / 100)).toFixed(2),
   );
+  const fixedCap = Number(input.maxLossUsdPerTrade || 0);
+  const maxLossUsd =
+    Number.isFinite(fixedCap) && fixedCap > 0
+      ? Number(fixedCap.toFixed(2))
+      : percentCap;
   return {
     allowed:
       Number.isFinite(estimatedLossUsd) &&
