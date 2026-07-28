@@ -1,0 +1,6 @@
+Now (MT5 tick): 2026-07-28T07:55:54+00:00 Bid: 4049.03
+Asia range: { high: 4074.211, low: 4034.702, barCount: 7, dayKey: '2026-07-28' }
+Trend-day BUY: trend-day blocked: H1/entry BUY but H4 4049.236 < EMA50 4068.205 (chưa phải ngày uptrend rõ)
+Trend-day SELL: ALLOW
+Micro-scalp signal: null
+Rejection: micro-scalp blocked: need H1+M15-aligned M1 confirm + RSI (H1+M15<=EMA50 (SELL bias), M15 4049.455, RSI 48.3, body 0.41, bull=false, bear=false)

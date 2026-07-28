@@ -7,7 +7,7 @@ import type {
   NewsSnapshot,
   SymbolCode,
 } from "../../types/trading";
-import { tradingRules } from "../config/tradingRules";
+import { splitActiveMt5Orders } from "../utils/mt5Orders";
 import {
   convictionScore,
   defaultRuleStrategyConfig,
@@ -108,17 +108,18 @@ export class AutoTradeRunner {
         this.dayBaselineEquity > 0 &&
         account.equity <= this.dayBaselineEquity - dailyLossLimitUsd;
 
-      // Nếu đang có lệnh mở thì không scan setup mới
+      // Chỉ chặn scan khi có position đang chạy; lệnh chờ (pending) không block setup mới.
       const activeOrders = await orderService.getActiveOrders();
-      if (activeOrders.length > 0) {
+      const { openPositions, pendingOrders } = splitActiveMt5Orders(activeOrders);
+      if (openPositions.length > 0) {
         this.hadActiveOrders = true;
         console.info(
-          `[scalp-bot] managing ${activeOrders.length}/${config.autoScalpMaxOpenTrades} active ${activeSymbolLabel} order(s) before scanning.`,
+          `[scalp-bot] managing ${openPositions.length}/${config.autoScalpMaxOpenTrades} open ${activeSymbolLabel} position(s) before scanning.`,
         );
         try {
           await this.manageScalpProfitProtection(
             orderService,
-            activeOrders,
+            openPositions,
             config.autoScalpTpR,
           );
         } catch (error) {
@@ -128,23 +129,27 @@ export class AutoTradeRunner {
           );
         }
         if (shouldFlatBeforeSessionClose(config.tradeScannerTimezone)) {
-          const closed = await this.closeOrdersForSessionEnd(orderService, activeOrders);
+          const closed = await this.closeOrdersForSessionEnd(orderService, openPositions);
           if (closed > 0) return;
         } else {
           const closed = await this.closeStaleOrdersByMinutes(
             orderService,
-            activeOrders,
+            openPositions,
             config.autoScalpMaxHoldMinutes,
             "scalp",
           );
           if (closed > 0) return;
         }
-        if (activeOrders.length >= config.autoScalpMaxOpenTrades) {
+        if (openPositions.length >= config.autoScalpMaxOpenTrades) {
           console.info(
-            `[scalp-bot] skipped new scan: max ${config.autoScalpMaxOpenTrades} concurrent orders reached.`,
+            `[scalp-bot] skipped new scan: max ${config.autoScalpMaxOpenTrades} concurrent open position(s) reached.`,
           );
           return;
         }
+      } else if (pendingOrders.length > 0) {
+        console.info(
+          `[scalp-bot] ${pendingOrders.length} pending order(s) on ${activeSymbolLabel}; continuing setup scan.`,
+        );
       }
 
       // Outside the entry session, keep the one-minute tick only for active
@@ -167,8 +172,8 @@ export class AutoTradeRunner {
         return;
       }
 
-      // Reset tracking khi không còn lệnh
-      if (activeOrders.length === 0 && this.hadActiveOrders) {
+      // Reset tracking khi không còn position đang chạy
+      if (openPositions.length === 0 && this.hadActiveOrders) {
         this.hadActiveOrders = false;
         this.lastOrderClosedAt = Date.now();
         const cooldownMinutes = Number(
@@ -260,7 +265,7 @@ export class AutoTradeRunner {
       // Cập nhật dedup sau khi tìm được signal
       if (latestM1Time) this.lastM1ScalpTime = latestM1Time;
 
-      const oppositeOrder = activeOrders.find(
+      const oppositeOrder = openPositions.find(
         (order) => order.direction !== signal.direction,
       );
       if (oppositeOrder) {
@@ -305,22 +310,24 @@ export class AutoTradeRunner {
 
       // Đặt lệnh
       const latestActiveOrders = await orderService.getActiveOrders();
-      if (latestActiveOrders.length >= config.autoScalpMaxOpenTrades) {
+      const { openPositions: latestOpenPositions } =
+        splitActiveMt5Orders(latestActiveOrders);
+      if (latestOpenPositions.length >= config.autoScalpMaxOpenTrades) {
         console.info(
-          `[scalp-bot] SKIP: active order count changed and max ${config.autoScalpMaxOpenTrades} is now reached.`,
+          `[scalp-bot] SKIP: open position count changed and max ${config.autoScalpMaxOpenTrades} is now reached.`,
         );
         return;
       }
-      const latestOppositeOrder = latestActiveOrders.find(
+      const latestOppositeOrder = latestOpenPositions.find(
         (order) => order.direction !== signal.direction,
       );
       if (latestOppositeOrder) {
         console.info(
-          `[scalp-bot] SKIP: active order state changed; ${latestOppositeOrder.direction} #${latestOppositeOrder.ticket} conflicts with ${signal.direction}.`,
+          `[scalp-bot] SKIP: open position state changed; ${latestOppositeOrder.direction} #${latestOppositeOrder.ticket} conflicts with ${signal.direction}.`,
         );
         return;
       }
-      const openRemainingRiskUsd = latestActiveOrders.reduce(
+      const openRemainingRiskUsd = latestOpenPositions.reduce(
         (total, order) => total + estimateRemainingOrderDownsideUsd(order, symbol),
         0,
       );
@@ -417,27 +424,31 @@ export class AutoTradeRunner {
         symbol: config.mt5Symbol,
       });
       const activeOrders = await orderService.getActiveOrders();
-      if (activeOrders.length === 0) {
+      const { openPositions, pendingOrders } = splitActiveMt5Orders(activeOrders);
+      if (openPositions.length === 0 && pendingOrders.length === 0) {
         await this.managePendingSetup(orderService);
+        return;
+      }
+      if (openPositions.length === 0) {
         return;
       }
 
       this.hadActiveOrders = true;
       this.pendingSetup = null;
       console.info(
-        `[auto-bot] 1m management: ${activeOrders.length} active ${activeSymbolLabel} order(s)/position(s).`,
+        `[auto-bot] 1m management: ${openPositions.length} open ${activeSymbolLabel} position(s)${pendingOrders.length > 0 ? ` (${pendingOrders.length} pending ignored for management)` : ""}.`,
       );
       if (shouldFlatBeforeSessionClose(config.tradeScannerTimezone)) {
-        const closed = await this.closeOrdersForSessionEnd(orderService, activeOrders);
+        const closed = await this.closeOrdersForSessionEnd(orderService, openPositions);
         if (closed > 0) return;
       }
       const closedByTimeStop = await this.closeStaleOrders(
         orderService,
-        activeOrders,
+        openPositions,
         config.autoMaxHoldHours,
       );
       if (closedByTimeStop > 0) return;
-      await this.manageActiveOrders(orderService, activeOrders);
+      await this.manageActiveOrders(orderService, openPositions);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       console.warn("[auto-bot] management tick error:", msg);
@@ -510,23 +521,29 @@ export class AutoTradeRunner {
       }
 
       const activeOrders = await orderService.getActiveOrders();
-      if (activeOrders.length > 0) {
+      const { openPositions, pendingOrders } = splitActiveMt5Orders(activeOrders);
+      if (openPositions.length > 0) {
         this.hadActiveOrders = true;
         console.info(
-          `[auto-bot] skipped new scan: ${activeOrders.length} active ${activeSymbolLabel} order(s)/position(s). Managing current order(s) only.`,
+          `[auto-bot] skipped new scan: ${openPositions.length} open ${activeSymbolLabel} position(s). Managing open position(s) only.`,
         );
         if (shouldFlatBeforeSessionClose(config.tradeScannerTimezone)) {
-          const closed = await this.closeOrdersForSessionEnd(orderService, activeOrders);
+          const closed = await this.closeOrdersForSessionEnd(orderService, openPositions);
           if (closed > 0) return;
         }
         const closedByTimeStop = await this.closeStaleOrders(
           orderService,
-          activeOrders,
+          openPositions,
           config.autoMaxHoldHours,
         );
         if (closedByTimeStop > 0) return;
-        await this.manageActiveOrders(orderService, activeOrders);
+        await this.manageActiveOrders(orderService, openPositions);
         return;
+      }
+      if (pendingOrders.length > 0) {
+        console.info(
+          `[auto-bot] ${pendingOrders.length} pending order(s) on ${activeSymbolLabel}; continuing setup scan.`,
+        );
       }
       if (this.hadActiveOrders) {
         this.hadActiveOrders = false;
