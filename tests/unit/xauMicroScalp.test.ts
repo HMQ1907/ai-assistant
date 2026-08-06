@@ -4,6 +4,7 @@ import {
   defaultEurUsdMicroScalpConfig,
   defaultXauMicroScalpConfig,
   evaluateXauMicroScalpSignal,
+  explainXauMicroScalpRejection,
   microScalpConfigForSymbol,
   resolveFormingH1AdverseBlock,
   resolveScalpTpSl,
@@ -355,5 +356,41 @@ describe("xauMicroScalpStrategy (M1)", () => {
       trendDayEnabled: true,
     };
     expect(evaluateXauMicroScalpSignal(m1, m15, h1, looseH1, [], [])).toBeNull();
+  });
+
+  it("blocks BUY when allowBuy=false", () => {
+    const h1 = Array.from({ length: 80 }, (_, i) => {
+      const base = 4000 + i * 1.5;
+      return c(i, base - 0.3, base + 0.5, base - 0.5, base, 60 * 60_000);
+    });
+    const m15 = bullishM15(80);
+    const m1 = baseM1(45);
+    for (let i = 30; i < 42; i += 1) {
+      const p = 4090 - (i - 30) * 0.3;
+      m1[i] = c(i, p + 0.2, p + 0.4, p - 0.5, p - 0.3);
+    }
+    m1[42] = c(42, 4085.0, 4085.2, 4083.8, 4084.0);
+    m1[43] = c(43, 4084.0, 4084.1, 4082.5, 4082.7);
+    m1[44] = c(44, 4082.8, 4085.2, 4082.5, 4085.0);
+
+    const noBuy = {
+      ...defaultXauMicroScalpConfig,
+      formingH1AdverseAtrMult: 50,
+      formingH1AdverseSlMult: 50,
+      trendDayEnabled: false,
+      allowBuy: false,
+    };
+    expect(evaluateXauMicroScalpSignal(m1, m15, h1, noBuy)).toBeNull();
+    expect(explainXauMicroScalpRejection(m1, m15, h1, noBuy)).toContain(
+      "BUY direction disabled",
+    );
+  });
+
+  it("microScalpConfigForSymbol áp override hướng lệnh", () => {
+    const cfg = microScalpConfigForSymbol("XAUUSDm", { allowSell: false });
+    expect(cfg.allowSell).toBe(false);
+    expect(cfg.allowBuy).toBe(true);
+    expect(cfg.symbolLabel).toBe("XAUUSD");
+    expect(defaultXauMicroScalpConfig.allowSell).toBe(true);
   });
 });

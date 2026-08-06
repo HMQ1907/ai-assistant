@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { fetchBacktestCandlesPaged } from "../../server/backtest/backtestData";
 import {
-  defaultXauPullbackConfig,
-  runXauPullbackBacktest,
+  defaultXauIctBacktestConfig,
+  runXauIctBacktest,
   type XauBacktestResult,
   type XauBacktestTrade,
-  type XauPullbackBacktestConfig,
+  type XauIctBacktestConfig,
 } from "../../server/backtest/xauPullbackBacktester";
 import type { Candle } from "../../types/trading";
 
@@ -15,15 +15,15 @@ const SYMBOL = process.env.MT5_SYMBOL || "XAUUSDm";
 const M5_COUNT = Number(process.env.BACKTEST_M5_BARS || 17000);
 const M15_COUNT = Number(process.env.BACKTEST_M15_BARS || 6000);
 const H1_COUNT = Number(process.env.BACKTEST_H1_BARS || 2000);
+const H4_COUNT = Number(process.env.BACKTEST_H4_BARS || 600);
 
-/** Config khớp live auto-bot hiện tại (.env). */
-const liveConfig: XauPullbackBacktestConfig = {
-  ...defaultXauPullbackConfig,
+/** Config khớp live auto-bot hiện tại (.env), mode ICT rulebook (thay xau_trend_pullback cũ). */
+const liveConfig: XauIctBacktestConfig = {
+  ...defaultXauIctBacktestConfig,
   spreadPrice: Number(process.env.BACKTEST_SPREAD_PRICE || 0.3),
   maxHoldBars: Number(process.env.BACKTEST_MAX_HOLD_BARS || 96), // 8h * 12 M5
   cooldownBars: Number(process.env.BACKTEST_COOLDOWN_BARS || 9), // 45'
   breakEvenAtR: 1,
-  allowScalp: false,
   lot: Number(process.env.BACKTEST_LOT || 0.01),
   accountStartUsd: Number(process.env.BACKTEST_ACCOUNT_SIZE_USD || 200),
   maxLossPercentPerTrade: Number(process.env.BACKTEST_MAX_LOSS_PERCENT || 10),
@@ -49,12 +49,13 @@ function splitByTime(
   m5: Candle[],
   m15: Candle[],
   h1: Candle[],
-  config: XauPullbackBacktestConfig,
+  h4: Candle[],
+  config: XauIctBacktestConfig,
   splitPct: number,
 ) {
   const splitIdx = Math.floor(m5.length * splitPct);
   const splitTime = m5[splitIdx]?.time ?? "";
-  const full = runXauPullbackBacktest(m5, m15, h1, config);
+  const full = runXauIctBacktest(m5, m15, h1, h4, config);
   const isTrades = full.tradeList.filter((t: XauBacktestTrade) => t.entryTime < splitTime);
   const oosTrades = full.tradeList.filter((t: XauBacktestTrade) => t.entryTime >= splitTime);
   return { full, splitTime, isTrades, oosTrades };
@@ -85,17 +86,19 @@ function monthlyBuckets(trades: XauBacktestTrade[]) {
   return [...map.entries()].map(([month, list]) => ({ month, ...statOf(list) }));
 }
 
-describe("XAUUSD trend-pullback (mode auto-bot thật) - backtest dữ liệu MT5 thật", () => {
+describe("XAUUSD ICT rulebook (mode auto-bot thật) - backtest dữ liệu MT5 thật", () => {
   it(
     "đo expectancy ~2 tháng + walk-forward (config live)",
     async () => {
       let m5: Candle[];
       let m15: Candle[];
+      let h4: Candle[];
       let h1: Candle[];
       try {
-        [m5, m15, h1] = await Promise.all([
+        [m5, m15, h4, h1] = await Promise.all([
           fetchBacktestCandlesPaged(BRIDGE, SYMBOL, "M5", M5_COUNT),
           fetchBacktestCandlesPaged(BRIDGE, SYMBOL, "M15", M15_COUNT),
+          fetchBacktestCandlesPaged(BRIDGE, SYMBOL, "H4", H4_COUNT),
           fetchBacktestCandlesPaged(BRIDGE, SYMBOL, "H1", H1_COUNT),
         ]);
       } catch (error) {
@@ -103,39 +106,43 @@ describe("XAUUSD trend-pullback (mode auto-bot thật) - backtest dữ liệu MT
         return;
       }
 
-      console.log(`\n=== DỮ LIỆU (${SYMBOL}) — luồng chính xau_trend_pullback ===`);
+      console.log(`\n=== DỮ LIỆU (${SYMBOL}) — luồng chính ICT rulebook ===`);
       console.log(`M5 : ${m5.length} nến  ${m5[0]?.time} -> ${m5.at(-1)?.time}`);
-      console.log(`M15: ${m15.length} nến  H1: ${h1.length} nến`);
+      console.log(`M15: ${m15.length} nến  H4: ${h4.length} nến  H1(phụ): ${h1.length} nến`);
       const days =
         (new Date(m5.at(-1)!.time).getTime() - new Date(m5[0]!.time).getTime()) / 86_400_000;
       console.log(`Khoảng M5 ~ ${days.toFixed(1)} ngày lịch (~${(days / 30).toFixed(2)} tháng)`);
       console.log(
         `Live config: lot=${liveConfig.lot}, vốn=$${liveConfig.accountStartUsd}, ` +
           `maxLoss=${liveConfig.maxLossPercentPerTrade}%, hold=${liveConfig.maxHoldBars} M5 bars, ` +
-          `cooldown=${liveConfig.cooldownBars} bars, spread=$${liveConfig.spreadPrice}, scalp=OFF`,
+          `cooldown=${liveConfig.cooldownBars} bars, spread=$${liveConfig.spreadPrice}, ` +
+          `retestExpiryM5Bars=${liveConfig.ictConfig.retestExpiryM5Bars}`,
       );
 
       console.log(`\n=== BASELINE theo spread (config live) ===`);
       for (const spread of [0.15, 0.3, 0.5]) {
-        const r = runXauPullbackBacktest(m5, m15, h1, { ...liveConfig, spreadPrice: spread });
+        const r = runXauIctBacktest(m5, m15, h1, h4, { ...liveConfig, spreadPrice: spread });
         console.log(line(`spread=${spread}`, r));
       }
 
-      console.log(`\n=== ẢNH HƯỞNG NHÁNH SCALP (spread=0.3) ===`);
-      for (const allowScalp of [false, true]) {
-        const r = runXauPullbackBacktest(m5, m15, h1, {
-          ...liveConfig,
-          spreadPrice: 0.3,
-          allowScalp,
-        });
-        console.log(line(`scalp=${allowScalp}`, r));
+      console.log(`\n=== ẢNH HƯỞNG RETEST WINDOW (spread=0.3) ===`);
+      for (const retestExpiryM5Bars of [5, 8, 12, 20]) {
+        const r = runXauIctBacktest(
+          m5,
+          m15,
+          h1,
+          h4,
+          { ...liveConfig, spreadPrice: 0.3, ictConfig: { ...liveConfig.ictConfig, retestExpiryM5Bars } },
+        );
+        console.log(line(`retest<=${retestExpiryM5Bars}`, r));
       }
 
-      console.log(`\n=== WALK-FORWARD (spread=0.3, scalp OFF, chia 60/40 theo thời gian) ===`);
+      console.log(`\n=== WALK-FORWARD (spread=0.3, chia 60/40 theo thời gian) ===`);
       const { splitTime, isTrades, oosTrades } = splitByTime(
         m5,
         m15,
         h1,
+        h4,
         { ...liveConfig, spreadPrice: 0.3 },
         0.6,
       );
@@ -143,9 +150,9 @@ describe("XAUUSD trend-pullback (mode auto-bot thật) - backtest dữ liệu MT
       console.log(`In-sample : ${JSON.stringify(statOf(isTrades))}`);
       console.log(`Out-sample: ${JSON.stringify(statOf(oosTrades))}`);
 
-      const base = runXauPullbackBacktest(m5, m15, h1, { ...liveConfig, spreadPrice: 0.3 });
+      const base = runXauIctBacktest(m5, m15, h1, h4, { ...liveConfig, spreadPrice: 0.3 });
       const maxRisk = base.tradeList.length
-        ? Math.max(...base.tradeList.map((t) => t.riskUsd))
+        ? Math.max(...base.tradeList.map((t: XauBacktestTrade) => t.riskUsd))
         : 0;
       const riskCapUsd = (liveConfig.accountStartUsd * liveConfig.maxLossPercentPerTrade) / 100;
       console.log(
@@ -161,13 +168,15 @@ describe("XAUUSD trend-pullback (mode auto-bot thật) - backtest dữ liệu MT
 
       console.log(`\n=== QUÉT CAP LỖ/LỆNH tại VỐN $${liveConfig.accountStartUsd} ===`);
       for (const capPct of [5, 8, 10, 12, 15, 18, 20]) {
-        const r = runXauPullbackBacktest(m5, m15, h1, {
-          ...liveConfig,
-          spreadPrice: 0.3,
-          maxLossPercentPerTrade: capPct,
-        });
+        const r = runXauIctBacktest(
+          m5,
+          m15,
+          h1,
+          h4,
+          { ...liveConfig, spreadPrice: 0.3, maxLossPercentPerTrade: capPct },
+        );
         const avgRiskUsd = r.tradeList.length
-          ? r.tradeList.reduce((s, t) => s + t.riskUsd, 0) / r.tradeList.length
+          ? r.tradeList.reduce((s: number, t: XauBacktestTrade) => s + t.riskUsd, 0) / r.tradeList.length
           : 0;
         const retPct =
           ((r.endEquityUsd - liveConfig.accountStartUsd) / liveConfig.accountStartUsd) * 100;

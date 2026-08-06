@@ -1,12 +1,12 @@
 import { createError, getQuery } from "h3";
 import { fetchBacktestCandles } from "../../backtest/backtestData";
-import { defaultBacktestConfig, runBacktest } from "../../backtest/backtester";
 import { buildGrid, tradeStats } from "../../backtest/grid";
+import { defaultXauIctBacktestConfig, runXauIctBacktest } from "../../backtest/xauPullbackBacktester";
 
 /**
  * GET /api/backtest/walkforward?symbol=XAUUSDm&bars=6000&spread=0.3&splitPct=0.6
  *
- * Walk-forward TRUNG THỰC chống curve-fit:
+ * Walk-forward TRUNG THỰC chống curve-fit cho ICT rulebook (M5 entry, M15 setup, H4 bias):
  *   1. Tách dữ liệu: in-sample (đầu) | out-of-sample (cuối, CHƯA dùng để chọn).
  *   2. Chọn cấu hình tốt nhất CHỈ theo expectancy in-sample.
  *   3. Báo cáo hiệu quả của chính cấu hình đó trên out-of-sample.
@@ -19,17 +19,19 @@ export default defineEventHandler(async (event) => {
   const symbol = typeof query.symbol === "string" && query.symbol.trim()
     ? query.symbol.trim()
     : config.mt5Symbol;
-  const bars = clampInt(query.bars, 6000, 1000, 6000);
-  const h4bars = Math.min(6000, Math.ceil(bars / 4) + 300);
+  const m5Bars = clampInt(query.bars, 20000, 2000, 90000);
+  const m15Bars = Math.min(20000, Math.ceil(m5Bars / 3) + 600);
+  const h4Bars = Math.min(6000, Math.ceil(m5Bars / 48) + 300);
   const spread = clampNumber(query.spread, /XAU/i.test(symbol) ? 0.3 : 0.0002, 0, 100);
   const splitPct = clampNumber(query.splitPct, 0.6, 0.4, 0.8);
   const minIsTrades = clampInt(query.minIsTrades, 15, 5, 100);
 
-  let h1, h4;
+  let m5, m15, h4;
   try {
-    [h1, h4] = await Promise.all([
-      fetchBacktestCandles(config.mt5BridgeUrl, symbol, "H1", bars),
-      fetchBacktestCandles(config.mt5BridgeUrl, symbol, "H4", h4bars),
+    [m5, m15, h4] = await Promise.all([
+      fetchBacktestCandles(config.mt5BridgeUrl, symbol, "M5", m5Bars),
+      fetchBacktestCandles(config.mt5BridgeUrl, symbol, "M15", m15Bars),
+      fetchBacktestCandles(config.mt5BridgeUrl, symbol, "H4", h4Bars),
     ]);
   } catch (error) {
     throw createError({
@@ -38,17 +40,17 @@ export default defineEventHandler(async (event) => {
     });
   }
 
-  const splitTime = h1[Math.floor(h1.length * splitPct)]?.time ?? "";
+  const splitTime = m5[Math.floor(m5.length * splitPct)]?.time ?? "";
   if (!splitTime) {
     throw createError({ statusCode: 500, message: "Không xác định được mốc chia dữ liệu." });
   }
 
   const evaluated = buildGrid().map((variant) => {
-    const result = runBacktest(symbol, h1, h4, {
-      ...defaultBacktestConfig,
+    const result = runXauIctBacktest(m5, m15, h4, {
+      ...defaultXauIctBacktestConfig,
       maxHoldBars: variant.maxHoldBars,
       spreadPrice: spread,
-      strategy: variant.strategy,
+      ictConfig: variant.ictConfig,
     });
     const inSample = tradeStats(
       result.tradeList.filter((trade) => trade.entryTime < splitTime),
@@ -68,7 +70,7 @@ export default defineEventHandler(async (event) => {
 
   return {
     symbol,
-    bars: h1.length,
+    bars: m5.length,
     spreadPrice: spread,
     splitTime,
     minIsTrades,
@@ -86,7 +88,7 @@ export default defineEventHandler(async (event) => {
   };
 });
 
-function stripList(result: ReturnType<typeof runBacktest>) {
+function stripList(result: ReturnType<typeof runXauIctBacktest>) {
   const { tradeList: _tradeList, ...rest } = result;
   return rest;
 }

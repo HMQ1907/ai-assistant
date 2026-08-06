@@ -56,13 +56,13 @@ function snapshotWith(candles: {
 }
 
 const baseConfig = {
-  autoStrategyMode: "xau_trend_pullback",
+  autoStrategyMode: "xau_ict",
   autoUseM15: true,
   autoAllowScalp: false,
 };
 
 describe("evaluateByStrategyMode (luồng manual rule-signal)", () => {
-  it("chọn đúng mode xau_trend_pullback và trả lý do từ chối khi thiếu nến", () => {
+  it("chọn mode xau_ict và trả lý do từ chối khi thiếu nến", () => {
     const snapshot = snapshotWith({
       M5: flatCandles(10, 4200),
       M15: flatCandles(10, 4200),
@@ -71,44 +71,42 @@ describe("evaluateByStrategyMode (luồng manual rule-signal)", () => {
     });
     const result = evaluateByStrategyMode(baseConfig, snapshot);
 
-    expect(result.mode).toBe("xau_trend_pullback");
+    expect(result.mode).toBe("xau_ict");
     expect(result.signal).toBeNull();
     expect(result.entryTf).toBe("M5");
     // Phải giải thích được VÌ SAO không có tín hiệu, không im lặng.
     expect(result.rejectReasons.length).toBeGreaterThan(0);
-    expect(result.rejectReasons[0]).toMatch(/H1 candles|M15 candles/);
+    expect(result.rejectReasons[0]).toMatch(/ICT blocked/);
   });
 
-  it("mode strict thiếu dữ liệu vẫn trả reject reason cho cả H1 và M15", () => {
-    const snapshot = snapshotWith({
-      M5: flatCandles(10, 4200),
-      M15: flatCandles(10, 4200),
-      H1: flatCandles(10, 4200),
-      H4: flatCandles(10, 4200),
-    });
-    const result = evaluateByStrategyMode(
-      { ...baseConfig, autoStrategyMode: "strict" },
-      snapshot,
-    );
-
-    expect(result.mode).toBe("strict");
-    expect(result.signal).toBeNull();
-    expect(result.rejectReasons.some((item) => item.startsWith("H1:"))).toBe(true);
-    expect(result.rejectReasons.some((item) => item.startsWith("M15:"))).toBe(true);
-  });
-
-  it("mode không hợp lệ rơi về strict (giống AutoTradeRunner)", () => {
+  it("bất kỳ mode string nào khác xau_micro_scalp đều rơi về xau_ict (thay cho xau_trend_pullback/balanced/strict cũ)", () => {
     const snapshot = snapshotWith({
       M5: flatCandles(5, 4200),
       M15: flatCandles(5, 4200),
       H1: flatCandles(5, 4200),
       H4: flatCandles(5, 4200),
     });
+    for (const mode of ["xau_trend_pullback", "balanced", "strict", "whatever"]) {
+      const result = evaluateByStrategyMode({ ...baseConfig, autoStrategyMode: mode }, snapshot);
+      expect(result.mode).toBe("xau_ict");
+    }
+  });
+
+  it("autoStrategyMode=xau_micro_scalp vẫn dùng engine micro-scalp riêng (M1, EMA50 bias)", () => {
+    const snapshot = snapshotWith({
+      M1: flatCandles(10, 4200),
+      M5: flatCandles(10, 4200),
+      M15: flatCandles(10, 4200),
+      H1: flatCandles(10, 4200),
+      H4: flatCandles(10, 4200),
+    });
     const result = evaluateByStrategyMode(
-      { ...baseConfig, autoStrategyMode: "whatever" },
+      { ...baseConfig, autoStrategyMode: "xau_micro_scalp" },
       snapshot,
     );
-    expect(result.mode).toBe("strict");
+    expect(result.mode).toBe("xau_micro_scalp");
+    expect(result.entryTf).toBe("M1");
+    expect(result.rejectReasons[0]).toMatch(/micro-scalp/);
   });
 
   it("MANUAL_SCALP=true chuyển quét tay sang mode bắt đỉnh/đáy manual_scalp", () => {
@@ -128,15 +126,16 @@ describe("evaluateByStrategyMode (luồng manual rule-signal)", () => {
     expect(result.rejectReasons[0]).toMatch(/M1 candles/);
   });
 
-  it("thị trường đi ngang (đủ nến) không phát tín hiệu bừa", () => {
-    // 300 nến flat: EMA dính nhau, ADX thấp -> mọi mode phải NO signal.
+  it("thị trường đi ngang (đủ nến) không phát tín hiệu bừa ở cả hai mode", () => {
+    // 300 nến flat: không có sweep/displacement/BOS lẫn EMA50 tách biệt -> mọi mode NO signal.
     const snapshot = snapshotWith({
+      M1: flatCandles(300, 4200),
       M5: flatCandles(300, 4200),
       M15: flatCandles(300, 4200),
       H1: flatCandles(300, 4200),
       H4: flatCandles(300, 4200),
     });
-    for (const mode of ["xau_trend_pullback", "balanced", "strict"]) {
+    for (const mode of ["xau_micro_scalp", "xau_ict"]) {
       const result = evaluateByStrategyMode(
         { ...baseConfig, autoStrategyMode: mode },
         snapshot,

@@ -2,28 +2,21 @@ import type { AiTradeRecommendation } from "../../types/ai";
 import type {
   ActiveMt5Order,
   AnalysisPayload,
-  Candle,
   MarketSnapshot,
   NewsSnapshot,
   SymbolCode,
 } from "../../types/trading";
+import { tradingRules } from "../config/tradingRules";
 import { splitActiveMt5Orders } from "../utils/mt5Orders";
 import {
   convictionScore,
   defaultRuleStrategyConfig,
-  evaluateBalancedM5Signal,
+  defaultXauIctConfig,
   evaluateManualReversalScalpSignal,
-  evaluateRuleSignal,
-  evaluateXauTrendPullbackSetup,
-  evaluateXauTrendPullbackSignal,
-  evaluateXauTrendPullbackTriggerSignal,
-  explainBalancedM5Rejection,
+  evaluateXauIctSignal,
   explainManualReversalScalpRejection,
-  explainRuleSignalRejection,
-  explainXauPendingSetupInvalidation,
-  explainXauTrendPullbackRejection,
+  explainXauIctRejection,
   type RuleSignal,
-  type XauTrendPullbackSetup,
 } from "../strategy/ruleStrategy";
 import {
   evaluateXauMicroScalpSignal,
@@ -48,13 +41,6 @@ import { symbolCodeFromMt5Symbol, symbolLabel } from "../utils/symbols";
  * Auto-bot Rules Engine H1.
  * Rules engine decides the setup. AI is only a final blocker/veto check.
  */
-interface PendingXauSetup {
-  setup: XauTrendPullbackSetup;
-  createdAt: number;
-  createdM5Time: string;
-  seenM5Times: string[];
-}
-
 export class AutoTradeRunner {
   private running = false;
   private runningScalp = false;
@@ -72,7 +58,6 @@ export class AutoTradeRunner {
   private lastActiveReviewAt = 0;
   private hadActiveOrders = false;
   private lastOrderClosedAt = 0;
-  private pendingSetup: PendingXauSetup | null = null;
 
   /**
    * Scalp auto-bot: chạy mỗi 1 phút khi AUTO_TRADE=true + AUTO_TRADE_SCALP=true.
@@ -425,16 +410,11 @@ export class AutoTradeRunner {
       });
       const activeOrders = await orderService.getActiveOrders();
       const { openPositions, pendingOrders } = splitActiveMt5Orders(activeOrders);
-      if (openPositions.length === 0 && pendingOrders.length === 0) {
-        await this.managePendingSetup(orderService);
-        return;
-      }
       if (openPositions.length === 0) {
         return;
       }
 
       this.hadActiveOrders = true;
-      this.pendingSetup = null;
       console.info(
         `[auto-bot] 1m management: ${openPositions.length} open ${activeSymbolLabel} position(s)${pendingOrders.length > 0 ? ` (${pendingOrders.length} pending ignored for management)` : ""}.`,
       );
@@ -622,25 +602,20 @@ export class AutoTradeRunner {
       let entryCandles = h1;
       let entryTf = "H1";
       let h1RejectReason = "H1 candle not evaluated yet";
-      let m15RejectReason = config.autoUseM15
-        ? "M15 candle not evaluated yet"
-        : "M15 disabled";
+      let m15RejectReason = "M15 candle not evaluated yet";
       const strategyMode =
-        String(config.autoStrategyMode).toLowerCase() === "xau_micro_scalp"
-          ? "xau_micro_scalp"
-          : String(config.autoStrategyMode).toLowerCase() === "xau_trend_pullback"
-            ? "xau_trend_pullback"
-            : String(config.autoStrategyMode).toLowerCase() === "balanced"
-              ? "balanced"
-              : "strict";
+        String(config.autoStrategyMode).toLowerCase() === "xau_micro_scalp" ? "xau_micro_scalp" : "xau_ict";
       const minRr =
         strategyMode === "xau_micro_scalp"
           ? microScalpConfigForSymbol(config.mt5Symbol).minRr
-          : tradingRules.minRiskReward;
+          : defaultXauIctConfig.minTargetR;
 
       if (strategyMode === "xau_micro_scalp") {
         h1RejectReason = "micro-scalp uses H1+M15 EMA50 bias filter";
-        const scalpConfig = microScalpConfigForSymbol(config.mt5Symbol);
+        const scalpConfig = microScalpConfigForSymbol(config.mt5Symbol, {
+          allowBuy: config.autoAllowBuy !== false,
+          allowSell: config.autoAllowSell !== false,
+        });
         const latestM1 = m1.at(-1)?.time ?? "";
         if (latestM1 && latestM1 !== this.lastEvaluatedM1) {
           this.lastEvaluatedM1 = latestM1;
@@ -653,7 +628,6 @@ export class AutoTradeRunner {
             h4,
           );
           if (nextSignal) {
-            this.pendingSetup = null;
             signal = nextSignal;
             entryCandles = m1;
             entryTf = "M1";
@@ -668,100 +642,32 @@ export class AutoTradeRunner {
             );
           }
         }
-      } else if (strategyMode === "xau_trend_pullback") {
-        h1RejectReason = "XAU rule uses H1 as trend filter";
+      } else {
+        // PA v0.2: H1 bias (chính) + H4 context filter -> Setup A (sweep reversal)
+        // hoặc Setup B (BOS continuation) trên M15 -> retest zone -> M5 trigger.
+        h1RejectReason = "PA v0.2 dùng H1 làm bias chính, H4 chỉ là context filter";
         const latestM5 = m5.at(-1)?.time ?? "";
         if (latestM5 && latestM5 !== this.lastEvaluatedM5) {
           this.lastEvaluatedM5 = latestM5;
-          const nextSignal = evaluateXauTrendPullbackSignal(m5, m15, h1, {
-            allowScalp: config.autoAllowScalp,
+          // Đánh giá lại news blackout NGAY TRƯỚC lúc chấm điểm trigger (không dùng
+          // timeBlockReason đã cache từ đầu tick, vì fetch market data ở giữa có thể tốn thời gian).
+          const freshNewsBlock = await getAutoTradeTimeBlockReason(config.tradeScannerTimezone);
+          const nextSignal = evaluateXauIctSignal(m5, m15, h1, h4, defaultXauIctConfig, {
+            newsWindowClear: !freshNewsBlock,
           });
           if (nextSignal) {
-            this.pendingSetup = null;
             signal = nextSignal;
             entryCandles = m5;
             entryTf = "M5";
           } else {
-            const setup = evaluateXauTrendPullbackSetup(m15, h1, m5);
-            if (setup) {
-              this.pendingSetup = {
-                setup,
-                createdAt: Date.now(),
-                createdM5Time: latestM5,
-                seenM5Times: [latestM5],
-              };
-              console.info(
-                `[auto-bot] pending setup saved: ${activeSymbolLabel} ${setup.direction}, M15 ${setup.m15CandleTime}; waiting max 6 closed M5 candles for trigger.`,
-              );
-            }
-            m15RejectReason =
-              setup
-                ? `pending ${setup.direction} setup; waiting for M5 engulfing/pin trigger`
-                :
-              explainXauTrendPullbackRejection(m5, m15, h1, {
-                allowScalp: config.autoAllowScalp,
-              }) ??
-              "XAU trend-pullback diagnostics returned no signal";
-          }
-        }
-      } else if (strategyMode === "balanced") {
-        h1RejectReason = "balanced mode uses H1 as bias, not as entry";
-        if (!config.autoUseM15) {
-          m15RejectReason = "balanced mode requires AUTO_USE_M15=true";
-        }
-        const latestM5 = m5.at(-1)?.time ?? "";
-        if (latestM5 && latestM5 !== this.lastEvaluatedM5) {
-          this.lastEvaluatedM5 = latestM5;
-          const nextSignal = evaluateBalancedM5Signal(m5, m15, h1, h4, strategy);
-          if (nextSignal) {
-            signal = nextSignal;
-            entryCandles = m5;
-            entryTf = "M5";
-          } else {
-            m15RejectReason =
-              explainBalancedM5Rejection(m5, m15, h1, h4, strategy) ??
-              "M5 passed balanced diagnostics but returned no signal";
-          }
-        }
-      } else {
-        const latestH1 = h1.at(-1)?.time ?? "";
-        if (latestH1 && latestH1 !== this.lastEvaluatedH1) {
-          this.lastEvaluatedH1 = latestH1;
-          const nextSignal = evaluateRuleSignal(h1, h4, strategy);
-          if (nextSignal) {
-            signal = nextSignal;
-            entryCandles = h1;
-            entryTf = "H1";
-          } else {
-            h1RejectReason =
-              explainRuleSignalRejection(h1, h4, strategy) ?? "H1 passed diagnostics but returned no signal";
-          }
-        }
-
-        if (!signal && config.autoUseM15) {
-          const latestM15 = m15.at(-1)?.time ?? "";
-          if (latestM15 && latestM15 !== this.lastEvaluatedM15) {
-            this.lastEvaluatedM15 = latestM15;
-            const nextSignal = evaluateRuleSignal(m15, h4, strategy, h1);
-            if (nextSignal) {
-              signal = nextSignal;
-              entryCandles = m15;
-              entryTf = "M15";
-            } else {
-              m15RejectReason =
-                explainRuleSignalRejection(m15, h4, strategy, h1) ??
-                "M15 passed diagnostics but returned no signal";
-            }
+            m15RejectReason = explainXauIctRejection(m5, m15, h1, h4, defaultXauIctConfig, {
+              newsWindowClear: !freshNewsBlock,
+            });
           }
         }
       }
       if (!signal) {
-        const secondaryLabel =
-          strategyMode === "balanced"
-            ? "Balanced"
-            : strategyMode === "xau_micro_scalp"
-              ? "MicroScalp"
-              : "M15";
+        const secondaryLabel = strategyMode === "xau_micro_scalp" ? "MicroScalp" : "M15";
         console.info(
           `[auto-bot] no setup for ${activeSymbolLabel} (${strategyMode}). H1: ${h1RejectReason}. ${secondaryLabel}: ${m15RejectReason}.`,
         );
@@ -1045,297 +951,10 @@ export class AutoTradeRunner {
     }
   }
 
-  private async managePendingSetup(orderService: Mt5OrderService): Promise<void> {
-    if (!this.pendingSetup) return;
-
-    const config = useRuntimeConfig();
-    const symbol = symbolCodeFromMt5Symbol(config.mt5Symbol);
-    const activeSymbolLabel = symbolLabel(config.mt5Symbol);
-    const timeBlockReason = await getAutoTradeTimeBlockReason(config.tradeScannerTimezone);
-    if (timeBlockReason) {
-      console.info(`[auto-bot] pending setup cancelled: ${timeBlockReason}`);
-      this.pendingSetup = null;
-      return;
-    }
-    if (!isInsideTradeScannerWindow()) {
-      console.info("[auto-bot] pending setup on hold: outside trade window, will not trigger new entry.");
-      return;
-    }
-    if (this.tradesToday >= config.autoMaxTradesPerDay) {
-      console.info("[auto-bot] pending setup cancelled: max trades/day reached.");
-      this.pendingSetup = null;
-      return;
-    }
-
-    const marketService = new MarketDataService({
-      providerName: config.marketDataProvider,
-      apiKey: config.marketDataApiKey,
-      baseUrl: config.marketDataBaseUrl,
-      mt5BridgeUrl: config.mt5BridgeUrl,
-      mt5Symbol: config.mt5Symbol,
-      maxQuoteAgeSeconds: config.maxQuoteAgeSeconds,
-      debug: false,
-    });
-    const market = await marketService.collectAll([symbol]);
-    const snapshot = market.snapshots[0];
-    if (!snapshot || snapshot.data_quality === "LOW") {
-      console.info("[auto-bot] pending setup wait: data_quality LOW or missing snapshot.");
-      return;
-    }
-
-    const h1 = snapshot.candles.H1;
-    const h4 = snapshot.candles.H4;
-    const m15 = snapshot.candles.M15;
-    const m5 = snapshot.candles.M5;
-    const latestM5Time = m5.at(-1)?.time ?? "";
-    if (latestM5Time && !this.pendingSetup.seenM5Times.includes(latestM5Time)) {
-      this.pendingSetup.seenM5Times.push(latestM5Time);
-    }
-
-    if (this.pendingSetup.seenM5Times.length > 6) {
-      console.info(
-        `[auto-bot] pending setup expired: no M5 trigger after 6 closed M5 candles (${activeSymbolLabel} ${this.pendingSetup.setup.direction}).`,
-      );
-      this.pendingSetup = null;
-      return;
-    }
-
-    const invalidReason = explainXauPendingSetupInvalidation(
-      this.pendingSetup.setup,
-      m15,
-      h1,
-    );
-    if (invalidReason) {
-      console.info(`[auto-bot] pending setup cancelled: ${invalidReason}`);
-      this.pendingSetup = null;
-      return;
-    }
-
-    let signal = evaluateXauTrendPullbackTriggerSignal(
-      m5,
-      m15,
-      h1,
-      this.pendingSetup.setup,
-      { allowScalp: config.autoAllowScalp },
-    );
-    if (!signal) {
-      console.info(
-        `[auto-bot] pending setup still waiting: ${activeSymbolLabel} ${this.pendingSetup.setup.direction}, ${this.pendingSetup.seenM5Times.length}/6 M5 candles.`,
-      );
-      return;
-    }
-
-    signal = applyXauSellTpTarget(
-      signal,
-      config.autoXauSellTpTarget,
-      tradingRules.minRiskReward,
-    );
-
-    console.info(
-      `[auto-bot] pending setup triggered: ${activeSymbolLabel} M5 ${signal.direction} entry ${signal.entry} SL ${signal.stopLoss} TP ${signal.takeProfit}`,
-    );
-    const placed = await this.placePendingTriggeredSignal({
-      orderService,
-      market,
-      snapshot,
-      signal,
-      entryCandles: m5,
-      biasCandles: h4,
-      entryTf: "M5",
-      activeSymbolLabel,
-      symbol,
-    });
-    if (placed) this.pendingSetup = null;
-  }
-
-  private async placePendingTriggeredSignal(input: {
-    orderService: Mt5OrderService;
-    market: Awaited<ReturnType<MarketDataService["collectAll"]>>;
-    snapshot: MarketSnapshot;
-    signal: RuleSignal;
-    entryCandles: Candle[];
-    biasCandles: Candle[];
-    entryTf: string;
-    activeSymbolLabel: string;
-    symbol: SymbolCode;
-  }): Promise<boolean> {
-    const config = useRuntimeConfig();
-    const account = await input.orderService.getAccount();
-    const riskAccountUsd = resolveRiskAccountUsd(
-      account.equity,
-      config.accountSizeUsd,
-    );
-    const strategy = {
-      ...defaultRuleStrategyConfig,
-      rrTarget: tradingRules.minRiskReward,
-    };
-    const conviction = convictionScore(
-      input.entryCandles,
-      input.biasCandles,
-      input.signal,
-      strategy,
-    );
-    const lot =
-      conviction >= config.autoVeryGoodMinConviction
-        ? config.autoLotVeryGood
-        : config.autoLotGood;
-    const indicators = new IndicatorService().calculateMany(input.market.snapshots);
-    const payload = new OpportunityPayloadBuilder().build(
-      input.market,
-      indicators,
-      emptyNews(),
-      riskAccountUsd,
-      config.maxLossPercentPerTrade,
-    );
-
-    if (config.autoUseAiVetoOnBump) {
-      try {
-        const aiService = new AiAnalysisService({
-          apiKey: config.evolinkApiKey,
-          model: config.evolinkModel,
-          baseUrl: config.evolinkBaseUrl,
-          timeoutMs: config.aiTimeoutMs,
-        });
-        const veto = await aiService.reviewAutoTradeVeto({
-          payload,
-          signal: input.signal,
-          entryTimeframe: input.entryTf,
-          conviction,
-          lot,
-          minRiskReward: tradingRules.minRiskReward,
-          allowedLots: uniqueLots([config.autoLotGood, config.autoLotVeryGood]),
-        });
-        if (veto.parsed.decision === "BLOCK") {
-          console.info(
-            `[auto-bot] AI veto BLOCK -> skip pending trigger ${input.entryTf}: ${veto.parsed.blocker_reasons.join(" | ") || veto.parsed.summary}`,
-          );
-          return false;
-        }
-        console.info("[auto-bot] AI veto ALLOW for pending trigger; keeping rules-engine entry/SL/TP unchanged.");
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        if (!config.autoTradeOnAiError) {
-          console.warn("[auto-bot] AI auto-veto error -> skip pending trigger:", msg);
-          await this.notifyError(
-            config,
-            "ai-pending",
-            `AI auto-veto failed, so SKIP pending trigger ${input.entryTf} ${input.signal.direction}. Error: ${msg.slice(0, 200)}`,
-          );
-          return false;
-        }
-        console.warn("[auto-bot] AI auto-veto error, fallback pending trigger to Rule Engine:", msg);
-        await this.notifyError(
-          config,
-          "ai-pending-fallback",
-          [
-            "AI auto-veto failed for pending trigger but AUTO_TRADE_ON_AI_ERROR=true, so bot will continue with Rule Engine.",
-            `Symbol: ${input.activeSymbolLabel}`,
-            `Setup: ${input.entryTf} ${input.signal.direction}`,
-            `Entry: ${input.signal.entry}`,
-            `SL: ${input.signal.stopLoss}`,
-            `TP: ${input.signal.takeProfit}`,
-            `AI error: ${msg.slice(0, 200)}`,
-          ].join("\n"),
-        );
-      }
-    }
-
-    const validationError = validateAdjustedAutoTrade(
-      input.signal.direction,
-      {
-        order_type: "MARKET",
-        lot,
-        entry: input.signal.entry,
-        stop_loss: input.signal.stopLoss,
-        take_profit: input.signal.takeProfit,
-        risk_reward: rewardRisk(
-          input.signal.direction,
-          input.signal.entry,
-          input.signal.stopLoss,
-          input.signal.takeProfit,
-        ),
-        reason: input.signal.reason,
-      },
-      tradingRules.minRiskReward,
-      [config.autoLotGood, config.autoLotVeryGood],
-    );
-    if (validationError) {
-      console.info(`[auto-bot] pending trigger invalid -> skip: ${validationError}`);
-      return false;
-    }
-
-    const spreadBlock = highSpreadBlockReason(input.snapshot);
-    if (spreadBlock) {
-      console.info(`[auto-bot] ${spreadBlock}`);
-      await this.notifyAction(spreadBlock);
-      return false;
-    }
-
-    const riskCheck = checkAutoRisk({
-      symbol: input.symbol,
-      entry: input.signal.entry,
-      stopLoss: input.signal.stopLoss,
-      lot,
-      accountSizeUsd: riskAccountUsd,
-      maxLossPercentPerTrade: riskPercentForSignal(input.signal, config.maxLossPercentPerTrade),
-      maxLossUsdPerTrade: config.autoMaxLossUsdPerTrade,
-    });
-    console.info(
-      `[auto-bot] pending trigger risk check ${input.activeSymbolLabel}: estimated loss ${riskCheck.estimatedLossUsd} USD, max allowed ${riskCheck.maxLossUsd} USD (equity ${riskAccountUsd}).`,
-    );
-    if (!riskCheck.allowed) {
-      const message = `SKIP pending trigger: estimated loss ${riskCheck.estimatedLossUsd} USD exceeds max loss ${riskCheck.maxLossUsd} USD`;
-      console.info(`[auto-bot] ${message}`);
-      await this.notifyAction(message);
-      return false;
-    }
-
-    const placed = await input.orderService.placeOrder({
-      direction: input.signal.direction,
-      orderType: "MARKET",
-      volume: lot,
-      price: null,
-      stopLoss: input.signal.stopLoss,
-      takeProfit: input.signal.takeProfit,
-      comment: `auto-pending-${input.entryTf.toLowerCase()}`,
-    });
-    this.tradesToday += 1;
-    console.info(
-      `[auto-bot] PLACED pending-trigger ${input.entryTf} ${input.signal.direction} ${lot} lot @${placed.price} SL ${input.signal.stopLoss} TP ${input.signal.takeProfit} (conviction ${conviction}, ticket ${placed.ticket})`,
-    );
-
-    try {
-      const historyService = new AnalysisHistoryService(
-        new SupabaseService({
-          url: config.supabaseUrl,
-          serviceRoleKey: config.supabaseServiceRoleKey,
-        }).getClient(),
-      );
-      const record = await historyService.create({
-        requestPayload: payload,
-        aiResponseRaw: "auto-bot pending setup triggered by M5 rule engine",
-        parsedResult: buildAutoRecommendation(
-          input.signal,
-          lot,
-          conviction,
-          input.snapshot.price,
-          payload,
-          tradingRules.minRiskReward,
-        ),
-      });
-      await historyService.markOrderPlaced(record.id, {
-        mt5_ticket: placed.ticket,
-        order_type: placed.orderType,
-        order_state: "FILLED",
-      });
-    } catch (error) {
-      console.warn(
-        "[auto-bot] failed writing pending-trigger history:",
-        error instanceof Error ? error.message : error,
-      );
-    }
-    return true;
-  }
+  // managePendingSetup/placePendingTriggeredSignal (đợi trigger trend-pullback
+  // theo state riêng) đã bị gỡ: evaluateXauIctSignal là hàm thuần, tự quét lại
+  // toàn bộ chuỗi sweep->displacement->BOS->OB/FVG->retest từ nến mỗi lần gọi,
+  // nên không cần state chờ trigger nữa (giống cách xau_micro_scalp đã làm).
 
   private async closeStaleOrders(
     orderService: Mt5OrderService,

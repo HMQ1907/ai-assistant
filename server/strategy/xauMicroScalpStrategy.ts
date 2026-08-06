@@ -63,6 +63,12 @@ export interface XauMicroScalpConfig {
   formingH1AdverseSlMult: number;
   /** Chỉ vào lệnh khi H4 cùng hướng + (phá Asia range hoặc H1 xa EMA50). */
   trendDayEnabled: boolean;
+  /**
+   * Cho phép từng hướng lệnh. Backtest 07/2026 (XAU, ~3 tuần): SELL âm nặng
+   * (27% win, −6.9R) trong khi BUY hoà/dương, nên hướng có thể tắt riêng.
+   */
+  allowBuy: boolean;
+  allowSell: boolean;
 }
 
 /** Vàng: SL ~2.2×ATR(M1) (sàn 3.5 / trần 6), đệm swing dày hơn để khó bị quét. */
@@ -96,6 +102,8 @@ export const defaultXauMicroScalpConfig: XauMicroScalpConfig = {
   formingH1AdverseAtrMult: 0.6,
   formingH1AdverseSlMult: 0.8,
   trendDayEnabled: true,
+  allowBuy: true,
+  allowSell: true,
 };
 
 /** EURUSD: SL ~1.8×ATR(M1) (sàn 5 / trần 8 pip), lookback/đệm swing dày hơn. */
@@ -129,14 +137,19 @@ export const defaultEurUsdMicroScalpConfig: XauMicroScalpConfig = {
   formingH1AdverseAtrMult: 0.6,
   formingH1AdverseSlMult: 0.8,
   trendDayEnabled: true,
+  allowBuy: true,
+  allowSell: true,
 };
 
 export function microScalpConfigForSymbol(
   symbol: string | null | undefined,
+  overrides?: Partial<XauMicroScalpConfig>,
 ): XauMicroScalpConfig {
   const normalized = String(symbol || "").toUpperCase();
-  if (normalized.startsWith("EURUSD")) return defaultEurUsdMicroScalpConfig;
-  return defaultXauMicroScalpConfig;
+  const base = normalized.startsWith("EURUSD")
+    ? defaultEurUsdMicroScalpConfig
+    : defaultXauMicroScalpConfig;
+  return overrides ? { ...base, ...overrides } : base;
 }
 
 export interface XauMicroScalpSignal {
@@ -405,6 +418,13 @@ function buildXauMicroScalpSignal(
         `micro-scalp blocked: need H1+M15-aligned M1 confirm + RSI ` +
         `(${biasNote}, RSI ${m1Rsi.toFixed(1)}, body ${bodyRatio.toFixed(2)}, bull=${bullish}, bear=${bearish})`,
     };
+  }
+
+  if (direction === "BUY" && !config.allowBuy) {
+    return { signal: null, reason: "micro-scalp blocked: BUY direction disabled" };
+  }
+  if (direction === "SELL" && !config.allowSell) {
+    return { signal: null, reason: "micro-scalp blocked: SELL direction disabled" };
   }
 
   const trendDayBlock = resolveTrendDayBlock({

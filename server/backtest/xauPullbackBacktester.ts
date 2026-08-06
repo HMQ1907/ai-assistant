@@ -1,43 +1,51 @@
 import type { Candle } from "../../types/trading";
 import { tradingRules } from "../config/tradingRules";
-import { evaluateXauTrendPullbackSignal } from "../strategy/ruleStrategy";
+import {
+  defaultXauIctConfig,
+  evaluateXauIctSignal,
+  explainXauIctRejection,
+  type XauIctConfig,
+} from "../strategy/ruleStrategy";
 
 /**
- * Backtester TÁI HIỆN đúng luồng auto-bot mode `xau_trend_pullback` (khung vào lệnh M5).
+ * Backtester TÁI HIỆN đúng luồng auto-bot mode ICT rulebook (khung vào lệnh M5),
+ * thay cho `xau_trend_pullback` cũ đã bị gỡ khỏi ruleStrategy.ts.
  *
- * Khác với backtester.ts (chỉ chạy evaluateRuleSignal H1), file này mô phỏng đúng
- * cái AutoTradeRunner đang đặt lệnh thật:
- *   - Mỗi nến M5 đóng: gọi evaluateXauTrendPullbackSignal(m5, m15, h1) với M15/H1 căn theo thời gian.
+ * File này mô phỏng đúng cái AutoTradeRunner đặt lệnh thật:
+ *   - Mỗi nến M5 đóng: gọi evaluateXauIctSignal(m5, m15, h1, h4, config) với M15/H1/H4 căn theo thời gian.
  *   - Vào MARKET tại close nến trigger; SL/TP lấy từ chính signal.
  *   - Break-even: chạm +1R -> dời SL về entry (+ đệm spread), đúng moveEligibleOrdersToBreakEven.
- *   - Time-stop: giữ tối đa maxHoldBars nến M5 (72h) -> đóng theo close.
- *   - Cooldown: sau khi đóng lệnh, chờ cooldownBars nến M5 (45') mới quét lại.
+ *   - Time-stop: giữ tối đa maxHoldBars nến M5 -> đóng theo close.
+ *   - Cooldown: sau khi đóng lệnh, chờ cooldownBars nến M5 mới quét lại.
  *   - 1 lệnh tại một thời điểm.
  *   - Chi phí round-turn (spread+commission) quy theo GIÁ, trừ vào mỗi lệnh.
  * Giải lệnh bằng high/low của nến M5 kế tiếp; cùng nến chạm cả SL/TP -> coi SL trước (thận trọng).
+ *
+ * newsWindowClear luôn = true trong backtest (không có dữ liệu tin tức lịch sử) —
+ * kết quả vì vậy lạc quan hơn live một chút ở đúng những khung giờ tin nóng.
  */
-export interface XauPullbackBacktestConfig {
+export interface XauIctBacktestConfig {
   spreadPrice: number; // chi phí round-turn theo giá (vd 0.30 USD cho vàng)
-  maxHoldBars: number; // số nến M5 tối đa giữ lệnh (72h = 864)
-  cooldownBars: number; // số nến M5 nghỉ sau khi đóng lệnh (45' = 9)
+  maxHoldBars: number; // số nến M5 tối đa giữ lệnh
+  cooldownBars: number; // số nến M5 nghỉ sau khi đóng lệnh
   breakEvenAtR: number; // chạm bao nhiêu R thì dời SL về hòa vốn
-  allowScalp: boolean; // bật nhánh momentum-scalp dự phòng hay không
   lot: number; // khối lượng cố định để quy ra USD
   accountStartUsd: number; // vốn khởi điểm để vẽ đường equity
   // Bộ lọc risk-cap ĐÚNG như checkAutoRisk() của live: skip lệnh nếu lỗ ước tính
   // (SL distance * lot * ouncesPerLot) > accountSizeUsd * maxLossPercentPerTrade%.
   maxLossPercentPerTrade: number;
+  ictConfig: XauIctConfig;
 }
 
-export const defaultXauPullbackConfig: XauPullbackBacktestConfig = {
+export const defaultXauIctBacktestConfig: XauIctBacktestConfig = {
   spreadPrice: 0.3,
   maxHoldBars: 864,
   cooldownBars: 9,
   breakEvenAtR: 1,
-  allowScalp: false,
   lot: 0.01,
   accountStartUsd: 200,
   maxLossPercentPerTrade: 15,
+  ictConfig: defaultXauIctConfig,
 };
 
 export interface XauBacktestTrade {
@@ -90,20 +98,33 @@ interface OpenPosition {
   movedToBreakEven: boolean;
 }
 
-export function runXauPullbackBacktest(
+/** Đủ cho previous-day + Asia range + lookback chuỗi sweep/displacement/swing confirm. */
+const M15_WINDOW = 600;
+const H4_WINDOW = 200;
+const H1_WINDOW = 300;
+
+function tailWindow(candles: Candle[], lastIdx: number, window: number): Candle[] {
+  return candles.slice(Math.max(0, lastIdx + 1 - window), lastIdx + 1);
+}
+
+export function runXauIctBacktest(
   m5: Candle[],
   m15: Candle[],
   h1: Candle[],
-  config: XauPullbackBacktestConfig = defaultXauPullbackConfig,
+  h4: Candle[] = [],
+  config: XauIctBacktestConfig = defaultXauIctBacktestConfig,
 ): XauBacktestResult {
   const trades: XauBacktestTrade[] = [];
   let open: OpenPosition | null = null;
   let cooldownUntil = -1;
   let m15Idx = 0;
+  let h4Idx = 0;
   let h1Idx = 0;
   let signalsRaw = 0;
   let skippedByRiskCap = 0;
   const maxLossUsd = config.accountStartUsd * (config.maxLossPercentPerTrade / 100);
+  const debugReasons = process.env.DEBUG_ICT_REASONS === "1";
+  const reasonCounts = new Map<string, number>();
 
   for (let i = 0; i < m5.length; i += 1) {
     const bar = m5[i];
@@ -129,20 +150,29 @@ export function runXauPullbackBacktest(
 
     if (i <= cooldownUntil) continue;
 
-    // Căn M15/H1 tới thời điểm nến M5 hiện tại (chỉ dùng nến đã đóng <= bar.time).
+    // Căn M15/H4/H1 tới thời điểm nến M5 hiện tại (chỉ dùng nến đã đóng <= bar.time).
     while (m15Idx + 1 < m15.length && (m15[m15Idx + 1]?.time ?? "") <= bar.time) m15Idx += 1;
+    while (h4Idx + 1 < h4.length && (h4[h4Idx + 1]?.time ?? "") <= bar.time) h4Idx += 1;
     while (h1Idx + 1 < h1.length && (h1[h1Idx + 1]?.time ?? "") <= bar.time) h1Idx += 1;
-    const m15Slice = m15.slice(0, m15Idx + 1);
-    const h1Slice = h1.slice(0, h1Idx + 1);
-    if (h1Slice.length < 220 || m15Slice.length < 220) continue;
+    const m15Slice = tailWindow(m15, m15Idx, M15_WINDOW);
+    const h4Slice = tailWindow(h4, h4Idx, H4_WINDOW);
+    const h1Slice = h1.length ? tailWindow(h1, h1Idx, H1_WINDOW) : [];
+    const m5Slice = tailWindow(m5, i, 20);
 
-    const signal = evaluateXauTrendPullbackSignal(
-      m5.slice(0, i + 1),
-      m15Slice,
-      h1Slice,
-      { allowScalp: config.allowScalp },
-    );
-    if (!signal) continue;
+    const evalOptions = {
+      now: new Date(bar.time),
+      newsWindowClear: true,
+      spreadPrice: config.spreadPrice,
+    };
+    const signal = evaluateXauIctSignal(m5Slice, m15Slice, h1Slice, h4Slice, config.ictConfig, evalOptions);
+    if (!signal) {
+      if (debugReasons) {
+        const reason = explainXauIctRejection(m5Slice, m15Slice, h1Slice, h4Slice, config.ictConfig, evalOptions);
+        const key = reason.replace(/[-+]?[0-9]+\.?[0-9]*/g, "#").slice(0, 90);
+        reasonCounts.set(key, (reasonCounts.get(key) ?? 0) + 1);
+      }
+      continue;
+    }
 
     const risk =
       signal.direction === "BUY"
@@ -170,6 +200,14 @@ export function runXauPullbackBacktest(
     };
   }
 
+  if (debugReasons) {
+    const sorted = [...reasonCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15);
+    console.log("\n[DEBUG_ICT_REASONS] top lý do NO_TRADE (đã gộp số):");
+    for (const [reason, count] of sorted) {
+      console.log(`  ${String(count).padStart(6)}x  ${reason}`);
+    }
+  }
+
   return summarize(m5, trades, config, signalsRaw, skippedByRiskCap);
 }
 
@@ -181,7 +219,7 @@ interface Resolution {
 function resolveOpen(
   open: OpenPosition,
   bar: Candle,
-  config: XauPullbackBacktestConfig,
+  config: XauIctBacktestConfig,
 ): Resolution | null {
   const buffer = config.spreadPrice; // đệm hòa vốn ~ spread, giống spreadBuffer() live
   if (open.direction === "BUY") {
@@ -219,7 +257,7 @@ function buildTrade(
   bar: Candle,
   resolution: Resolution,
   holdBars: number,
-  config: XauPullbackBacktestConfig,
+  config: XauIctBacktestConfig,
 ): XauBacktestTrade {
   const move =
     open.direction === "BUY"
@@ -247,7 +285,7 @@ function buildTrade(
 function summarize(
   m5: Candle[],
   trades: XauBacktestTrade[],
-  config: XauPullbackBacktestConfig,
+  config: XauIctBacktestConfig,
   signalsRaw: number,
   skippedByRiskCap: number,
 ): XauBacktestResult {

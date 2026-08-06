@@ -4,19 +4,14 @@ import type {
   Candle,
   MarketSnapshot,
 } from "../../types/trading";
-import { tradingRules } from "../config/tradingRules";
 import {
   convictionScore,
   defaultRuleStrategyConfig,
-  evaluateBalancedM5Signal,
+  defaultXauIctConfig,
   evaluateManualReversalScalpSignal,
-  evaluateRuleSignal,
-  evaluateXauTrendPullbackSetup,
-  evaluateXauTrendPullbackSignal,
-  explainBalancedM5Rejection,
+  evaluateXauIctSignal,
   explainManualReversalScalpRejection,
-  explainRuleSignalRejection,
-  explainXauTrendPullbackRejection,
+  explainXauIctRejection,
   type RuleSignal,
 } from "../strategy/ruleStrategy";
 import {
@@ -31,6 +26,7 @@ import {
   buildAutoRecommendation,
   emptyNews,
   highSpreadBlockReason,
+  newsBlackoutBlockReason,
   rewardRisk,
   uniqueLots,
   validateAdjustedAutoTrade,
@@ -131,30 +127,17 @@ export async function runRuleSignalScan(input: RuleSignalScanInput) {
   const minRr =
     evaluation.mode === "xau_micro_scalp"
       ? microScalpConfigForSymbol(config.mt5Symbol).minRr
-      : tradingRules.minRiskReward;
+      : defaultXauIctConfig.minTargetR;
 
   if (!evaluation.signal) {
-    // Kèo mạo hiểm tất định: thử nhánh scalp (vốn bị tắt khỏi luồng chính).
-    const scalpRisky = config.manualScalp
-      ? null
-      : buildScalpRiskyCandidate({
-          autoStrategyMode: config.autoStrategyMode,
-          autoAllowScalp: config.autoAllowScalp,
-          lot: config.autoLotGood,
-          maxLossPercentPerTrade: config.maxLossPercentPerTrade,
-          snapshot,
-          symbol,
-          accountSizeUsd,
-        });
     return saveAndReturn(
       historyService,
       payload,
-      `manual rule-engine scan (${evaluation.mode}): no setup${scalpRisky ? " (scalp risky offered)" : ""}`,
+      `manual rule-engine scan (${evaluation.mode}): no setup`,
       buildRuleNoTrade(symbol, snapshot, payload, {
         reasons: evaluation.rejectReasons,
         summaryTitle: `Rule engine (${evaluation.mode}) chưa thấy setup hợp lệ`,
         pendingNote: evaluation.pendingNote,
-        riskyTrade: scalpRisky,
       }),
     );
   }
@@ -314,9 +297,8 @@ export interface StrategyEvaluation {
   mode:
     | "manual_scalp"
     | "xau_micro_scalp"
-    | "xau_trend_pullback"
-    | "balanced"
-    | "strict";
+    | "manual_scalp"
+    | "xau_ict";
   signal: RuleSignal | null;
   entryTf: string;
   entryCandles: Candle[];
@@ -333,9 +315,15 @@ export function evaluateByStrategyMode(
     autoStrategyMode: string;
     autoUseM15: boolean;
     autoAllowScalp: boolean;
+    autoAllowBuy?: boolean;
+    autoAllowSell?: boolean;
     autoScalpTpR?: number;
     autoScalpFrequency?: string;
     mt5Symbol?: string;
+    autoNewsBlackoutEnabled?: boolean;
+    autoNewsBlackoutEvents?: string;
+    autoNewsBlackoutMinutes?: number;
+    tradeScannerTimezone?: string;
   },
   snapshot: MarketSnapshot,
 ): StrategyEvaluation {
@@ -344,22 +332,15 @@ export function evaluateByStrategyMode(
   const h4 = snapshot.candles.H4;
   const m15 = snapshot.candles.M15;
   const m5 = snapshot.candles.M5;
-  const strategy = {
-    ...defaultRuleStrategyConfig,
-    rrTarget: tradingRules.minRiskReward,
-  };
   const rawMode = String(config.autoStrategyMode).toLowerCase();
-  const mode =
-    rawMode === "xau_micro_scalp"
-      ? "xau_micro_scalp"
-      : rawMode === "xau_trend_pullback"
-        ? "xau_trend_pullback"
-        : rawMode === "balanced"
-          ? "balanced"
-          : "strict";
+  const mode: StrategyEvaluation["mode"] =
+    rawMode === "xau_micro_scalp" ? "xau_micro_scalp" : "xau_ict";
 
   if (mode === "xau_micro_scalp") {
-    const scalpConfig = microScalpConfigForSymbol(config.mt5Symbol);
+    const scalpConfig = microScalpConfigForSymbol(config.mt5Symbol, {
+      allowBuy: config.autoAllowBuy !== false,
+      allowSell: config.autoAllowSell !== false,
+    });
     const micro = evaluateXauMicroScalpSignal(m1, m15, h1, scalpConfig, m5, h4);
     const signal = micro as RuleSignal | null;
     return {
@@ -401,100 +382,35 @@ export function evaluateByStrategyMode(
     };
   }
 
-  if (mode === "xau_trend_pullback") {
-    const signal = evaluateXauTrendPullbackSignal(m5, m15, h1, {
-      allowScalp: config.autoAllowScalp,
-    });
-    if (signal) {
-      return {
-        mode,
-        signal,
-        entryTf: "M5",
-        entryCandles: m5,
-        rejectReasons: [],
-        pendingNote: null,
-      };
-    }
-    const setup = evaluateXauTrendPullbackSetup(m15, h1, m5);
-    const reject =
-      explainXauTrendPullbackRejection(m5, m15, h1, {
-        allowScalp: config.autoAllowScalp,
-      }) ?? "rule engine không trả tín hiệu";
+  // xau_ict: H1 bias (chính) + H4 context -> Setup A (sweep reversal) hoặc
+  // Setup B (BOS continuation) -> M15 BOS -> retest zone -> M5 trigger.
+  // newsWindowClear đánh giá ngay tại đây (thời điểm gọi = thời điểm quét/bấm tay),
+  // không cache từ trước — khớp nguyên tắc "final-time gate" của rulebook.
+  const newsWindowClear = !newsBlackoutBlockReason({
+    now: new Date(),
+    enabled: config.autoNewsBlackoutEnabled ?? false,
+    events: config.autoNewsBlackoutEvents ?? "",
+    minutes: config.autoNewsBlackoutMinutes ?? 60,
+    timeZone: config.tradeScannerTimezone ?? "Asia/Saigon",
+  });
+  const signal = evaluateXauIctSignal(m5, m15, h1, h4, defaultXauIctConfig, { newsWindowClear });
+  if (signal) {
     return {
       mode,
-      signal: null,
+      signal,
       entryTf: "M5",
       entryCandles: m5,
-      rejectReasons: [reject],
-      pendingNote: setup
-        ? `Có setup ${setup.direction} (${setup.kind}/${setup.mode}) trên M15 đang chờ nến M5 kích hoạt (engulfing/pin/strong close). Quét lại sau mỗi nến M5 đóng, tối đa ~30 phút.`
-        : null,
-    };
-  }
-
-  if (mode === "balanced") {
-    const signal = evaluateBalancedM5Signal(m5, m15, h1, h4, strategy);
-    if (signal) {
-      return {
-        mode,
-        signal,
-        entryTf: "M5",
-        entryCandles: m5,
-        rejectReasons: [],
-        pendingNote: null,
-      };
-    }
-    return {
-      mode,
-      signal: null,
-      entryTf: "M5",
-      entryCandles: m5,
-      rejectReasons: [
-        explainBalancedM5Rejection(m5, m15, h1, h4, strategy) ??
-          "balanced diagnostics không trả tín hiệu",
-      ],
-      pendingNote: null,
-    };
-  }
-
-  // strict: H1 trước, M15 sau (nếu bật) — giống bot.
-  const h1Signal = evaluateRuleSignal(h1, h4, strategy);
-  if (h1Signal) {
-    return {
-      mode,
-      signal: h1Signal,
-      entryTf: "H1",
-      entryCandles: h1,
       rejectReasons: [],
       pendingNote: null,
     };
   }
-  const reasons = [
-    `H1: ${explainRuleSignalRejection(h1, h4, strategy) ?? "không trả tín hiệu"}`,
-  ];
-  if (config.autoUseM15) {
-    const m15Signal = evaluateRuleSignal(m15, h4, strategy, h1);
-    if (m15Signal) {
-      return {
-        mode,
-        signal: m15Signal,
-        entryTf: "M15",
-        entryCandles: m15,
-        rejectReasons: [],
-        pendingNote: null,
-      };
-    }
-    reasons.push(
-      `M15: ${explainRuleSignalRejection(m15, h4, strategy, h1) ?? "không trả tín hiệu"}`,
-    );
-  }
   return {
     mode,
     signal: null,
-    entryTf: "H1",
-    entryCandles: h1,
-    rejectReasons: reasons,
-    pendingNote: null,
+    entryTf: "M5",
+    entryCandles: m5,
+    rejectReasons: [explainXauIctRejection(m5, m15, h1, h4, defaultXauIctConfig, { newsWindowClear })],
+    pendingNote: "PA v0.2: cần H1 bias + Setup A (sweep+displacement+BOS) hoặc Setup B (BOS continuation) + retest zone + M5 trigger trong khung giờ cho phép. Quét lại sau mỗi nến M5 đóng.",
   };
 }
 
@@ -553,65 +469,6 @@ function buildRuleRiskyTrade(input: {
     warning:
       "KÈO MẠO HIỂM: bị hệ thống từ chối làm khuyến nghị chính hoặc đến từ nhánh scalp chất lượng thấp hơn. Vào lệnh là quyết định hoàn toàn của bạn.",
   };
-}
-
-/**
- * Khi luồng chính không có setup: thử nhánh momentum-scalp làm kèo mạo hiểm.
- * Chỉ áp dụng ở mode xau_trend_pullback khi scalp đang TẮT (nếu scalp bật thì
- * nó đã nằm trong tín hiệu chính rồi). Kèo scalp vẫn phải qua đủ kiểm tra
- * tất định (RR/spread/risk-cap) — mạo hiểm ở CHẤT LƯỢNG setup, không phải ở
- * việc bỏ qua an toàn vốn.
- */
-function buildScalpRiskyCandidate(input: {
-  autoStrategyMode: string;
-  autoAllowScalp: boolean;
-  lot: number;
-  maxLossPercentPerTrade: number;
-  snapshot: MarketSnapshot;
-  symbol: AnalysisPayload["symbols"][number]["market"]["symbol"];
-  accountSizeUsd: number;
-}): RiskyTradeScenario | null {
-  const mode = String(input.autoStrategyMode).toLowerCase();
-  if (mode !== "xau_trend_pullback" || input.autoAllowScalp) return null;
-
-  const { M5: m5, M15: m15, H1: h1 } = input.snapshot.candles;
-  // Luồng chính đã trả null nên tín hiệu duy nhất có thể đến từ nhánh scalp.
-  const signal = evaluateXauTrendPullbackSignal(m5, m15, h1, { allowScalp: true });
-  if (!signal || signal.strategyKind !== "MOMENTUM_SCALP") return null;
-
-  const validationError = validateAdjustedAutoTrade(
-    signal.direction,
-    {
-      order_type: "MARKET",
-      lot: input.lot,
-      entry: signal.entry,
-      stop_loss: signal.stopLoss,
-      take_profit: signal.takeProfit,
-      risk_reward: rewardRisk(
-        signal.direction,
-        signal.entry,
-        signal.stopLoss,
-        signal.takeProfit,
-      ),
-      reason: signal.reason,
-    },
-    tradingRules.minRiskReward,
-    [input.lot],
-  );
-  if (validationError) return null;
-  if (highSpreadBlockReason(input.snapshot)) return null;
-
-  return buildRuleRiskyTrade({
-    signal,
-    entryTf: "M5",
-    title: "Kèo scalp mạo hiểm (nhánh dự phòng đã tắt khỏi luồng chính)",
-    winProbability: 46,
-    reason: `Không có setup trend-pullback chính, nhưng nhánh momentum-scalp phát tín hiệu ${signal.direction}. Nhánh này chất lượng thấp hơn — chỉ hiện như kèo mạo hiểm.`,
-    blockReasons: [],
-    lot: input.lot,
-    estimatedLossUsd: 0,
-    accountSizeUsd: input.accountSizeUsd,
-  });
 }
 
 function buildRuleNoTrade(

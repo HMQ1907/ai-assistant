@@ -1,15 +1,17 @@
 import type { Candle } from "../../types/trading";
 import { tradingRules } from "../config/tradingRules";
-import { adx, atr, ema, rsi, structureTrend, trend } from "../utils/indicators";
+import { adx, atr, ema, structureTrend, trend } from "../utils/indicators";
 
 /**
- * Rules engine TẤT ĐỊNH cho method 5 bước (không AI):
- *   1. BIAS: xu hướng H4 (EMA alignment hoặc Dow HH/HL).
- *   2. TRIGGER: trên H1, giá hồi về vùng EMA nhanh (pullback) thuận bias.
- *   3. XÁC NHẬN: nến H1 quay lại theo hướng bias (phá đỉnh/đáy nến trước, hoặc engulfing).
- *   4. SL: ngoài swing gần nhất + đệm ATR(H1).
- *   5. TP: theo cấu trúc nến gần nhất cùng hướng trade; RR chỉ là bộ lọc tối thiểu sau cùng.
- * Filter phụ (bật/tắt được, để backtest đo đóng góp): RSI, Dow bias, engulfing.
+ * ==========================================================================
+ * PHẦN 1 — Dùng chung / các chiến lược khác (KHÔNG thuộc rulebook ICT XAUUSD)
+ * ==========================================================================
+ * - RuleStrategyConfig/defaultRuleStrategyConfig/convictionScore: dùng chung,
+ *   kể cả bởi xau_micro_scalp (đang live) để tính điểm conviction -> chọn lot.
+ * - evaluateManualReversalScalpSignal: chiến lược "manual/aggressive reversal
+ *   scalp" độc lập, dùng cho cả XAUUSD và EURUSD (mode manual_scalp) — không
+ *   liên quan tới rulebook ICT ở PHẦN 2.
+ * ==========================================================================
  */
 export type BiasMode = "EMA" | "STRUCTURE";
 export type ConfirmMode = "BREAK" | "ENGULFING";
@@ -19,8 +21,6 @@ export interface RuleStrategyConfig {
   emaSlow: number;
   atrPeriod: number;
   atrBufferMult: number;
-  // RR tối thiểu để ĐƯỢC PHÉP trade sau khi SL/TP đã được lấy theo cấu trúc.
-  // Không dùng để kéo TP ra xa một cách máy móc.
   rrTarget: number;
   pullbackLookback: number;
   swingLookback: number;
@@ -30,8 +30,8 @@ export interface RuleStrategyConfig {
   confirmMode: ConfirmMode;
   requireBreakOfPreviousCandle: boolean;
   useRsiFilter: boolean;
-  rsiMaxForBuy: number; // BUY chỉ khi RSI(H1) < ngưỡng (còn dư địa, đã thực sự hồi)
-  rsiMinForSell: number; // SELL chỉ khi RSI(H1) > ngưỡng
+  rsiMaxForBuy: number;
+  rsiMinForSell: number;
 }
 
 export const defaultRuleStrategyConfig: RuleStrategyConfig = {
@@ -58,7 +58,7 @@ export interface RuleSignal {
   stopLoss: number;
   takeProfit: number;
   reason: string;
-  strategyKind?: "SETUP" | "MOMENTUM_SCALP" | "REVERSAL_SCALP";
+  strategyKind?: "SETUP" | "MOMENTUM_SCALP" | "REVERSAL_SCALP" | "ICT_SETUP";
 }
 
 export interface ManualReversalScalpOptions {
@@ -66,201 +66,41 @@ export interface ManualReversalScalpOptions {
   frequency?: "normal" | "high";
 }
 
-export interface XauTrendPullbackSetup {
-  direction: "BUY" | "SELL";
-  m15CandleTime: string;
-  mode: "NORMAL" | "EARLY_TREND";
-  kind: "TREND_PULLBACK" | "BREAKOUT_CONTINUATION";
-  reason: string;
-}
+/**
+ * Điểm "độ đẹp" của setup (0-3), tất định — dùng để nâng lot ở auto-bot:
+ *   +1 bias H4 đồng thuận cả EMA lẫn cấu trúc (HH/HL).
+ *   +1 thân nến xác nhận mạnh (body/range >= 0.6).
+ *   +1 EMA H1 xếp tầng đầy đủ thuận hướng (20>50>200 hoặc ngược).
+ */
+export function convictionScore(
+  entry: Candle[],
+  bias: Candle[],
+  signal: RuleSignal,
+  config: RuleStrategyConfig = defaultRuleStrategyConfig,
+): number {
+  let score = 0;
+  const closes = entry.map((candle) => candle.close);
+  const emaTrend = trend(bias.map((candle) => candle.close));
+  const structTrend = structureTrend(bias, 20);
+  const wantUp = signal.direction === "BUY";
+  const biasLabel = wantUp ? "UPTREND" : "DOWNTREND";
+  if (emaTrend === biasLabel && structTrend === biasLabel) score += 1;
 
-export function evaluateXauTrendPullbackSetup(
-  m15: Candle[],
-  h1: Candle[],
-  m5?: Candle[],
-): XauTrendPullbackSetup | null {
-  return buildXauTrendPullbackSetup(m15, h1, m5).setup;
-}
-
-export function explainXauTrendPullbackSetupRejection(
-  m15: Candle[],
-  h1: Candle[],
-  m5?: Candle[],
-): string | null {
-  return buildXauTrendPullbackSetup(m15, h1, m5).reason;
-}
-
-export interface XauSignalOptions {
-  // Cho phép rơi xuống nhánh momentum-scalp khi không có setup trend-pullback sạch.
-  // Mặc định false: chỉ đánh setup chính, không đánh scalp chất lượng thấp.
-  allowScalp?: boolean;
-}
-
-/** Band RSI setup sạch (không ép tín hiệu mid-range). */
-const XAU_BUY_RSI_MIN = 38;
-const XAU_BUY_RSI_MAX = 60;
-const XAU_SELL_RSI_MIN = 40;
-const XAU_SELL_RSI_MAX = 62;
-
-export function evaluateXauTrendPullbackTriggerSignal(
-  m5: Candle[],
-  m15: Candle[],
-  h1: Candle[],
-  setup: XauTrendPullbackSetup,
-  options: XauSignalOptions = {},
-): RuleSignal | null {
-  const signal = evaluateXauTrendPullbackSignal(m5, m15, h1, options);
-  return signal?.direction === setup.direction ? signal : null;
-}
-
-export function explainXauPendingSetupInvalidation(
-  setup: XauTrendPullbackSetup,
-  m15: Candle[],
-  h1: Candle[],
-): string | null {
-  const h1Adx = adx(h1, 14);
-  if (h1Adx !== null && h1Adx <= 15) {
-    return `ADX H1 dropped to ${h1Adx} <= 15`;
+  const last = entry.at(-1);
+  if (last) {
+    const range = last.high - last.low;
+    const bodyRatio = range > 0 ? Math.abs(last.close - last.open) / range : 0;
+    if (bodyRatio >= 0.6) score += 1;
   }
 
-  const m15Closes = m15.map((candle) => candle.close);
-  const m15Ema200 = ema(m15Closes, 200);
-  const m15Last = m15.at(-1);
-  if (!m15Last || m15Ema200 === null) return null;
-  if (setup.direction === "BUY" && m15Last.close < m15Ema200) {
-    return `M15 close ${m15Last.close} broke below EMA200 ${m15Ema200}`;
+  const e20 = ema(closes, config.emaFast);
+  const e50 = ema(closes, config.emaSlow);
+  const e200 = ema(closes, 200);
+  if (e20 !== null && e50 !== null && e200 !== null) {
+    const stacked = wantUp ? e20 > e50 && e50 > e200 : e20 < e50 && e50 < e200;
+    if (stacked) score += 1;
   }
-  if (setup.direction === "SELL" && m15Last.close > m15Ema200) {
-    return `M15 close ${m15Last.close} broke above EMA200 ${m15Ema200}`;
-  }
-  return null;
-}
-
-function buildXauTrendPullbackSetup(
-  m15: Candle[],
-  h1: Candle[],
-  m5?: Candle[],
-): { setup: XauTrendPullbackSetup | null; reason: string | null } {
-  if (h1.length < 220) return { setup: null, reason: `H1 candles ${h1.length} < 220` };
-  if (m15.length < 220) return { setup: null, reason: `M15 candles ${m15.length} < 220` };
-
-  const h1Closes = h1.map((candle) => candle.close);
-  const h1Ema50 = ema(h1Closes, 50);
-  const h1Ema200 = ema(h1Closes, 200);
-  const h1Adx = adx(h1, 14);
-  const h1Last = h1.at(-1);
-  if (!h1Last || h1Ema50 === null || h1Ema200 === null || h1Adx === null) {
-    return { setup: null, reason: "H1 EMA50/EMA200/ADX unavailable" };
-  }
-  if (h1Adx <= 15) return { setup: null, reason: `H1 ADX ${h1Adx} <= 15` };
-  const setupMode = h1Adx <= 18 ? "EARLY_TREND" : "NORMAL";
-
-  const h1Bias = resolveXauH1Direction(h1Last.close, h1Ema50, h1Ema200);
-  if (h1Bias === null) {
-    return {
-      setup: null,
-      reason: `H1 filter blocked: EMA50 ${h1Ema50} vs EMA200 ${h1Ema200}, close ${h1Last.close}`,
-    };
-  }
-  const { direction, kind } = h1Bias;
-
-  const m15Closes = m15.map((candle) => candle.close);
-  const m15Ema21 = ema(m15Closes, 21);
-  const m15Ema50 = ema(m15Closes, 50);
-  const m15Ema200 = ema(m15Closes, 200);
-  const m15Atr = atr(m15, 14);
-  const m15Rsi = rsi(m15Closes, 14);
-  const m15Last = m15.at(-1);
-  if (
-    !m15Last ||
-    m15Ema21 === null ||
-    m15Ema50 === null ||
-    m15Ema200 === null ||
-    m15Atr === null ||
-    m15Atr <= 0 ||
-    m15Rsi === null
-  ) {
-    return { setup: null, reason: "M15 EMA/ATR/RSI unavailable" };
-  }
-
-  const pullbackTolerance = 0.5 * m15Atr;
-  const touchedPullbackZone = hasRecentM15PullbackTouch(
-    m15,
-    direction,
-    m15Ema21,
-    m15Ema50,
-    pullbackTolerance,
-  );
-  const m15Continuation = isStrongContinuationCandle(m15Last, direction);
-  const m5VeryStrong = hasVeryStrongM5Trigger(m5, direction);
-  if (
-    !touchedPullbackZone &&
-    !(kind === "BREAKOUT_CONTINUATION" && m15Continuation) &&
-    !m5VeryStrong
-  ) {
-    return {
-      setup: null,
-      reason: "M15 setup blocked: no recent EMA21-EMA50 pullback, no continuation candle, and no very-strong M5 trigger",
-    };
-  }
-
-  if (direction === "BUY") {
-    if (m15Rsi < XAU_BUY_RSI_MIN || m15Rsi > XAU_BUY_RSI_MAX) {
-      return {
-        setup: null,
-        reason: `M15 BUY RSI ${m15Rsi} outside ${XAU_BUY_RSI_MIN}-${XAU_BUY_RSI_MAX}`,
-      };
-    }
-    if (m15Ema21 <= m15Ema200 && m15Last.close <= m15Ema200) {
-      return { setup: null, reason: "M15 BUY structure broken: EMA21 <= EMA200 and close <= EMA200" };
-    }
-  } else {
-    if (m15Rsi < XAU_SELL_RSI_MIN || m15Rsi > XAU_SELL_RSI_MAX) {
-      return {
-        setup: null,
-        reason: `M15 SELL RSI ${m15Rsi} outside ${XAU_SELL_RSI_MIN}-${XAU_SELL_RSI_MAX}`,
-      };
-    }
-    if (m15Ema21 >= m15Ema200 && m15Last.close >= m15Ema200) {
-      return { setup: null, reason: "M15 SELL structure broken: EMA21 >= EMA200 and close >= EMA200" };
-    }
-  }
-
-  return {
-    setup: {
-      direction,
-      m15CandleTime: m15Last.time,
-      mode: setupMode,
-      kind,
-      reason: `H1 ${direction} ${kind} + M15/M5 setup valid (${setupMode}), waiting up to 6 M5 candles for trigger`,
-    },
-    reason: null,
-  };
-}
-
-export function evaluateXauTrendPullbackSignal(
-  m5: Candle[],
-  m15: Candle[],
-  h1: Candle[],
-  options: XauSignalOptions = {},
-): RuleSignal | null {
-  const trendSignal = buildXauTrendPullbackSignal(m5, m15, h1)?.signal ?? null;
-  if (trendSignal) return trendSignal;
-  if (!options.allowScalp) return null;
-  return buildXauMomentumScalpSignal(m5, m15, h1)?.signal ?? null;
-}
-
-export function explainXauTrendPullbackRejection(
-  m5: Candle[],
-  m15: Candle[],
-  h1: Candle[],
-  options: XauSignalOptions = {},
-): string | null {
-  const setup = buildXauTrendPullbackSignal(m5, m15, h1);
-  if (setup.signal) return setup.reason;
-  if (!options.allowScalp) return setup.reason;
-  const scalp = buildXauMomentumScalpSignal(m5, m15, h1);
-  return scalp.signal ? scalp.reason : `${setup.reason}; scalp: ${scalp.reason}`;
+  return score;
 }
 
 export function evaluateManualReversalScalpSignal(
@@ -298,8 +138,8 @@ function buildManualReversalScalpSignal(
   const m15Closes = m15.map((candle) => candle.close);
   const m5Closes = m5.map((candle) => candle.close);
   const h1Closes = h1.map((candle) => candle.close);
-  const m15Rsi = rsi(m15Closes, 14);
-  const m5Rsi = rsi(m5Closes, 14);
+  const m15Rsi = rsiLocal(m15Closes, 14);
+  const m5Rsi = rsiLocal(m5Closes, 14);
   const m15Atr = atr(m15, 14);
   const m5Atr = atr(m5, 14);
   const h1Adx = adx(h1, 14);
@@ -344,10 +184,6 @@ function buildManualReversalScalpSignal(
     lastM15.low <= m15Bands.lower || lastM15.close <= m15Bands.lower + 0.15 * m15Atr;
   const sellBandTouch =
     lastM15.high >= m15Bands.upper || lastM15.close >= m15Bands.upper - 0.15 * m15Atr;
-  // Auto/manual scalp được nới vừa phải: M15 RSI cực trị là đủ để xét bắt đỉnh/đáy.
-  // Bollinger band touch không còn là điều kiện bắt buộc, chỉ được ghi nhận như điểm cộng.
-  // Aggressive scalp: RSI khong can cuc tri qua sau nua, nhung van bat buoc
-  // co sweep + M1 trigger + M5 momentum recovering de tranh vao bua.
   const buyExtreme = highFrequency ? m15Rsi <= 55 : m15Rsi <= 40;
   const sellExtreme = highFrequency ? m15Rsi >= 45 : m15Rsi >= 60;
   const m1SweepLookback = highFrequency ? 6 : 12;
@@ -427,855 +263,6 @@ function buildManualReversalScalpSignal(
   };
 }
 
-function buildXauTrendPullbackSignal(
-  m5: Candle[],
-  m15: Candle[],
-  h1: Candle[],
-): { signal: RuleSignal | null; reason: string } {
-  if (h1.length < 220) return { signal: null, reason: `H1 candles ${h1.length} < 220` };
-  if (m15.length < 220) return { signal: null, reason: `M15 candles ${m15.length} < 220` };
-  if (m5.length < 3) return { signal: null, reason: `M5 candles ${m5.length} < 3` };
-
-  const h1Closes = h1.map((candle) => candle.close);
-  const h1Ema50 = ema(h1Closes, 50);
-  const h1Ema200 = ema(h1Closes, 200);
-  const h1Adx = adx(h1, 14);
-  const h1Last = h1.at(-1);
-  if (!h1Last || h1Ema50 === null || h1Ema200 === null || h1Adx === null) {
-    return { signal: null, reason: "H1 EMA50/EMA200/ADX unavailable" };
-  }
-  if (h1Adx <= 15) return { signal: null, reason: `H1 ADX ${h1Adx} <= 15` };
-  const setupMode = h1Adx <= 18 ? "EARLY_TREND" : "NORMAL";
-
-  const h1Bias = resolveXauH1Direction(h1Last.close, h1Ema50, h1Ema200);
-  if (h1Bias === null) {
-    return {
-      signal: null,
-      reason: `H1 filter blocked: EMA50 ${h1Ema50} vs EMA200 ${h1Ema200}, close ${h1Last.close}`,
-    };
-  }
-  const { direction, kind } = h1Bias;
-
-  const m15Closes = m15.map((candle) => candle.close);
-  const m15Ema21 = ema(m15Closes, 21);
-  const m15Ema50 = ema(m15Closes, 50);
-  const m15Ema200 = ema(m15Closes, 200);
-  const m15Atr = atr(m15, 14);
-  const m15Rsi = rsi(m15Closes, 14);
-  const m15Last = m15.at(-1);
-  if (
-    !m15Last ||
-    m15Ema21 === null ||
-    m15Ema50 === null ||
-    m15Ema200 === null ||
-    m15Atr === null ||
-    m15Atr <= 0 ||
-    m15Rsi === null
-  ) {
-    return { signal: null, reason: "M15 EMA/ATR/RSI unavailable" };
-  }
-
-  const pullbackTolerance = 0.5 * m15Atr;
-  const touchedPullbackZone = hasRecentM15PullbackTouch(
-    m15,
-    direction,
-    m15Ema21,
-    m15Ema50,
-    pullbackTolerance,
-  );
-  const m15Continuation = isStrongContinuationCandle(m15Last, direction);
-  const m5VeryStrong = hasVeryStrongM5Trigger(m5, direction);
-  if (
-    !touchedPullbackZone &&
-    !(kind === "BREAKOUT_CONTINUATION" && m15Continuation) &&
-    !m5VeryStrong
-  ) {
-    return {
-      signal: null,
-      reason: `M15 setup blocked: no recent EMA21-EMA50 pullback, no continuation candle, and no very-strong M5 trigger`,
-    };
-  }
-
-  if (direction === "BUY") {
-    if (m15Rsi < XAU_BUY_RSI_MIN || m15Rsi > XAU_BUY_RSI_MAX) {
-      return {
-        signal: null,
-        reason: `M15 BUY RSI ${m15Rsi} outside ${XAU_BUY_RSI_MIN}-${XAU_BUY_RSI_MAX}`,
-      };
-    }
-    if (m15Ema21 <= m15Ema200 && m15Last.close <= m15Ema200) {
-      return { signal: null, reason: `M15 BUY structure broken: EMA21 <= EMA200 and close <= EMA200` };
-    }
-  } else {
-    if (m15Rsi < XAU_SELL_RSI_MIN || m15Rsi > XAU_SELL_RSI_MAX) {
-      return {
-        signal: null,
-        reason: `M15 SELL RSI ${m15Rsi} outside ${XAU_SELL_RSI_MIN}-${XAU_SELL_RSI_MAX}`,
-      };
-    }
-    if (m15Ema21 >= m15Ema200 && m15Last.close >= m15Ema200) {
-      return { signal: null, reason: `M15 SELL structure broken: EMA21 >= EMA200 and close >= EMA200` };
-    }
-  }
-
-  const prevM5 = m5.at(-2);
-  const lastM5 = m5.at(-1);
-  if (!prevM5 || !lastM5) return { signal: null, reason: "M5 missing trigger candles" };
-  const strongTrigger =
-    direction === "BUY"
-      ? isStrongBullishTrigger(lastM5) || isBullishMomentumBreak(prevM5, lastM5)
-      : isStrongBearishTrigger(lastM5) || isBearishMomentumBreak(prevM5, lastM5);
-  const trigger =
-    direction === "BUY"
-      ? isBullishEngulfing(prevM5, lastM5) ||
-        isBullishPinBar(lastM5) ||
-        strongTrigger
-      : isBearishEngulfing(prevM5, lastM5) ||
-        isBearishPinBar(lastM5) ||
-        strongTrigger;
-  if (!trigger) {
-    return {
-      signal: null,
-      reason: `M5 ${direction} trigger blocked: no engulfing/pin bar/strong close/momentum break on closed candle`,
-    };
-  }
-  if (setupMode === "EARLY_TREND" && !strongTrigger) {
-    return {
-      signal: null,
-      reason: `M5 ${direction} early-trend trigger blocked: ADX ${h1Adx} requires strong-close candle`,
-    };
-  }
-
-  const entry = lastM5.close;
-  const rawStopLoss =
-    direction === "BUY" ? entry - 1.5 * m15Atr : entry + 1.5 * m15Atr;
-  const swingStop = findNearestM15SwingStop(m15, direction, entry);
-  const stopLoss =
-    swingStop === null
-      ? rawStopLoss
-      : direction === "BUY"
-        ? Math.min(rawStopLoss, swingStop - 0.2 * m15Atr)
-        : Math.max(rawStopLoss, swingStop + 0.2 * m15Atr);
-  const risk = Math.abs(entry - stopLoss);
-  if (!Number.isFinite(risk) || risk <= 0) {
-    return { signal: null, reason: `${direction} blocked: invalid SL/risk` };
-  }
-
-  const structuralTp = findNearestM15TargetSwing(m15, direction, entry);
-  const fallbackTp = direction === "BUY" ? entry + 1.5 * risk : entry - 1.5 * risk;
-  const wantedTp =
-    structuralTp === null
-      ? fallbackTp
-      : direction === "BUY"
-        ? structuralTp - 0.2 * m15Atr
-        : structuralTp + 0.2 * m15Atr;
-  const rawReward = direction === "BUY" ? wantedTp - entry : entry - wantedTp;
-  const rawRr = rawReward / risk;
-  // Setup đẹp: cần RR cấu trúc đạt min — không ép TP giả để ra tín hiệu.
-  const minRr = tradingRules.minRiskReward;
-  if (!Number.isFinite(rawRr) || rawRr + 1e-4 < minRr) {
-    return {
-      signal: null,
-      reason: `${direction} blocked: structural RR ${Number(rawRr.toFixed(2))} < ${minRr}`,
-    };
-  }
-
-  const takeProfit =
-    rawRr > 2.5
-      ? direction === "BUY"
-        ? entry + 2.5 * risk
-        : entry - 2.5 * risk
-      : wantedTp;
-
-  return {
-    signal: {
-      direction,
-      entry: round(entry),
-      stopLoss: round(stopLoss),
-      takeProfit: round(takeProfit),
-      reason: `XAUUSD Adaptive (${kind}/${setupMode}): H1 ADX ${h1Adx}, H1 filter ${direction}, M15 setup RSI ${m15Rsi}, M5 trigger, SL 1.5 ATR M15 adjusted by swing, TP structure/capped 2.5R`,
-      strategyKind: "SETUP",
-    },
-    reason: "signal found",
-  };
-}
-
-function buildXauMomentumScalpSignal(
-  m5: Candle[],
-  m15: Candle[],
-  h1: Candle[],
-): { signal: RuleSignal | null; reason: string } {
-  if (h1.length < 220) return { signal: null, reason: `H1 candles ${h1.length} < 220` };
-  if (m15.length < 60) return { signal: null, reason: `M15 candles ${m15.length} < 60` };
-  if (m5.length < 8) return { signal: null, reason: `M5 candles ${m5.length} < 8` };
-
-  const h1Closes = h1.map((candle) => candle.close);
-  const h1Ema200 = ema(h1Closes, 200);
-  const h1Adx = adx(h1, 14);
-  const h1Last = h1.at(-1);
-  if (!h1Last || h1Ema200 === null || h1Adx === null) {
-    return { signal: null, reason: "scalp H1 EMA200/ADX unavailable" };
-  }
-  if (h1Adx <= 15) return { signal: null, reason: `scalp H1 ADX ${h1Adx} <= 15` };
-
-  const m15Closes = m15.map((candle) => candle.close);
-  const m15Atr = atr(m15, 14);
-  const m15Rsi = rsi(m15Closes, 14);
-  if (m15Atr === null || m15Atr <= 0 || m15Rsi === null) {
-    return { signal: null, reason: "scalp M15 ATR/RSI unavailable" };
-  }
-
-  const prevM5 = m5.at(-2);
-  const lastM5 = m5.at(-1);
-  if (!prevM5 || !lastM5) return { signal: null, reason: "scalp missing M5 trigger candles" };
-
-  // Scalp dự phòng (chỉ khi allowScalp=true) — vẫn cần momentum rõ, không ép mid-range.
-  const buyAllowed = h1Last.close > h1Ema200 && m15Rsi >= 60 && m15Rsi <= 78;
-  const sellAllowed = h1Last.close < h1Ema200 && m15Rsi >= 22 && m15Rsi <= 40;
-  const buyTrigger =
-    isBullishMomentumBreak(prevM5, lastM5) ||
-    isVeryStrongBullishTrigger(lastM5) ||
-    isBullishScalpMomentumCandle(lastM5);
-  const sellTrigger =
-    isBearishMomentumBreak(prevM5, lastM5) ||
-    isVeryStrongBearishTrigger(lastM5) ||
-    isBearishScalpMomentumCandle(lastM5);
-
-  const direction: "BUY" | "SELL" | null =
-    buyAllowed && buyTrigger ? "BUY" : sellAllowed && sellTrigger ? "SELL" : null;
-  if (direction === null) {
-    return {
-      signal: null,
-      reason: `scalp blocked: H1/M15 momentum or M5 scalp candle not aligned (RSI ${m15Rsi}, close ${h1Last.close}, EMA200 ${h1Ema200})`,
-    };
-  }
-
-  const entry = lastM5.close;
-  const m5Swing = direction === "BUY"
-    ? Math.min(...m5.slice(-6).map((candle) => candle.low))
-    : Math.max(...m5.slice(-6).map((candle) => candle.high));
-  const atrStop = direction === "BUY" ? entry - m15Atr : entry + m15Atr;
-  const swingStop = direction === "BUY" ? m5Swing - 0.1 * m15Atr : m5Swing + 0.1 * m15Atr;
-  const stopLoss = direction === "BUY" ? Math.min(atrStop, swingStop) : Math.max(atrStop, swingStop);
-  const risk = Math.abs(entry - stopLoss);
-  if (!Number.isFinite(risk) || risk <= 0) {
-    return { signal: null, reason: `scalp ${direction} blocked: invalid SL/risk` };
-  }
-
-  const takeProfit = direction === "BUY" ? entry + 1.5 * risk : entry - 1.5 * risk;
-  return {
-    signal: {
-      direction,
-      entry: round(entry),
-      stopLoss: round(stopLoss),
-      takeProfit: round(takeProfit),
-      reason: `XAUUSD MOMENTUM_SCALP: H1 close ${direction === "BUY" ? "above" : "below"} EMA200, M15 RSI ${m15Rsi}, M5 momentum/scalp candle, TP 1.5R`,
-      strategyKind: "MOMENTUM_SCALP",
-    },
-    reason: "scalp signal found",
-  };
-}
-
-function oppositeTrend(left: ReturnType<typeof trend>, right: ReturnType<typeof trend>): boolean {
-  return (
-    (left === "UPTREND" && right === "DOWNTREND") ||
-    (left === "DOWNTREND" && right === "UPTREND")
-  );
-}
-
-function resolveXauH1Direction(
-  close: number,
-  ema50: number,
-  ema200: number,
-): {
-  direction: "BUY" | "SELL";
-  kind: XauTrendPullbackSetup["kind"];
-} | null {
-  if (ema50 > ema200 && close > ema200) {
-    return { direction: "BUY", kind: "TREND_PULLBACK" };
-  }
-  if (ema50 < ema200 && close < ema200) {
-    return { direction: "SELL", kind: "TREND_PULLBACK" };
-  }
-  if (ema50 > ema200 && close < ema200) {
-    return { direction: "SELL", kind: "BREAKOUT_CONTINUATION" };
-  }
-  if (ema50 < ema200 && close > ema200) {
-    return { direction: "BUY", kind: "BREAKOUT_CONTINUATION" };
-  }
-  return null;
-}
-
-function isStrongContinuationCandle(
-  candle: Candle,
-  direction: "BUY" | "SELL",
-): boolean {
-  const range = candle.high - candle.low;
-  if (range <= 0) return false;
-  const bullishBody = candle.close - candle.open;
-  const bearishBody = candle.open - candle.close;
-  return direction === "BUY"
-    ? bullishBody > 0 && bullishBody / range >= 0.45 && candle.close >= candle.low + range * 0.65
-    : bearishBody > 0 && bearishBody / range >= 0.45 && candle.close <= candle.low + range * 0.35;
-}
-
-function hasRecentM15PullbackTouch(
-  candles: Candle[],
-  direction: "BUY" | "SELL",
-  ema21: number,
-  ema50: number,
-  tolerance: number,
-): boolean {
-  const recent = candles.slice(-3);
-  const lower = Math.min(ema21, ema50) - tolerance;
-  const upper = Math.max(ema21, ema50) + tolerance;
-  return recent.some((candle) =>
-    direction === "BUY"
-      ? candle.low <= upper && candle.low >= lower
-      : candle.high >= lower && candle.high <= upper,
-  );
-}
-
-function hasVeryStrongM5Trigger(
-  candles: Candle[] | undefined,
-  direction: "BUY" | "SELL",
-): boolean {
-  const last = candles?.at(-1);
-  if (!last) return false;
-  return direction === "BUY"
-    ? isVeryStrongBullishTrigger(last)
-    : isVeryStrongBearishTrigger(last);
-}
-
-function resolveBiasTrend(
-  bias: Candle[],
-  config: RuleStrategyConfig,
-): {
-  direction: ReturnType<typeof trend>;
-  emaTrend: ReturnType<typeof trend>;
-  structTrend: ReturnType<typeof structureTrend>;
-  source: "EMA" | "STRUCTURE" | "NONE";
-} {
-  const emaTrendValue = trend(bias.map((candle) => candle.close));
-  const structTrendValue = structureTrend(bias, 20);
-
-  if (config.biasMode === "STRUCTURE") {
-    return {
-      direction: structTrendValue,
-      emaTrend: emaTrendValue,
-      structTrend: structTrendValue,
-      source:
-        structTrendValue === "UPTREND" || structTrendValue === "DOWNTREND"
-          ? "STRUCTURE"
-          : "NONE",
-    };
-  }
-
-  if (emaTrendValue === "UPTREND" || emaTrendValue === "DOWNTREND") {
-    return {
-      direction: emaTrendValue,
-      emaTrend: emaTrendValue,
-      structTrend: structTrendValue,
-      source: "EMA",
-    };
-  }
-
-  if (structTrendValue === "UPTREND" || structTrendValue === "DOWNTREND") {
-    return {
-      direction: structTrendValue,
-      emaTrend: emaTrendValue,
-      structTrend: structTrendValue,
-      source: "STRUCTURE",
-    };
-  }
-
-  return {
-    direction: emaTrendValue,
-    emaTrend: emaTrendValue,
-    structTrend: structTrendValue,
-    source: "NONE",
-  };
-}
-
-export function explainRuleSignalRejection(
-  entry: Candle[],
-  bias: Candle[],
-  config: RuleStrategyConfig = defaultRuleStrategyConfig,
-  intermediate?: Candle[],
-): string | null {
-  if (entry.length < 60) return `entry candles ${entry.length} < 60`;
-  if (bias.length < 200) return `bias candles ${bias.length} < 200`;
-
-  const biasState = resolveBiasTrend(bias, config);
-  const biasDir = biasState.direction;
-  if (biasDir !== "UPTREND" && biasDir !== "DOWNTREND") {
-    return `H4 bias not clearly trending (EMA=${biasState.emaTrend}, structure=${biasState.structTrend})`;
-  }
-
-  if (intermediate && intermediate.length >= config.emaSlow) {
-    const ic = intermediate.map((candle) => candle.close);
-    const ief = ema(ic, config.emaFast);
-    const ies = ema(ic, config.emaSlow);
-    if (ief === null || ies === null) return "intermediate EMA unavailable";
-    const aligned = biasDir === "UPTREND" ? ief > ies : ief < ies;
-    if (!aligned) {
-      return `intermediate trend not aligned with H4 (${round(ief)} vs ${round(ies)})`;
-    }
-  }
-
-  const closes = entry.map((candle) => candle.close);
-  const emaFast = ema(closes, config.emaFast);
-  const emaSlow = ema(closes, config.emaSlow);
-  const atrV = atr(entry, config.atrPeriod);
-  if (emaFast === null) return `EMA${config.emaFast} unavailable`;
-  if (emaSlow === null) return `EMA${config.emaSlow} unavailable`;
-  if (atrV === null || atrV <= 0) return `ATR${config.atrPeriod} unavailable`;
-
-  const rsiV = config.useRsiFilter ? rsi(closes) : null;
-  if (config.useRsiFilter && rsiV === null) return "RSI unavailable";
-
-  const last = entry.at(-1);
-  const prev = entry.at(-2);
-  if (!last || !prev) return "missing latest/previous candle";
-
-  const window = entry.slice(-(config.pullbackLookback + 1), -1);
-  const tol = config.pullbackTouchTolerancePct;
-  const direction = biasDir === "UPTREND" ? "BUY" : "SELL";
-
-  if (biasDir === "UPTREND") {
-    if (emaFast <= emaSlow) {
-      return `BUY blocked: EMA${config.emaFast} <= EMA${config.emaSlow}`;
-    }
-    const pulledBack = window.some((candle) => candle.low <= emaFast * (1 + tol));
-    if (!pulledBack) {
-      return `BUY blocked: no pullback to EMA${config.emaFast} in last ${config.pullbackLookback} candle(s)`;
-    }
-    const confirmed = isBullishConfirmation(prev, last, emaFast, config);
-    if (!confirmed) {
-      return "BUY blocked: confirmation candle not strong enough";
-    }
-    if (config.useRsiFilter && rsiV !== null && rsiV >= config.rsiMaxForBuy) {
-      return `BUY blocked: RSI ${rsiV} >= ${config.rsiMaxForBuy}`;
-    }
-  } else {
-    if (emaFast >= emaSlow) {
-      return `SELL blocked: EMA${config.emaFast} >= EMA${config.emaSlow}`;
-    }
-    const pulledBack = window.some((candle) => candle.high >= emaFast * (1 - tol));
-    if (!pulledBack) {
-      return `SELL blocked: no pullback to EMA${config.emaFast} in last ${config.pullbackLookback} candle(s)`;
-    }
-    const confirmed = isBearishConfirmation(prev, last, emaFast, config);
-    if (!confirmed) {
-      return "SELL blocked: confirmation candle not strong enough";
-    }
-    if (config.useRsiFilter && rsiV !== null && rsiV <= config.rsiMinForSell) {
-      return `SELL blocked: RSI ${rsiV} <= ${config.rsiMinForSell}`;
-    }
-  }
-
-  const px = last.close;
-  const buffer = atrV * config.atrBufferMult;
-  const stopLoss =
-    direction === "BUY"
-      ? Math.min(...entry.slice(-config.swingLookback).map((candle) => candle.low)) - buffer
-      : Math.max(...entry.slice(-config.swingLookback).map((candle) => candle.high)) + buffer;
-  const risk = Math.abs(px - stopLoss);
-  if (!Number.isFinite(risk) || risk <= 0) return `${direction} blocked: invalid SL/risk`;
-
-  const takeProfit = findStructuralTakeProfit(
-    entry,
-    direction,
-    px,
-    config.targetLookback,
-  );
-  if (takeProfit === null) {
-    return `${direction} blocked: no structural TP beyond entry`;
-  }
-  const rr =
-    direction === "BUY" ? (takeProfit - px) / risk : (px - takeProfit) / risk;
-  if (!Number.isFinite(rr) || rr < config.rrTarget) {
-    return `${direction} blocked: structural RR ${Number(rr.toFixed(2))} < ${config.rrTarget}`;
-  }
-
-  return null;
-}
-
-export function evaluateBalancedM5Signal(
-  m5: Candle[],
-  m15: Candle[],
-  h1: Candle[],
-  h4: Candle[],
-  config: RuleStrategyConfig = defaultRuleStrategyConfig,
-): RuleSignal | null {
-  const h1Bias = resolveBiasTrend(h1, config);
-  if (h1Bias.direction !== "UPTREND" && h1Bias.direction !== "DOWNTREND") {
-    return null;
-  }
-
-  const h4Bias = resolveBiasTrend(h4, config);
-  if (
-    (h4Bias.direction === "UPTREND" || h4Bias.direction === "DOWNTREND") &&
-    oppositeTrend(h1Bias.direction, h4Bias.direction)
-  ) {
-    return null;
-  }
-
-  if (!hasPullbackSetup(m15, h1Bias.direction, config)) {
-    return null;
-  }
-
-  const signal = evaluateRuleSignal(m5, h1, config);
-  return signal
-    ? {
-        ...signal,
-        reason: `${signal.reason} (balanced: H1 bias + M15 pullback setup + M5 trigger, H4 soft filter)`,
-      }
-    : null;
-}
-
-export function explainBalancedM5Rejection(
-  m5: Candle[],
-  m15: Candle[],
-  h1: Candle[],
-  h4: Candle[],
-  config: RuleStrategyConfig = defaultRuleStrategyConfig,
-): string | null {
-  const h1Bias = resolveBiasTrend(h1, config);
-  if (h1Bias.direction !== "UPTREND" && h1Bias.direction !== "DOWNTREND") {
-    return `H1 bias not clearly trending (EMA=${h1Bias.emaTrend}, structure=${h1Bias.structTrend})`;
-  }
-
-  const h4Bias = resolveBiasTrend(h4, config);
-  if (
-    (h4Bias.direction === "UPTREND" || h4Bias.direction === "DOWNTREND") &&
-    oppositeTrend(h1Bias.direction, h4Bias.direction)
-  ) {
-    return `H4 soft filter blocked: H1=${h1Bias.direction}, H4=${h4Bias.direction}`;
-  }
-
-  if (!hasPullbackSetup(m15, h1Bias.direction, config)) {
-    return `M15 setup blocked: no pullback to EMA${config.emaFast}/EMA${config.emaSlow} aligned with H1 ${h1Bias.direction}`;
-  }
-
-  return (
-    explainRuleSignalRejection(m5, h1, config) ??
-    "M5 passed balanced diagnostics but returned no signal"
-  );
-}
-
-function hasPullbackSetup(
-  candles: Candle[],
-  biasDirection: ReturnType<typeof trend>,
-  config: RuleStrategyConfig,
-): boolean {
-  if (candles.length < Math.max(config.emaSlow, config.pullbackLookback + 2)) {
-    return false;
-  }
-  const closes = candles.map((candle) => candle.close);
-  const emaFast = ema(closes, config.emaFast);
-  const emaSlow = ema(closes, config.emaSlow);
-  if (emaFast === null || emaSlow === null) return false;
-
-  const recent = candles.slice(-(config.pullbackLookback + 1), -1);
-  const tolerance = config.pullbackTouchTolerancePct;
-  if (biasDirection === "UPTREND") {
-    return recent.some(
-      (candle) =>
-        candle.low <= emaFast * (1 + tolerance) ||
-        candle.low <= emaSlow * (1 + tolerance),
-    );
-  }
-  if (biasDirection === "DOWNTREND") {
-    return recent.some(
-      (candle) =>
-        candle.high >= emaFast * (1 - tolerance) ||
-        candle.high >= emaSlow * (1 - tolerance),
-    );
-  }
-  return false;
-}
-
-/**
- * @param entry  Khung vào lệnh (H1, hoặc M15).
- * @param bias   Khung xu hướng lớn (H4).
- * @param intermediate  Khung trung gian phải đồng pha (vd H1 khi entry là M15). Tùy chọn.
- */
-export function evaluateRuleSignal(
-  entry: Candle[],
-  bias: Candle[],
-  config: RuleStrategyConfig = defaultRuleStrategyConfig,
-  intermediate?: Candle[],
-): RuleSignal | null {
-  if (entry.length < 60 || bias.length < 200) return null;
-
-  // Bước 1: BIAS khung lớn.
-  const biasState = resolveBiasTrend(bias, config);
-  const biasDir = biasState.direction;
-  if (biasDir !== "UPTREND" && biasDir !== "DOWNTREND") return null;
-
-  // Khung trung gian (H1 khi entry là M15) phải đồng pha với bias.
-  if (intermediate && intermediate.length >= config.emaSlow) {
-    const ic = intermediate.map((candle) => candle.close);
-    const ief = ema(ic, config.emaFast);
-    const ies = ema(ic, config.emaSlow);
-    if (ief === null || ies === null) return null;
-    const aligned = biasDir === "UPTREND" ? ief > ies : ief < ies;
-    if (!aligned) return null;
-  }
-
-  const closes = entry.map((candle) => candle.close);
-  const emaFast = ema(closes, config.emaFast);
-  const emaSlow = ema(closes, config.emaSlow);
-  const atrV = atr(entry, config.atrPeriod);
-  if (emaFast === null || emaSlow === null || atrV === null || atrV <= 0) {
-    return null;
-  }
-  const rsiV = config.useRsiFilter ? rsi(closes) : null;
-  if (config.useRsiFilter && rsiV === null) return null;
-
-  const last = entry.at(-1);
-  const prev = entry.at(-2);
-  if (!last || !prev) return null;
-
-  const buffer = atrV * config.atrBufferMult;
-  const window = entry.slice(-(config.pullbackLookback + 1), -1);
-  const tol = config.pullbackTouchTolerancePct;
-
-  if (biasDir === "UPTREND") {
-    const up = emaFast > emaSlow;
-    const pulledBack = window.some((candle) => candle.low <= emaFast * (1 + tol));
-    const confirmed = isBullishConfirmation(prev, last, emaFast, config);
-    const rsiOk = !config.useRsiFilter || (rsiV !== null && rsiV < config.rsiMaxForBuy);
-    if (!up || !pulledBack || !confirmed || !rsiOk) return null;
-
-    const swingLow = Math.min(
-      ...entry.slice(-config.swingLookback).map((candle) => candle.low),
-    );
-    const px = last.close;
-    const stopLoss = round(swingLow - buffer);
-    const risk = px - stopLoss;
-    if (risk <= 0) return null;
-    const takeProfit = findStructuralTakeProfit(
-      entry,
-      "BUY",
-      px,
-      config.targetLookback,
-    );
-    if (takeProfit === null) return null;
-    const rr = (takeProfit - px) / risk;
-    if (!Number.isFinite(rr) || rr < config.rrTarget) return null;
-    return {
-      direction: "BUY",
-      entry: round(px),
-      stopLoss,
-      takeProfit,
-      reason: "bias up + pullback EMA + xác nhận tăng",
-    };
-  }
-
-  const down = emaFast < emaSlow;
-  const pulledBack = window.some((candle) => candle.high >= emaFast * (1 - tol));
-  const confirmed =
-    isBearishConfirmation(prev, last, emaFast, config);
-  const rsiOk = !config.useRsiFilter || (rsiV !== null && rsiV > config.rsiMinForSell);
-  if (!down || !pulledBack || !confirmed || !rsiOk) return null;
-
-  const swingHigh = Math.max(
-    ...entry.slice(-config.swingLookback).map((candle) => candle.high),
-  );
-  const px = last.close;
-  const stopLoss = round(swingHigh + buffer);
-  const risk = stopLoss - px;
-  if (risk <= 0) return null;
-  const takeProfit = findStructuralTakeProfit(
-    entry,
-    "SELL",
-    px,
-    config.targetLookback,
-  );
-  if (takeProfit === null) return null;
-  const rr = (px - takeProfit) / risk;
-  if (!Number.isFinite(rr) || rr < config.rrTarget) return null;
-  return {
-    direction: "SELL",
-    entry: round(px),
-    stopLoss,
-    takeProfit,
-    reason: "bias down + pullback EMA + xác nhận giảm",
-  };
-}
-
-/**
- * Điểm "độ đẹp" của setup (0-3), tất định — dùng để nâng lot ở auto-bot:
- *   +1 bias H4 đồng thuận cả EMA lẫn cấu trúc (HH/HL).
- *   +1 thân nến xác nhận mạnh (body/range >= 0.6).
- *   +1 EMA H1 xếp tầng đầy đủ thuận hướng (20>50>200 hoặc ngược).
- */
-export function convictionScore(
-  entry: Candle[],
-  bias: Candle[],
-  signal: RuleSignal,
-  config: RuleStrategyConfig = defaultRuleStrategyConfig,
-): number {
-  let score = 0;
-  const closes = entry.map((candle) => candle.close);
-  const emaTrend = trend(bias.map((candle) => candle.close));
-  const structTrend = structureTrend(bias, 20);
-  const wantUp = signal.direction === "BUY";
-  const biasLabel = wantUp ? "UPTREND" : "DOWNTREND";
-  if (emaTrend === biasLabel && structTrend === biasLabel) score += 1;
-
-  const last = entry.at(-1);
-  if (last) {
-    const range = last.high - last.low;
-    const bodyRatio = range > 0 ? Math.abs(last.close - last.open) / range : 0;
-    if (bodyRatio >= 0.6) score += 1;
-  }
-
-  const e20 = ema(closes, config.emaFast);
-  const e50 = ema(closes, config.emaSlow);
-  const e200 = ema(closes, 200);
-  if (e20 !== null && e50 !== null && e200 !== null) {
-    const stacked = wantUp ? e20 > e50 && e50 > e200 : e20 < e50 && e50 < e200;
-    if (stacked) score += 1;
-  }
-  return score;
-}
-
-function isBullishEngulfing(prev: Candle, last: Candle): boolean {
-  return (
-    prev.close < prev.open &&
-    last.close > last.open &&
-    last.close >= prev.open &&
-    last.open <= prev.close
-  );
-}
-
-function isBullishPinBar(candle: Candle): boolean {
-  const body = Math.abs(candle.close - candle.open);
-  const range = candle.high - candle.low;
-  if (range <= 0) return false;
-  const lowerWick = Math.min(candle.open, candle.close) - candle.low;
-  return lowerWick >= 2 * Math.max(body, 0.000001) && candle.close >= candle.low + range * (2 / 3);
-}
-
-function isStrongBullishTrigger(candle: Candle): boolean {
-  const range = candle.high - candle.low;
-  if (range <= 0) return false;
-  const body = candle.close - candle.open;
-  return body > 0 && body / range >= 0.55 && candle.close >= candle.low + range * 0.7;
-}
-
-function isVeryStrongBullishTrigger(candle: Candle): boolean {
-  const range = candle.high - candle.low;
-  if (range <= 0) return false;
-  const body = candle.close - candle.open;
-  return body > 0 && body / range >= 0.65 && candle.close >= candle.low + range * 0.78;
-}
-
-function isBullishMomentumBreak(prev: Candle, last: Candle): boolean {
-  const range = last.high - last.low;
-  if (range <= 0) return false;
-  const body = last.close - last.open;
-  return (
-    body > 0 &&
-    last.close > prev.high &&
-    body / range >= 0.4 &&
-    last.close >= last.low + range * 0.55
-  );
-}
-
-function isBullishScalpMomentumCandle(candle: Candle): boolean {
-  const range = candle.high - candle.low;
-  if (range <= 0) return false;
-  const body = candle.close - candle.open;
-  return body > 0 && body / range >= 0.45 && candle.close >= candle.low + range * 0.6;
-}
-
-function isBullishManualScalpConfirm(candle: Candle): boolean {
-  const range = candle.high - candle.low;
-  if (range <= 0) return false;
-  const body = Math.abs(candle.close - candle.open);
-  const isMomentumBuy =
-    body / range >= 0.45 && candle.close >= candle.low + range * 0.6;
-  const isPinbarBuy = candle.close >= candle.low + range * 0.75;
-  return isMomentumBuy || isPinbarBuy;
-}
-
-function isBullishConfirmation(
-  prev: Candle,
-  last: Candle,
-  emaFast: number,
-  config: RuleStrategyConfig,
-): boolean {
-  if (config.confirmMode === "ENGULFING") {
-    return isBullishEngulfing(prev, last) && last.close > emaFast;
-  }
-  const base = last.close > last.open && last.close > emaFast;
-  return config.requireBreakOfPreviousCandle ? base && last.close > prev.high : base;
-}
-
-function isBearishEngulfing(prev: Candle, last: Candle): boolean {
-  return (
-    prev.close > prev.open &&
-    last.close < last.open &&
-    last.close <= prev.open &&
-    last.open >= prev.close
-  );
-}
-
-function isBearishPinBar(candle: Candle): boolean {
-  const body = Math.abs(candle.close - candle.open);
-  const range = candle.high - candle.low;
-  if (range <= 0) return false;
-  const upperWick = candle.high - Math.max(candle.open, candle.close);
-  return upperWick >= 2 * Math.max(body, 0.000001) && candle.close <= candle.low + range / 3;
-}
-
-function isStrongBearishTrigger(candle: Candle): boolean {
-  const range = candle.high - candle.low;
-  if (range <= 0) return false;
-  const body = candle.open - candle.close;
-  return body > 0 && body / range >= 0.55 && candle.close <= candle.low + range * 0.3;
-}
-
-function isVeryStrongBearishTrigger(candle: Candle): boolean {
-  const range = candle.high - candle.low;
-  if (range <= 0) return false;
-  const body = candle.open - candle.close;
-  return body > 0 && body / range >= 0.65 && candle.close <= candle.low + range * 0.22;
-}
-
-function isBearishMomentumBreak(prev: Candle, last: Candle): boolean {
-  const range = last.high - last.low;
-  if (range <= 0) return false;
-  const body = last.open - last.close;
-  return (
-    body > 0 &&
-    last.close < prev.low &&
-    body / range >= 0.4 &&
-    last.close <= last.low + range * 0.45
-  );
-}
-
-function isBearishScalpMomentumCandle(candle: Candle): boolean {
-  const range = candle.high - candle.low;
-  if (range <= 0) return false;
-  const body = candle.open - candle.close;
-  return body > 0 && body / range >= 0.45 && candle.close <= candle.low + range * 0.4;
-}
-
-function isBearishManualScalpConfirm(candle: Candle): boolean {
-  const range = candle.high - candle.low;
-  if (range <= 0) return false;
-  const body = Math.abs(candle.close - candle.open);
-  const isMomentumSell =
-    body / range >= 0.45 && candle.close <= candle.low + range * 0.4;
-  const isPinbarSell = candle.close <= candle.low + range * 0.25;
-  return isMomentumSell || isPinbarSell;
-}
-
 function hasBullishSweep(candles: Candle[], lookback: number): boolean {
   const last = candles.at(-1);
   if (!last || candles.length < lookback + 2) return false;
@@ -1292,10 +279,25 @@ function hasBearishSweep(candles: Candle[], lookback: number): boolean {
   return last.high > previousHigh && last.close < previousHigh && last.close < last.open;
 }
 
-function isMomentumRecovering(
-  candles: Candle[],
-  direction: "BUY" | "SELL",
-): boolean {
+function isBullishManualScalpConfirm(candle: Candle): boolean {
+  const range = candle.high - candle.low;
+  if (range <= 0) return false;
+  const body = Math.abs(candle.close - candle.open);
+  const isMomentumBuy = body / range >= 0.45 && candle.close >= candle.low + range * 0.6;
+  const isPinbarBuy = candle.close >= candle.low + range * 0.75;
+  return isMomentumBuy || isPinbarBuy;
+}
+
+function isBearishManualScalpConfirm(candle: Candle): boolean {
+  const range = candle.high - candle.low;
+  if (range <= 0) return false;
+  const body = Math.abs(candle.close - candle.open);
+  const isMomentumSell = body / range >= 0.45 && candle.close <= candle.low + range * 0.4;
+  const isPinbarSell = candle.close <= candle.low + range * 0.25;
+  return isMomentumSell || isPinbarSell;
+}
+
+function isMomentumRecovering(candles: Candle[], direction: "BUY" | "SELL"): boolean {
   if (candles.length < 4) return false;
   const recent = candles.slice(-4);
   const previousMove = recent[2]!.close - recent[0]!.open;
@@ -1314,8 +316,7 @@ function bollingerBands(
   if (clean.length < period) return null;
   const recent = clean.slice(-period);
   const middle = recent.reduce((sum, value) => sum + value, 0) / period;
-  const variance =
-    recent.reduce((sum, value) => sum + (value - middle) ** 2, 0) / period;
+  const variance = recent.reduce((sum, value) => sum + (value - middle) ** 2, 0) / period;
   const stdev = Math.sqrt(variance);
   return {
     middle: round(middle),
@@ -1324,118 +325,843 @@ function bollingerBands(
   };
 }
 
-function isBearishConfirmation(
-  prev: Candle,
-  last: Candle,
-  emaFast: number,
-  config: RuleStrategyConfig,
-): boolean {
-  if (config.confirmMode === "ENGULFING") {
-    return isBearishEngulfing(prev, last) && last.close < emaFast;
+// RSI cục bộ (giữ nguyên công thức cũ) — tách riêng để không phụ thuộc export rsi() dùng chỗ khác.
+function rsiLocal(values: number[], period = 14): number | null {
+  if (values.length <= period) return null;
+  const changes: number[] = [];
+  for (let i = 1; i < values.length; i += 1) {
+    const current = values[i];
+    const prev = values[i - 1];
+    if (current !== undefined && prev !== undefined) changes.push(current - prev);
   }
-  const base = last.close < last.open && last.close < emaFast;
-  return config.requireBreakOfPreviousCandle ? base && last.close < prev.low : base;
+  let gains = 0;
+  let losses = 0;
+  for (let i = 0; i < period; i += 1) {
+    const change = changes[i] ?? 0;
+    if (change > 0) gains += change;
+    else losses += Math.abs(change);
+  }
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+  for (let i = period; i < changes.length; i += 1) {
+    const change = changes[i] ?? 0;
+    const gain = change > 0 ? change : 0;
+    const loss = change < 0 ? Math.abs(change) : 0;
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+  }
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return round(100 - 100 / (1 + rs), 2);
 }
 
-function findStructuralTakeProfit(
-  candles: Candle[],
-  direction: "BUY" | "SELL",
-  entryPrice: number,
-  lookback: number,
+// Số chữ số thập phân theo độ lớn giá: XAUUSD (~hàng trăm/nghìn) dùng 3 số,
+// EURUSD (~1.0x) cần 5 số để giữ độ chính xác pip lẻ. Cùng quy ước với
+// roundPrice() trong AutoTradeRunner.ts.
+function round(value: number, digits?: number): number {
+  const d = digits ?? (Math.abs(value) >= 100 ? 3 : 5);
+  return Number(value.toFixed(d));
+}
+
+/**
+ * ==========================================================================
+ * PHẦN 2 — XAUUSD PRICE ACTION RULEBOOK v0.2 "Frequency Mode" (KHÔNG dùng ATR)
+ * H1 Bias (chính) + H4 context → Setup A (Sweep Reversal) hoặc Setup B (BOS
+ * Continuation, không cần sweep) → Retest zone (M15) → M5 trigger → Entry →
+ * SL cấu trúc → TP cố định 2R (có gate cản đối diện) → session 08:00-18:00Z.
+ * ==========================================================================
+ *
+ * v0.2 (2026-08): thay v0.1 — v0.1 (H4 hard gate + 1 setup + session 2 khung
+ * hẹp) vẫn quá ít lệnh. v0.2 đổi bias chính sang H1 (khung nhỏ hơn, đổi
+ * hướng thường xuyên hơn H4), hạ H4 xuống làm CONTEXT FILTER (chỉ chặn khi
+ * H4 chống lại hướng H1, không chặn khi H4 NEUTRAL), thêm Setup B (BOS
+ * continuation — không cần liquidity sweep trước, chỉ cần M15 đóng phá
+ * swing bằng buffer), nới M5 trigger thành rejection/engulfing/strong-close
+ * (thay vì chỉ rejection), và mở rộng session ra 08:00-18:00 UTC (thay 2
+ * khung hẹp 08-10:30/13-16h). Setup A và Setup B được gắn nhãn riêng
+ * (setupKind trong reason) để KHÔNG trộn thống kê khi đánh giá kết quả.
+ *
+ * Lưu ý lệch giữa mô tả (§2 gốc: "H4 NEUTRAL → chỉ dùng Setup A") và pseudocode
+ * "Final" cuối bản gốc (chỉ chặn khi H4 NGƯỢC hướng, không phân biệt Setup A/B
+ * theo trạng thái H4 NEUTRAL) — code này theo đúng pseudocode "Final" (coi đó
+ * là bản chốt cuối), nghĩa là H4 NEUTRAL cho phép CẢ Setup A và B.
+ *
+ * Bỏ so với v0.1: H4 làm bias chính (nay chỉ context). Vẫn giữ: không ATR ở
+ * bất kỳ công thức nào, session/news evaluated tại đúng nến M5 trigger (không
+ * cache), M15_BOS_CONFIRMED là nguồn sự thật duy nhất cho "phá cấu trúc",
+ * setup hủy nếu giá M15 đóng xuyên ngược qua BOS hoặc có BOS ngược hướng sau.
+ */
+
+export type IctSessionLabel =
+  | "ASIA"
+  | "LONDON_OPEN"
+  | "LONDON_CONTINUATION"
+  | "LONDON_NY_OVERLAP"
+  | "NY_LATE"
+  | "ROLLOVER_LOW_PRIORITY";
+
+export type IctSetupKind = "SWEEP_REVERSAL" | "BOS_CONTINUATION";
+
+export interface XauIctConfig {
+  symbolLabel: "XAUUSD";
+  priceDigits: number;
+  /** Số nến xác nhận swing mỗi bên (2/2 theo baseline). */
+  swingConfirmBars: number;
+  /** Setup A (sweep reversal): thân/range tối thiểu + close-position của nến displacement. */
+  displacementBodyRangeRatioA: number;
+  displacementClosePositionMaxA: number;
+  /** Displacement (Setup A) phải xuất hiện trong tối đa N nến M15 sau sweep. */
+  displacementExpiryM15Bars: number;
+  /** Setup B (BOS continuation, không cần sweep): ngưỡng nới hơn Setup A. */
+  displacementBodyRangeRatioB: number;
+  displacementClosePositionMaxB: number;
+  /**
+   * Buffer giá CỐ ĐỊNH theo symbol/broker — dùng cho cả BOS_BUFFER và
+   * SL_BUFFER: buffer = max(spread × bufferSpreadMult, fixedPriceBuffer).
+   * 0.20 (giá XAUUSD) chỉ là baseline test, KHÔNG phải số tối ưu — cần kiểm
+   * định lại theo dữ liệu broker thật.
+   */
+  fixedPriceBuffer: number;
+  bufferSpreadMult: number;
+  /** Ngưỡng CỐ ĐỊNH (giá) coi 2 swing cùng phía là "Equal High/Low". */
+  equalLevelToleranceFixed: number;
+  /** Retest zone = [BOS_LEVEL, BOS_LEVEL + zoneBodyFraction × thân nến displacement] (BUY, đối xứng cho SELL). */
+  zoneBodyFraction: number;
+  /** Retest phải xảy ra trong tối đa N nến M5 sau khi displacement đóng. */
+  retestExpiryM5Bars: number;
+  /** M5 trigger: close phải nằm trong X% ngoài cùng range (rejection/strong-close). */
+  m5TriggerClosePositionMax: number;
+  /** M5 engulfing: thân nến trigger phải >= mult × thân nến trước. */
+  m5EngulfingBodyMult: number;
+  /** M5 strong-close: thân/range tối thiểu (không cần wick dài như rejection). */
+  m5StrongCloseBodyRatio: number;
+  /** RR tối thiểu — cũng là bội số R dùng làm TP MẶC ĐỊNH (Entry ± minTargetR×R). */
+  minTargetR: number;
+  /** Spread dùng khi caller không truyền spread thực tế. */
+  defaultSpreadPrice: number;
+}
+
+export const defaultXauIctConfig: XauIctConfig = {
+  symbolLabel: "XAUUSD",
+  priceDigits: 3,
+  swingConfirmBars: 2,
+  displacementBodyRangeRatioA: 0.6,
+  displacementClosePositionMaxA: 0.2,
+  displacementExpiryM15Bars: 5,
+  displacementBodyRangeRatioB: 0.55,
+  displacementClosePositionMaxB: 0.25,
+  fixedPriceBuffer: 0.2,
+  bufferSpreadMult: 2,
+  equalLevelToleranceFixed: 0.2,
+  zoneBodyFraction: 0.5,
+  retestExpiryM5Bars: 8,
+  m5TriggerClosePositionMax: 0.3,
+  m5EngulfingBodyMult: 1.0,
+  m5StrongCloseBodyRatio: 0.6,
+  minTargetR: 2.0,
+  defaultSpreadPrice: 0.3,
+};
+
+export interface XauIctEvaluationOptions {
+  /** Thời điểm đóng nến M5 trigger. Mặc định = new Date(). */
+  now?: Date;
+  /**
+   * Đã tính SẴN bởi caller (vd AutoTradeRunner qua newsBlackoutBlockReason)
+   * tại đúng `now`. KHÔNG cache từ thời điểm sweep/displacement.
+   */
+  newsWindowClear?: boolean;
+  /** Spread giá thực tế (nếu có) để tính BOS_BUFFER/SL_BUFFER. */
+  spreadPrice?: number;
+}
+
+/**
+ * Session UTC v0.2 (§6): cho phép giao dịch 08:00-18:00 UTC (4 khung con,
+ * TẤT CẢ đều allowed=true — nhãn con chỉ để ghi log/ưu tiên, KHÔNG dùng làm
+ * hard gate riêng). Chặn 00:00-08:00 và 18:00-24:00. Cần kiểm định lại theo
+ * dữ liệu broker thật (spread/thanh khoản thực tế) trước khi coi là cố định.
+ */
+export function resolveIctSession(date: Date): { label: IctSessionLabel; allowed: boolean } {
+  const utcMinutes = date.getUTCHours() * 60 + date.getUTCMinutes();
+  if (utcMinutes < 480) return { label: "ASIA", allowed: false };
+  if (utcMinutes < 630) return { label: "LONDON_OPEN", allowed: true };
+  if (utcMinutes < 780) return { label: "LONDON_CONTINUATION", allowed: true };
+  if (utcMinutes < 960) return { label: "LONDON_NY_OVERLAP", allowed: true };
+  if (utcMinutes < 1080) return { label: "NY_LATE", allowed: true };
+  return { label: "ROLLOVER_LOW_PRIORITY", allowed: false };
+}
+
+export function evaluateXauIctSignal(
+  m5: Candle[],
+  m15: Candle[],
+  h1: Candle[],
+  h4: Candle[] = [],
+  config: XauIctConfig = defaultXauIctConfig,
+  options: XauIctEvaluationOptions = {},
+): RuleSignal | null {
+  return buildXauIctSignal(m5, m15, h1, h4, config, options).signal;
+}
+
+export function explainXauIctRejection(
+  m5: Candle[],
+  m15: Candle[],
+  h1: Candle[],
+  h4: Candle[] = [],
+  config: XauIctConfig = defaultXauIctConfig,
+  options: XauIctEvaluationOptions = {},
+): string {
+  return buildXauIctSignal(m5, m15, h1, h4, config, options).reason;
+}
+
+type IctDirection = "BUY" | "SELL";
+type TrendBias = "BULLISH" | "BEARISH" | "NEUTRAL";
+
+interface SwingPoint {
+  side: "HIGH" | "LOW";
+  price: number;
+  index: number;
+}
+
+type LiquidityKind =
+  | "PDH"
+  | "PDL"
+  | "ASIA_HIGH"
+  | "ASIA_LOW"
+  | "EQUAL_HIGH"
+  | "EQUAL_LOW"
+  | "SWING_HIGH"
+  | "SWING_LOW";
+
+interface LiquidityLevel {
+  kind: LiquidityKind;
+  side: "HIGH" | "LOW";
+  price: number;
+}
+
+interface ChainResult {
+  setupKind: IctSetupKind;
+  sweepIndex: number | null;
+  sweepLevel: LiquidityLevel | null;
+  displacementIndex: number;
+  swingRef: number;
+}
+
+/** Chuỗi tối đa cần quét lùi để tìm sweep còn "sống" (chưa hết hạn displacement). */
+const MAX_CHAIN_LOOKBACK_M15 = 12;
+
+function buildXauIctSignal(
+  m5: Candle[],
+  m15: Candle[],
+  h1: Candle[],
+  h4: Candle[],
+  config: XauIctConfig,
+  options: XauIctEvaluationOptions,
+): { signal: RuleSignal | null; reason: string } {
+  const now = options.now ?? new Date();
+  const spreadPrice = options.spreadPrice ?? config.defaultSpreadPrice;
+  const newsWindowClear = options.newsWindowClear ?? true;
+
+  const minM15 = config.swingConfirmBars * 2 + Math.max(config.displacementExpiryM15Bars, MAX_CHAIN_LOOKBACK_M15) + 30;
+  if (m15.length < minM15) {
+    return { signal: null, reason: `ICT blocked: M15 candles ${m15.length} < ${minM15}` };
+  }
+  if (h1.length < config.swingConfirmBars * 2 + 8) {
+    return { signal: null, reason: `ICT blocked: H1 candles ${h1.length} too short for swing bias` };
+  }
+  if (m5.length < 2) {
+    return { signal: null, reason: `ICT blocked: M5 candles ${m5.length} < 2` };
+  }
+
+  // ===== 1) H1 BIAS chính (§2) + H4 context filter =====
+  const h1Bias = resolveTrendBias(h1, config.swingConfirmBars);
+  if (h1Bias === "NEUTRAL") {
+    return { signal: null, reason: "ICT blocked: H1 bias NEUTRAL (chưa có chuỗi HH/HL hoặc LL/LH rõ)" };
+  }
+  const direction: IctDirection = h1Bias === "BULLISH" ? "BUY" : "SELL";
+  const h4Bias: TrendBias =
+    h4.length >= config.swingConfirmBars * 2 + 8 ? resolveTrendBias(h4, config.swingConfirmBars) : "NEUTRAL";
+  const h4Opposes =
+    (direction === "BUY" && h4Bias === "BEARISH") || (direction === "SELL" && h4Bias === "BULLISH");
+  if (h4Opposes) {
+    return {
+      signal: null,
+      reason: `ICT blocked: H4 ${h4Bias} ngược hướng H1 ${h1Bias} (context filter chặn cả Setup A và B)`,
+    };
+  }
+
+  // ===== 2) Key liquidity + Setup A (sweep reversal) hoặc Setup B (BOS continuation) (§3-5) =====
+  const m15Swings = findConfirmedSwings(m15, config.swingConfirmBars);
+  const liquidityLevels = collectKeyLiquidity(m15, h1, m15Swings, config);
+  const chain =
+    findSweepReversalChain(m15, liquidityLevels, direction, config, spreadPrice) ??
+    findBosContinuationChain(m15, direction, config, spreadPrice);
+  if (!chain) {
+    return {
+      signal: null,
+      reason:
+        `ICT blocked: không tìm được Setup A (sweep+displacement+BOS) hoặc Setup B ` +
+        `(BOS continuation, không cần sweep) cho ${direction} khớp H1 ${h1Bias}`,
+    };
+  }
+
+  // ===== 3) Setup invalidation (§8) — BOS bị phá ngược hoặc có BOS ngược hướng sau đó =====
+  const invalidReason = checkChainInvalidated(m15, chain, direction, config, spreadPrice);
+  if (invalidReason) {
+    return { signal: null, reason: `ICT blocked: ${invalidReason}` };
+  }
+
+  // ===== 4) Retest zone + M5 trigger (rejection/engulfing/strong-close) trong tối đa retestExpiryM5Bars nến =====
+  const zone = resolveEntryZone(direction, chain, m15, config);
+  if (!zone) {
+    return { signal: null, reason: "ICT blocked: không dựng được retest zone (thiếu nến displacement)" };
+  }
+  const displacementCandle = m15[chain.displacementIndex];
+  if (!displacementCandle) {
+    return { signal: null, reason: "ICT blocked: displacement candle missing" };
+  }
+  const zoneCreatedAt = displacementCandle.time;
+  const m5SinceZone = m5.filter((candle) => candle.time > zoneCreatedAt);
+  if (m5SinceZone.length === 0) {
+    return { signal: null, reason: "ICT blocked: chưa có nến M5 nào sau khi displacement đóng" };
+  }
+  if (m5SinceZone.length > config.retestExpiryM5Bars) {
+    return {
+      signal: null,
+      reason: `ICT blocked: retest quá hạn (${m5SinceZone.length} nến M5 > ${config.retestExpiryM5Bars})`,
+    };
+  }
+  const lastM5 = m5.at(-1);
+  const prevM5 = m5.at(-2);
+  if (!lastM5) return { signal: null, reason: "ICT blocked: missing M5 candle" };
+  const triggerType = resolveM5TriggerType(lastM5, prevM5, zone, direction, config);
+  if (!triggerType) {
+    return {
+      signal: null,
+      reason: `ICT blocked: nến M5 hiện tại không phải valid ${direction} trigger (rejection/engulfing/strong-close) trong retest zone [${zone.low.toFixed(config.priceDigits)}, ${zone.high.toFixed(config.priceDigits)}]`,
+    };
+  }
+  const entry = lastM5.close;
+
+  // ===== 5) SL cấu trúc (§8) =====
+  const slResult = resolveStopLoss(direction, entry, chain, zone, m15, spreadPrice, config);
+  if (!slResult) {
+    return { signal: null, reason: "ICT blocked: SL không hợp lệ (khoảng cách <= 0)" };
+  }
+  const stopLoss = direction === "BUY" ? entry - slResult.distance : entry + slResult.distance;
+
+  // ===== 6) TP cố định minTargetR×R — chỉ chặn nếu có cản GẦN HƠN target (§8) =====
+  const tpResult = resolveTakeProfit(direction, entry, slResult.distance, liquidityLevels, config);
+  if (!tpResult) {
+    return {
+      signal: null,
+      reason: `ICT blocked: cản đối diện gần hơn ${config.minTargetR}R — target mặc định không khả thi`,
+    };
+  }
+
+  // ===== 7) Final-time gates — đánh giá LẠI tại đúng lúc đóng nến M5 hiện tại (§6/§9) =====
+  const session = resolveIctSession(now);
+  if (!session.allowed) {
+    return {
+      signal: null,
+      reason: `ICT blocked: trigger rơi vào session ${session.label} (chỉ cho phép 08:00-18:00 UTC)`,
+    };
+  }
+  if (!newsWindowClear) {
+    return { signal: null, reason: "ICT blocked: trigger rơi vào news blackout window" };
+  }
+
+  const sweepNote = chain.sweepLevel ? `sweep@${chain.sweepLevel.kind}, ` : "";
+  return {
+    signal: {
+      direction,
+      entry: roundIct(entry, config.priceDigits),
+      stopLoss: roundIct(stopLoss, config.priceDigits),
+      takeProfit: roundIct(tpResult.takeProfit, config.priceDigits),
+      reason:
+        `${config.symbolLabel} PA v0.2 [${chain.setupKind}]: H1 ${h1Bias}, H4 ${h4Bias}, ${sweepNote}` +
+        `displacement+M15_BOS_CONFIRMED, retest zone [${zone.low.toFixed(config.priceDigits)}, ${zone.high.toFixed(config.priceDigits)}], ` +
+        `M5 ${triggerType}, RR ${tpResult.rr.toFixed(2)}, session ${session.label}.`,
+      strategyKind: "ICT_SETUP",
+    },
+    reason: "PA setup found",
+  };
+}
+
+/**
+ * Swing chỉ hợp lệ sau khi có đủ `confirmBars` nến bên phải xác nhận (§4.1).
+ * Truyền `candles.slice(0, X)` trước khi gọi để đảm bảo không nhìn thấy swing
+ * hình thành SAU thời điểm đang xét (chống lookahead bias).
+ */
+function findConfirmedSwings(candles: Candle[], confirmBars: number): SwingPoint[] {
+  const swings: SwingPoint[] = [];
+  for (let i = confirmBars; i < candles.length - confirmBars; i += 1) {
+    const current = candles[i];
+    if (!current) continue;
+    let isHigh = true;
+    let isLow = true;
+    for (let k = 1; k <= confirmBars; k += 1) {
+      const left = candles[i - k];
+      const right = candles[i + k];
+      if (!left || !right) {
+        isHigh = false;
+        isLow = false;
+        break;
+      }
+      if (!(current.high > left.high && current.high >= right.high)) isHigh = false;
+      if (!(current.low < left.low && current.low <= right.low)) isLow = false;
+    }
+    if (isHigh) swings.push({ side: "HIGH", price: current.high, index: i });
+    if (isLow) swings.push({ side: "LOW", price: current.low, index: i });
+  }
+  return swings;
+}
+
+/**
+ * Trend bias theo HH/HL (bullish) hoặc LL/LH (bearish); mâu thuẫn/thiếu dữ
+ * liệu -> NEUTRAL (§2 v0.2). Dùng chung cho H1 (bias chính) và H4 (context).
+ */
+function resolveTrendBias(candles: Candle[], confirmBars: number): TrendBias {
+  const swings = findConfirmedSwings(candles, confirmBars);
+  const highs = swings.filter((s) => s.side === "HIGH");
+  const lows = swings.filter((s) => s.side === "LOW");
+  if (highs.length < 2 || lows.length < 2) return "NEUTRAL";
+  const lastHigh = highs[highs.length - 1]!;
+  const prevHigh = highs[highs.length - 2]!;
+  const lastLow = lows[lows.length - 1]!;
+  const prevLow = lows[lows.length - 2]!;
+  const lastClose = candles.at(-1)?.close;
+  if (lastClose === undefined) return "NEUTRAL";
+
+  const higherHigh = lastHigh.price > prevHigh.price;
+  const higherLow = lastLow.price > prevLow.price;
+  const lowerLow = lastLow.price < prevLow.price;
+  const lowerHigh = lastHigh.price < prevHigh.price;
+
+  if (higherHigh && higherLow && lastClose >= lastLow.price) return "BULLISH";
+  if (lowerLow && lowerHigh && lastClose <= lastHigh.price) return "BEARISH";
+  return "NEUTRAL";
+}
+
+function utcDayKey(iso: string): string {
+  return iso.slice(0, 10);
+}
+
+/** High/Low của ngày UTC hoàn chỉnh gần nhất TRƯỚC ngày của nến M15 cuối (§5.1 PDH/PDL). */
+function previousDayHighLow(m15: Candle[]): { high: number; low: number } | null {
+  const last = m15.at(-1);
+  if (!last) return null;
+  const todayKey = utcDayKey(last.time);
+  let prevKey: string | null = null;
+  for (let i = m15.length - 1; i >= 0; i -= 1) {
+    const key = utcDayKey(m15[i]!.time);
+    if (key < todayKey) {
+      prevKey = key;
+      break;
+    }
+  }
+  if (!prevKey) return null;
+  let high = Number.NEGATIVE_INFINITY;
+  let low = Number.POSITIVE_INFINITY;
+  for (const candle of m15) {
+    if (utcDayKey(candle.time) !== prevKey) continue;
+    high = Math.max(high, candle.high);
+    low = Math.min(low, candle.low);
+  }
+  if (!Number.isFinite(high) || !Number.isFinite(low)) return null;
+  return { high, low };
+}
+
+/** High/Low phiên Á 00:00-08:00 UTC của ngày UTC hiện tại (§5.1 Asia High/Low). */
+function asiaHighLow(m15: Candle[]): { high: number; low: number } | null {
+  const last = m15.at(-1);
+  if (!last) return null;
+  const todayKey = utcDayKey(last.time);
+  let high = Number.NEGATIVE_INFINITY;
+  let low = Number.POSITIVE_INFINITY;
+  let count = 0;
+  for (const candle of m15) {
+    if (utcDayKey(candle.time) !== todayKey) continue;
+    if (new Date(candle.time).getUTCHours() >= 8) continue;
+    high = Math.max(high, candle.high);
+    low = Math.min(low, candle.low);
+    count += 1;
+  }
+  if (count < 3 || !Number.isFinite(high) || !Number.isFinite(low)) return null;
+  return { high, low };
+}
+
+/** Hai swing cùng phía cách nhau <= tolerance -> "Equal High/Low" (§5.1). */
+function findEqualLevels(swings: SwingPoint[], side: "HIGH" | "LOW", toleranceAbs: number): LiquidityLevel[] {
+  if (toleranceAbs <= 0) return [];
+  const points = swings.filter((s) => s.side === side);
+  const levels: LiquidityLevel[] = [];
+  for (let i = 0; i < points.length; i += 1) {
+    for (let j = i + 1; j < points.length; j += 1) {
+      const a = points[i]!;
+      const b = points[j]!;
+      if (Math.abs(a.price - b.price) <= toleranceAbs) {
+        const price = side === "HIGH" ? Math.max(a.price, b.price) : Math.min(a.price, b.price);
+        levels.push({ kind: side === "HIGH" ? "EQUAL_HIGH" : "EQUAL_LOW", side, price });
+      }
+    }
+  }
+  return levels;
+}
+
+function collectKeyLiquidity(
+  m15: Candle[],
+  h1: Candle[],
+  m15Swings: SwingPoint[],
+  config: XauIctConfig,
+): LiquidityLevel[] {
+  const levels: LiquidityLevel[] = [];
+
+  const pdhl = previousDayHighLow(m15);
+  if (pdhl) {
+    levels.push({ kind: "PDH", side: "HIGH", price: pdhl.high });
+    levels.push({ kind: "PDL", side: "LOW", price: pdhl.low });
+  }
+  const asia = asiaHighLow(m15);
+  if (asia) {
+    levels.push({ kind: "ASIA_HIGH", side: "HIGH", price: asia.high });
+    levels.push({ kind: "ASIA_LOW", side: "LOW", price: asia.low });
+  }
+
+  levels.push(...findEqualLevels(m15Swings, "HIGH", config.equalLevelToleranceFixed));
+  levels.push(...findEqualLevels(m15Swings, "LOW", config.equalLevelToleranceFixed));
+
+  for (const swing of m15Swings) {
+    levels.push({
+      kind: swing.side === "HIGH" ? "SWING_HIGH" : "SWING_LOW",
+      side: swing.side,
+      price: swing.price,
+    });
+  }
+
+  if (h1.length >= config.swingConfirmBars * 2 + 1) {
+    const h1Swings = findConfirmedSwings(h1, config.swingConfirmBars);
+    for (const swing of h1Swings) {
+      levels.push({
+        kind: swing.side === "HIGH" ? "SWING_HIGH" : "SWING_LOW",
+        side: swing.side,
+        price: swing.price,
+      });
+    }
+  }
+
+  return levels;
+}
+
+/** Sweep bullish/bearish (§3) — v0.1 không còn ràng buộc độ sâu (không có ATR để chuẩn hóa). */
+function checkBullishSweep(candle: Candle, level: LiquidityLevel): boolean {
+  if (level.side !== "LOW") return false;
+  return candle.low < level.price && candle.close > level.price;
+}
+
+function checkBearishSweep(candle: Candle, level: LiquidityLevel): boolean {
+  if (level.side !== "HIGH") return false;
+  return candle.high > level.price && candle.close < level.price;
+}
+
+/** PDH/PDL/Asia được ưu tiên hơn Equal High/Low, ưu tiên hơn swing thường (khi 1 nến quét trúng nhiều mức). */
+function rankLiquidityKind(kind: LiquidityKind): number {
+  if (kind === "PDH" || kind === "PDL" || kind === "ASIA_HIGH" || kind === "ASIA_LOW") return 2;
+  if (kind === "EQUAL_HIGH" || kind === "EQUAL_LOW") return 1;
+  return 0;
+}
+
+/** Buffer giá dùng chung cho BOS_BUFFER và SL_BUFFER: max(spread×mult, buffer cố định) (§4, §8). */
+function resolveBuffer(spreadPrice: number, config: XauIctConfig): number {
+  return Math.max(spreadPrice * config.bufferSpreadMult, config.fixedPriceBuffer);
+}
+
+/**
+ * Displacement candle (§4/§5) — chỉ điều kiện SỨC MẠNH nến, không còn ràng
+ * buộc theo ATR. bodyRangeRatio/closePositionMax truyền riêng cho Setup A
+ * (chặt, 0.60/0.20) hoặc Setup B (nới hơn, 0.55/0.25).
+ */
+function isDisplacementCandle(
+  candle: Candle,
+  direction: IctDirection,
+  bodyRangeRatio: number,
+  closePositionMax: number,
+): boolean {
+  const range = candle.high - candle.low;
+  if (range <= 0) return false;
+  const body = Math.abs(candle.close - candle.open);
+  if (body / range < bodyRangeRatio) return false;
+  if (direction === "BUY") {
+    if (candle.close <= candle.open) return false;
+    return (candle.high - candle.close) / range <= closePositionMax;
+  }
+  if (candle.close >= candle.open) return false;
+  return (candle.close - candle.low) / range <= closePositionMax;
+}
+
+/** Swing tham chiếu cho BOS = swing đã CONFIRMED trước displacementIndex (chống lookahead). */
+function resolveBosSwingRef(
+  m15: Candle[],
+  displacementIndex: number,
+  direction: IctDirection,
+  config: XauIctConfig,
 ): number | null {
-  const history = candles.slice(-Math.max(10, lookback + 1), -1);
-  if (history.length < 10) return null;
+  const priorSwings = findConfirmedSwings(m15.slice(0, displacementIndex), config.swingConfirmBars);
+  const side = direction === "BUY" ? "HIGH" : "LOW";
+  const relevant = priorSwings.filter((s) => s.side === side);
+  if (relevant.length === 0) return null;
+  return relevant[relevant.length - 1]!.price;
+}
+
+/** M15_BOS_CONFIRMED (§4) — nguồn sự thật DUY NHẤT cho "phá cấu trúc" trong v0.1. */
+function checkBos(
+  m15: Candle[],
+  displacementIndex: number,
+  direction: IctDirection,
+  spreadPrice: number,
+  config: XauIctConfig,
+): { confirmed: boolean; swingRef: number | null } {
+  const candle = m15[displacementIndex];
+  if (!candle) return { confirmed: false, swingRef: null };
+  const swingRef = resolveBosSwingRef(m15, displacementIndex, direction, config);
+  if (swingRef === null) return { confirmed: false, swingRef: null };
+  const buffer = resolveBuffer(spreadPrice, config);
+  const confirmed = direction === "BUY" ? candle.close > swingRef + buffer : candle.close < swingRef - buffer;
+  return { confirmed, swingRef };
+}
+
+/**
+ * Setup A — Sweep Reversal (§4). Quét lùi tối đa MAX_CHAIN_LOOKBACK_M15 nến
+ * để tìm sweep còn "sống": sweep xong displacement+BOS phải xảy ra trong
+ * displacementExpiryM15Bars nến kế. Trả về chuỗi GẦN HIỆN TẠI nhất tìm được.
+ */
+function findSweepReversalChain(
+  m15: Candle[],
+  liquidityLevels: LiquidityLevel[],
+  direction: IctDirection,
+  config: XauIctConfig,
+  spreadPrice: number,
+): ChainResult | null {
+  const startIdx = Math.max(1, m15.length - 1 - MAX_CHAIN_LOOKBACK_M15 - config.displacementExpiryM15Bars);
+  const candidateLevels = direction === "BUY" ? liquidityLevels.filter((l) => l.side === "LOW") : liquidityLevels.filter((l) => l.side === "HIGH");
+
+  for (let sweepIdx = m15.length - 2; sweepIdx >= startIdx; sweepIdx -= 1) {
+    const candle = m15[sweepIdx];
+    if (!candle) continue;
+
+    let sweptLevel: LiquidityLevel | null = null;
+    for (const level of candidateLevels) {
+      const ok = direction === "BUY" ? checkBullishSweep(candle, level) : checkBearishSweep(candle, level);
+      if (ok && (!sweptLevel || rankLiquidityKind(level.kind) > rankLiquidityKind(sweptLevel.kind))) {
+        sweptLevel = level;
+      }
+    }
+    if (!sweptLevel) continue;
+
+    const maxDisplacementIdx = Math.min(m15.length - 1, sweepIdx + config.displacementExpiryM15Bars);
+    for (let dIdx = sweepIdx + 1; dIdx <= maxDisplacementIdx; dIdx += 1) {
+      const dCandle = m15[dIdx];
+      if (!dCandle) continue;
+      if (!isDisplacementCandle(dCandle, direction, config.displacementBodyRangeRatioA, config.displacementClosePositionMaxA)) continue;
+      const bos = checkBos(m15, dIdx, direction, spreadPrice, config);
+      if (!bos.confirmed || bos.swingRef === null) continue;
+      return {
+        setupKind: "SWEEP_REVERSAL",
+        sweepIndex: sweepIdx,
+        sweepLevel: sweptLevel,
+        displacementIndex: dIdx,
+        swingRef: bos.swingRef,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Setup B — BOS Continuation (§5). KHÔNG cần liquidity sweep trước — chỉ cần
+ * M15 đóng phá swing gần nhất bằng buffer, dùng ngưỡng displacement nới hơn
+ * Setup A. Quét lùi tối đa MAX_CHAIN_LOOKBACK_M15 nến, trả về gần hiện tại nhất.
+ */
+function findBosContinuationChain(
+  m15: Candle[],
+  direction: IctDirection,
+  config: XauIctConfig,
+  spreadPrice: number,
+): ChainResult | null {
+  const startIdx = Math.max(1, m15.length - 1 - MAX_CHAIN_LOOKBACK_M15);
+  for (let dIdx = m15.length - 1; dIdx >= startIdx; dIdx -= 1) {
+    const dCandle = m15[dIdx];
+    if (!dCandle) continue;
+    if (!isDisplacementCandle(dCandle, direction, config.displacementBodyRangeRatioB, config.displacementClosePositionMaxB)) continue;
+    const bos = checkBos(m15, dIdx, direction, spreadPrice, config);
+    if (!bos.confirmed || bos.swingRef === null) continue;
+    return {
+      setupKind: "BOS_CONTINUATION",
+      sweepIndex: null,
+      sweepLevel: null,
+      displacementIndex: dIdx,
+      swingRef: bos.swingRef,
+    };
+  }
+  return null;
+}
+
+/**
+ * Setup hết hiệu lực (§8) nếu: (a) M15 đã đóng xuyên NGƯỢC qua chính mức BOS
+ * vừa phá, hoặc (b) xuất hiện displacement + M15 BOS NGƯỢC hướng sau đó — quét
+ * các nến từ displacementIndex+1 tới hiện tại cho cả hai điều kiện (dùng
+ * ngưỡng displacement Setup A làm định nghĩa "BOS ngược hướng" chuẩn).
+ */
+function checkChainInvalidated(
+  m15: Candle[],
+  chain: ChainResult,
+  direction: IctDirection,
+  config: XauIctConfig,
+  spreadPrice: number,
+): string | null {
+  const opposite: IctDirection = direction === "BUY" ? "SELL" : "BUY";
+  for (let i = chain.displacementIndex + 1; i < m15.length; i += 1) {
+    const candle = m15[i];
+    if (!candle) continue;
+    if (direction === "BUY" && candle.close < chain.swingRef) {
+      return `giá M15 đã đóng (${candle.close.toFixed(config.priceDigits)}) xuyên ngược dưới mức BOS (${chain.swingRef.toFixed(config.priceDigits)})`;
+    }
+    if (direction === "SELL" && candle.close > chain.swingRef) {
+      return `giá M15 đã đóng (${candle.close.toFixed(config.priceDigits)}) xuyên ngược trên mức BOS (${chain.swingRef.toFixed(config.priceDigits)})`;
+    }
+    if (
+      isDisplacementCandle(candle, opposite, config.displacementBodyRangeRatioA, config.displacementClosePositionMaxA) &&
+      checkBos(m15, i, opposite, spreadPrice, config).confirmed
+    ) {
+      return `xuất hiện displacement + M15 BOS ngược hướng (${opposite}) sau displacement của ta`;
+    }
+  }
+  return null;
+}
+
+/** Retest zone (§6): [BOS_LEVEL, BOS_LEVEL + zoneBodyFraction×thân nến displacement] (BUY), đối xứng cho SELL. */
+function resolveEntryZone(
+  direction: IctDirection,
+  chain: ChainResult,
+  m15: Candle[],
+  config: XauIctConfig,
+): { low: number; high: number } | null {
+  const displacementCandle = m15[chain.displacementIndex];
+  if (!displacementCandle) return null;
+  const body = Math.abs(displacementCandle.close - displacementCandle.open);
+  const bosLevel = chain.swingRef;
+  if (direction === "BUY") {
+    return { low: bosLevel, high: bosLevel + config.zoneBodyFraction * body };
+  }
+  return { low: bosLevel - config.zoneBodyFraction * body, high: bosLevel };
+}
+
+/**
+ * M5 trigger (§4/§5): rejection HOẶC engulfing HOẶC strong-close — cả ba đều
+ * phải nằm trong retest zone (§9 "Entry phải nằm trong vùng retest hợp lệ").
+ * rejection = wick dài + close ở mép ngoài range; engulfing = phá thân nến
+ * trước; strong-close = thân lớn đóng sát mép range (không cần wick dài).
+ */
+type M5TriggerType = "rejection" | "engulfing" | "strong_close";
+
+function resolveM5TriggerType(
+  last: Candle,
+  prev: Candle | undefined,
+  zone: { low: number; high: number },
+  direction: IctDirection,
+  config: XauIctConfig,
+): M5TriggerType | null {
+  const range = last.high - last.low;
+  if (range <= 0) return null;
+  const body = Math.abs(last.close - last.open);
+  const prevBody = prev ? Math.abs(prev.close - prev.open) : 0;
 
   if (direction === "BUY") {
-    const candidates = structuralHighs(history)
-      .filter((level) => Number.isFinite(level) && level > entryPrice);
-    return candidates.length > 0 ? round(Math.min(...candidates)) : null;
+    const touchesZone = last.low <= zone.high && last.close >= zone.low;
+    if (!touchesZone) return null;
+    if (last.close <= last.open) return null;
+    const closePos = (last.high - last.close) / range;
+    const lowerWick = Math.min(last.open, last.close) - last.low;
+    if (lowerWick >= 1.5 * Math.max(body, 1e-9) && closePos <= config.m5TriggerClosePositionMax) return "rejection";
+    if (prev && last.close > prev.high && body >= config.m5EngulfingBodyMult * prevBody) return "engulfing";
+    if (body / range >= config.m5StrongCloseBodyRatio && closePos <= config.m5TriggerClosePositionMax) return "strong_close";
+    return null;
   }
 
-  const candidates = structuralLows(history)
-    .filter((level) => Number.isFinite(level) && level < entryPrice);
-  return candidates.length > 0 ? round(Math.max(...candidates)) : null;
+  const touchesZone = last.high >= zone.low && last.close <= zone.high;
+  if (!touchesZone) return null;
+  if (last.close >= last.open) return null;
+  const closePos = (last.close - last.low) / range;
+  const upperWick = last.high - Math.max(last.open, last.close);
+  if (upperWick >= 1.5 * Math.max(body, 1e-9) && closePos <= config.m5TriggerClosePositionMax) return "rejection";
+  if (prev && last.close < prev.low && body >= config.m5EngulfingBodyMult * prevBody) return "engulfing";
+  if (body / range >= config.m5StrongCloseBodyRatio && closePos <= config.m5TriggerClosePositionMax) return "strong_close";
+  return null;
 }
 
-function findNearestM15SwingStop(
-  candles: Candle[],
-  direction: "BUY" | "SELL",
-  entryPrice: number,
-): number | null {
-  const history = candles.slice(-50);
-  const swings = direction === "BUY" ? structuralLows(history) : structuralHighs(history);
-  const candidates = swings.filter((level) =>
-    direction === "BUY" ? level < entryPrice : level > entryPrice,
-  );
-  if (candidates.length === 0) return null;
-  return direction === "BUY" ? Math.max(...candidates) : Math.min(...candidates);
-}
+/**
+ * SL (§8) = min/max(SweepLow/High, ZoneLow/High) ∓ buffer — Setup B không có
+ * sweep nên chỉ dùng ZoneLow/High. Không ràng buộc SL-distance theo ATR: zone
+ * (50% thân displacement quanh BOS_LEVEL) đã tự nhiên giữ entry gần cấu trúc.
+ */
+function resolveStopLoss(
+  direction: IctDirection,
+  entry: number,
+  chain: ChainResult,
+  zone: { low: number; high: number },
+  m15: Candle[],
+  spreadPrice: number,
+  config: XauIctConfig,
+): { stopLoss: number; distance: number } | null {
+  const sweepCandle = chain.sweepIndex !== null ? m15[chain.sweepIndex] : null;
+  const buffer = resolveBuffer(spreadPrice, config);
 
-function findNearestM15TargetSwing(
-  candles: Candle[],
-  direction: "BUY" | "SELL",
-  entryPrice: number,
-): number | null {
-  const history = candles.slice(-50);
-  const swings = direction === "BUY" ? structuralHighs(history) : structuralLows(history);
-  const candidates = swings.filter((level) =>
-    direction === "BUY" ? level > entryPrice : level < entryPrice,
-  );
-  if (candidates.length === 0) return null;
-  return direction === "BUY" ? Math.min(...candidates) : Math.max(...candidates);
-}
-
-function structuralHighs(candles: Candle[]): number[] {
-  const pivots: number[] = [];
-  for (let i = 2; i < candles.length - 2; i += 1) {
-    const left2 = candles[i - 2]!;
-    const left1 = candles[i - 1]!;
-    const current = candles[i]!;
-    const right1 = candles[i + 1]!;
-    const right2 = candles[i + 2]!;
-    if (
-      current.high >= left2.high &&
-      current.high >= left1.high &&
-      current.high >= right1.high &&
-      current.high >= right2.high
-    ) {
-      pivots.push(current.high);
-    }
+  if (direction === "BUY") {
+    const base = sweepCandle ? Math.min(sweepCandle.low, zone.low) : zone.low;
+    const stopLoss = base - buffer;
+    const distance = entry - stopLoss;
+    if (!Number.isFinite(distance) || distance <= 0) return null;
+    return { stopLoss, distance };
   }
 
-  // Fallback: nếu thị trường trend quá mượt không tạo pivot rõ, dùng high lịch sử
-  // gần nhất như vùng chốt lời cấu trúc, rồi để RR filter quyết định có đáng đánh không.
-  return pivots.length > 0 ? pivots : candles.map((candle) => candle.high);
+  const base = sweepCandle ? Math.max(sweepCandle.high, zone.high) : zone.high;
+  const stopLoss = base + buffer;
+  const distance = stopLoss - entry;
+  if (!Number.isFinite(distance) || distance <= 0) return null;
+  return { stopLoss, distance };
 }
 
-function structuralLows(candles: Candle[]): number[] {
-  const pivots: number[] = [];
-  for (let i = 2; i < candles.length - 2; i += 1) {
-    const left2 = candles[i - 2]!;
-    const left1 = candles[i - 1]!;
-    const current = candles[i]!;
-    const right1 = candles[i + 1]!;
-    const right2 = candles[i + 2]!;
-    if (
-      current.low <= left2.low &&
-      current.low <= left1.low &&
-      current.low <= right1.low &&
-      current.low <= right2.low
-    ) {
-      pivots.push(current.low);
-    }
-  }
+/**
+ * TP (§8) MẶC ĐỊNH cố định = Entry ± minTargetR×R (KHÔNG phải giá cấu trúc).
+ * Cản đối diện chỉ là GATE: mốc gần nhất trong lookback gần hơn target cố
+ * định → từ chối (target không khả thi); không có mốc nào trong lookback =
+ * không có gì được biết để chặn = PASS (rất thường xảy ra lúc trend mạnh,
+ * không phải trường hợp hiếm — xem ghi chú đầu PHẦN 2).
+ */
+function resolveTakeProfit(
+  direction: IctDirection,
+  entry: number,
+  slDistance: number,
+  liquidityLevels: LiquidityLevel[],
+  config: XauIctConfig,
+): { takeProfit: number; rr: number } | null {
+  const requiredDistance = slDistance * config.minTargetR;
+  const takeProfit = direction === "BUY" ? entry + requiredDistance : entry - requiredDistance;
 
-  return pivots.length > 0 ? pivots : candles.map((candle) => candle.low);
+  const oppositeSide = direction === "BUY" ? "HIGH" : "LOW";
+  const candidates = liquidityLevels
+    .filter((level) => level.side === oppositeSide)
+    .filter((level) => (direction === "BUY" ? level.price > entry : level.price < entry));
+  if (candidates.length === 0) return { takeProfit, rr: config.minTargetR };
+
+  const nearest =
+    direction === "BUY"
+      ? Math.min(...candidates.map((level) => level.price))
+      : Math.max(...candidates.map((level) => level.price));
+  const nearestDistance = direction === "BUY" ? nearest - entry : entry - nearest;
+  if (!Number.isFinite(nearestDistance) || nearestDistance < requiredDistance) return null;
+  return { takeProfit, rr: config.minTargetR };
 }
 
-// Số chữ số thập phân theo độ lớn giá: XAUUSD (~hàng trăm/nghìn) dùng 3 số,
-// EURUSD (~1.0x) cần 5 số để giữ độ chính xác pip lẻ. Cùng quy ước với
-// roundPrice() trong AutoTradeRunner.ts.
-// Số chữ số thập phân theo độ lớn giá: XAUUSD (~hàng trăm/nghìn) dùng 3 số,
-// EURUSD (~1.0x) cần 5 số để giữ độ chính xác pip lẻ. Cùng quy ước với
-// roundPrice() trong AutoTradeRunner.ts.
-function round(value: number): number {
-  const digits = Math.abs(value) >= 100 ? 3 : 5;
-  return Number(value.toFixed(digits));
+function roundIct(value: number, digits: number): number {
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
 }

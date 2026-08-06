@@ -1,39 +1,36 @@
-import type { BacktestTrade } from "./backtester";
-import {
-  defaultRuleStrategyConfig,
-  type RuleStrategyConfig,
-} from "../strategy/ruleStrategy";
+import { defaultXauIctConfig, type XauIctConfig } from "../strategy/ruleStrategy";
+import type { XauBacktestTrade } from "./xauPullbackBacktester";
 
 export interface Variant {
   label: string;
   maxHoldBars: number;
-  strategy: RuleStrategyConfig;
+  ictConfig: XauIctConfig;
 }
 
-/** Lưới tham số chung cho sweep và walk-forward. */
+/** Lưới tham số ICT rulebook (v0.1, không ATR/OB/FVG) cho sweep và walk-forward. */
 export function buildGrid(): Variant[] {
-  const minRiskRewardValues = [1.5, 1.8, 2.0];
-  const emaFastValues = [20, 34];
-  const maxHoldValues = [48, 72];
-  const filters: Array<{ tag: string; patch: Partial<RuleStrategyConfig> }> = [
+  const minTargetRValues = [1.5, 2.0, 2.5];
+  const retestExpiryValues = [5, 8, 12];
+  const maxHoldValues = [288, 864]; // 24h / 72h theo nến M5
+  const filters: Array<{ tag: string; patch: Partial<XauIctConfig> }> = [
     { tag: "base", patch: {} },
-    { tag: "rsi", patch: { useRsiFilter: true } },
-    { tag: "structure", patch: { biasMode: "STRUCTURE" } },
-    { tag: "engulfing", patch: { confirmMode: "ENGULFING" } },
+    { tag: "wideZone", patch: { zoneBodyFraction: 0.75 } },
+    { tag: "narrowZone", patch: { zoneBodyFraction: 0.3 } },
+    { tag: "wideBuffer", patch: { fixedPriceBuffer: 0.4 } },
   ];
 
   const variants: Variant[] = [];
-  for (const rrTarget of minRiskRewardValues) {
-    for (const emaFast of emaFastValues) {
+  for (const minTargetR of minTargetRValues) {
+    for (const retestExpiryM5Bars of retestExpiryValues) {
       for (const maxHoldBars of maxHoldValues) {
         for (const filter of filters) {
           variants.push({
-            label: `${filter.tag}|rr${rrTarget}|ema${emaFast}|hold${maxHoldBars}`,
+            label: `${filter.tag}|r${minTargetR}|retest${retestExpiryM5Bars}|hold${maxHoldBars}`,
             maxHoldBars,
-            strategy: {
-              ...defaultRuleStrategyConfig,
-              rrTarget,
-              emaFast,
+            ictConfig: {
+              ...defaultXauIctConfig,
+              minTargetR,
+              retestExpiryM5Bars,
               ...filter.patch,
             },
           });
@@ -54,7 +51,7 @@ export interface TradeStats {
   profitFactor: number;
 }
 
-export function tradeStats(trades: BacktestTrade[]): TradeStats {
+export function tradeStats(trades: XauBacktestTrade[]): TradeStats {
   const wins = trades.filter((trade) => trade.outcome === "WIN");
   const losses = trades.filter((trade) => trade.outcome === "LOSS");
   const totalR = trades.reduce((sum, trade) => sum + trade.rMultiple, 0);

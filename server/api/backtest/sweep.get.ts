@@ -1,20 +1,17 @@
 import { createError, getQuery } from "h3";
 import { fetchBacktestCandles } from "../../backtest/backtestData";
+import { buildGrid } from "../../backtest/grid";
 import {
-  defaultBacktestConfig,
-  runBacktest,
-  type BacktestTrade,
-} from "../../backtest/backtester";
-import {
-  defaultRuleStrategyConfig,
-  type RuleStrategyConfig,
-} from "../../strategy/ruleStrategy";
+  defaultXauIctBacktestConfig,
+  runXauIctBacktest,
+  type XauBacktestTrade,
+} from "../../backtest/xauPullbackBacktester";
 
 /**
- * GET /api/backtest/sweep?symbol=XAUUSDm&bars=3000&spread=0.3
- * Quét lưới tham số (rr, EMA, maxHold, filter), trừ phí, và kiểm độ bền bằng
- * cách tách trades làm 2 nửa (đầu kỳ vs cuối kỳ). Trả về cấu hình đạt
- * winRate>55% & rr>=1.5 và BỀN ở cả hai nửa. Không tốn quota AI.
+ * GET /api/backtest/sweep?symbol=XAUUSDm&bars=20000&spread=0.3
+ * Quét lưới tham số ICT rulebook (minTargetR, sweep depth, maxHold, filter),
+ * trừ phí, và kiểm độ bền bằng cách tách trades làm 2 nửa (đầu kỳ vs cuối kỳ).
+ * Trả về cấu hình đạt winRate>55% & RR>=2.0 và BỀN ở cả hai nửa. Không tốn quota AI.
  */
 export default defineEventHandler(async (event) => {
   const config = useRuntimeConfig();
@@ -23,8 +20,9 @@ export default defineEventHandler(async (event) => {
   const symbol = typeof query.symbol === "string" && query.symbol.trim()
     ? query.symbol.trim()
     : config.mt5Symbol;
-  const bars = clampInt(query.bars, 3000, 500, 6000);
-  const h4bars = Math.min(6000, Math.ceil(bars / 4) + 300);
+  const m5Bars = clampInt(query.bars, 20000, 2000, 90000);
+  const m15Bars = Math.min(20000, Math.ceil(m5Bars / 3) + 600);
+  const h4Bars = Math.min(6000, Math.ceil(m5Bars / 48) + 300);
   const spread = clampNumber(
     query.spread,
     /XAU/i.test(symbol) ? 0.3 : 0.0002,
@@ -32,11 +30,12 @@ export default defineEventHandler(async (event) => {
     100,
   );
 
-  let h1, h4;
+  let m5, m15, h4;
   try {
-    [h1, h4] = await Promise.all([
-      fetchBacktestCandles(config.mt5BridgeUrl, symbol, "H1", bars),
-      fetchBacktestCandles(config.mt5BridgeUrl, symbol, "H4", h4bars),
+    [m5, m15, h4] = await Promise.all([
+      fetchBacktestCandles(config.mt5BridgeUrl, symbol, "M5", m5Bars),
+      fetchBacktestCandles(config.mt5BridgeUrl, symbol, "M15", m15Bars),
+      fetchBacktestCandles(config.mt5BridgeUrl, symbol, "H4", h4Bars),
     ]);
   } catch (error) {
     throw createError({
@@ -47,23 +46,23 @@ export default defineEventHandler(async (event) => {
 
   const grid = buildGrid();
   const rows = grid.map((variant) => {
-    const result = runBacktest(symbol, h1, h4, {
-      ...defaultBacktestConfig,
+    const result = runXauIctBacktest(m5, m15, h4, {
+      ...defaultXauIctBacktestConfig,
       maxHoldBars: variant.maxHoldBars,
       spreadPrice: spread,
-      strategy: variant.strategy,
+      ictConfig: variant.ictConfig,
     });
     const split = Math.floor(result.tradeList.length * 0.6);
     const firstHalf = stats(result.tradeList.slice(0, split));
     const secondHalf = stats(result.tradeList.slice(split));
     const meetsTarget =
-      result.winRate > 55 && variant.strategy.rrTarget >= 1.5 && result.trades >= 20;
+      result.winRate > 55 && variant.ictConfig.minTargetR >= 2.0 && result.trades >= 20;
     const robust =
       meetsTarget && firstHalf.expectancyR > 0 && secondHalf.expectancyR > 0;
     return {
       label: variant.label,
-      rrTarget: variant.strategy.rrTarget,
-      emaFast: variant.strategy.emaFast,
+      minTargetR: variant.ictConfig.minTargetR,
+      retestExpiryM5Bars: variant.ictConfig.retestExpiryM5Bars,
       maxHoldBars: variant.maxHoldBars,
       trades: result.trades,
       winRate: result.winRate,
@@ -82,7 +81,7 @@ export default defineEventHandler(async (event) => {
 
   return {
     symbol,
-    bars: h1.length,
+    bars: m5.length,
     spreadPrice: spread,
     note: "expectancy/winRate đã TRỪ phí. 'robust' = đạt mục tiêu và expectancy dương ở CẢ hai nửa dữ liệu.",
     targetsMet: rows.filter((row) => row.meetsTarget),
@@ -91,46 +90,7 @@ export default defineEventHandler(async (event) => {
   };
 });
 
-interface Variant {
-  label: string;
-  maxHoldBars: number;
-  strategy: RuleStrategyConfig;
-}
-
-function buildGrid(): Variant[] {
-  const rrValues = [1.5, 1.8, 2.0];
-  const emaFastValues = [20, 34];
-  const maxHoldValues = [48, 72];
-  const filters: Array<{ tag: string; patch: Partial<RuleStrategyConfig> }> = [
-    { tag: "base", patch: {} },
-    { tag: "rsi", patch: { useRsiFilter: true } },
-    { tag: "structure", patch: { biasMode: "STRUCTURE" } },
-    { tag: "engulfing", patch: { confirmMode: "ENGULFING" } },
-  ];
-
-  const variants: Variant[] = [];
-  for (const rrTarget of rrValues) {
-    for (const emaFast of emaFastValues) {
-      for (const maxHoldBars of maxHoldValues) {
-        for (const filter of filters) {
-          variants.push({
-            label: `${filter.tag}|rr${rrTarget}|ema${emaFast}|hold${maxHoldBars}`,
-            maxHoldBars,
-            strategy: {
-              ...defaultRuleStrategyConfig,
-              rrTarget,
-              emaFast,
-              ...filter.patch,
-            },
-          });
-        }
-      }
-    }
-  }
-  return variants;
-}
-
-function stats(trades: BacktestTrade[]): {
+function stats(trades: XauBacktestTrade[]): {
   trades: number;
   winRate: number;
   expectancyR: number;

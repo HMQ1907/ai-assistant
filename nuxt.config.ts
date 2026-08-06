@@ -69,6 +69,9 @@ export default defineNuxtConfig({
     autoUseAiVetoOnBump: process.env.AUTO_AI_VETO === "true",
     autoTradeOnAiError: process.env.AUTO_TRADE_ON_AI_ERROR === "true",
     autoStrategyMode: process.env.AUTO_STRATEGY_MODE || "xau_trend_pullback",
+    // Micro-scalp: bật/tắt từng hướng lệnh (backtest cho thấy SELL âm nặng).
+    autoAllowBuy: process.env.AUTO_ALLOW_BUY !== "false",
+    autoAllowSell: process.env.AUTO_ALLOW_SELL !== "false",
     autoUseM15: process.env.AUTO_USE_M15 !== "false",
     autoAllowScalp: process.env.AUTO_ALLOW_SCALP === "true",
     // Scalp mode bị plugin bỏ qua — giữ flag để tương thích ENV cũ.
