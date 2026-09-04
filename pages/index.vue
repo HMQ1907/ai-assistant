@@ -4,9 +4,9 @@
       <div class="heading">
         <h1>XAUUSD Auto-Bot</h1>
         <p>
-          Bot tự động: Rule Engine trend-pullback (H1 bias → M15 pullback → M5
-          trigger). Quét mỗi 5 phút trong khung 14:00–21:30 VN, lot 0.01, tối đa
-          2 lệnh/ngày. Không scalp — bạn bật AutoTrading trên MT5 và để bot chạy.
+          XAU RFTP v1: M15 EMA50/200 + VWAP regime → M5 pullback/rejection → momentum break
+          → M5 pullback/strong close. Chỉ xét 08:00–18:00 UTC, có news filter và
+          TP 2R; bot hiện ở chế độ không tự đặt lệnh.
         </p>
       </div>
       <div class="action-panel">

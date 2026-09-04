@@ -44,6 +44,8 @@ export interface Candle {
   low: number;
   close: number;
   volume: number;
+  /** Historical bid/ask spread expressed in price units when supplied by MT5. */
+  spread?: number;
 }
 
 export interface MarketSnapshot {

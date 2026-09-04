@@ -12,6 +12,7 @@ import {
   convictionScore,
   defaultRuleStrategyConfig,
   defaultXauIctConfig,
+  evaluateXauClassicPriceActionSignal,
   evaluateManualReversalScalpSignal,
   evaluateXauIctSignal,
   explainManualReversalScalpRejection,
@@ -23,6 +24,10 @@ import {
   explainXauMicroScalpRejection,
   microScalpConfigForSymbol,
 } from "../strategy/xauMicroScalpStrategy";
+import {
+  defaultXauRftpConfig,
+  explainXauRftp,
+} from "../strategy/xauRftpStrategy";
 import { AiAnalysisService } from "./AiAnalysisService";
 import {
   runActiveSymbolOrderReviews,
@@ -31,7 +36,7 @@ import {
 import { AnalysisHistoryService } from "./AnalysisHistoryService";
 import { IndicatorService } from "./IndicatorService";
 import { MarketDataService } from "./MarketDataService";
-import { Mt5OrderService } from "./Mt5OrderService";
+import { Mt5OrderService, type ClosedMt5Deal } from "./Mt5OrderService";
 import { OpportunityPayloadBuilder } from "./OpportunityPayloadBuilder";
 import { SupabaseService } from "./SupabaseService";
 import { isInsideTradeScannerWindow, isScannerSlot } from "./TradeScannerService";
@@ -82,6 +87,23 @@ export class AutoTradeRunner {
       this.rollDay(config.tradeScannerTimezone, account.equity);
       if (!account.tradeAllowed) {
         console.warn("[scalp-bot] AutoTrading is OFF in MT5.");
+        return;
+      }
+      try {
+        const consecutiveLosses = countConsecutiveLossesToday(
+          await orderService.getClosedDeals(48),
+          config.tradeScannerTimezone,
+        );
+        if (consecutiveLosses >= 3) {
+          this.haltedForDay = true;
+          console.warn(`[auto-bot] kill-switch: ${consecutiveLosses} consecutive losses today.`);
+          return;
+        }
+      } catch (error) {
+        console.warn(
+          "[auto-bot] cannot verify consecutive-loss limit; fail closed:",
+          error instanceof Error ? error.message : error,
+        );
         return;
       }
       const dailyLossLimitUsd = resolveDailyLossLimitUsd(
@@ -465,6 +487,23 @@ export class AutoTradeRunner {
         );
         return;
       }
+      try {
+        const consecutiveLosses = countConsecutiveLossesToday(
+          await orderService.getClosedDeals(48),
+          config.tradeScannerTimezone,
+        );
+        if (consecutiveLosses >= 3) {
+          this.haltedForDay = true;
+          console.warn(`[auto-bot] kill-switch: ${consecutiveLosses} consecutive losses today.`);
+          return;
+        }
+      } catch (error) {
+        console.warn(
+          "[auto-bot] cannot verify consecutive-loss limit; fail closed:",
+          error instanceof Error ? error.message : error,
+        );
+        return;
+      }
       if (this.haltedForDay) {
         console.info("[auto-bot] daily trade/loss/profit limit reached, stop opening new trades.");
         return;
@@ -603,14 +642,44 @@ export class AutoTradeRunner {
       let entryTf = "H1";
       let h1RejectReason = "H1 candle not evaluated yet";
       let m15RejectReason = "M15 candle not evaluated yet";
-      const strategyMode =
-        String(config.autoStrategyMode).toLowerCase() === "xau_micro_scalp" ? "xau_micro_scalp" : "xau_ict";
+      const rawStrategyMode = String(config.autoStrategyMode).toLowerCase();
+      const strategyMode = rawStrategyMode === "xau_micro_scalp"
+        ? "xau_micro_scalp"
+        : rawStrategyMode === "xau_rftp"
+          ? "xau_rftp"
+        : rawStrategyMode === "xau_price_action"
+          ? "xau_price_action"
+          : "xau_ict";
       const minRr =
-        strategyMode === "xau_micro_scalp"
+        strategyMode === "xau_rftp"
+          ? defaultXauRftpConfig.targetR
+          : strategyMode === "xau_micro_scalp"
           ? microScalpConfigForSymbol(config.mt5Symbol).minRr
           : defaultXauIctConfig.minTargetR;
 
-      if (strategyMode === "xau_micro_scalp") {
+      if (strategyMode === "xau_rftp") {
+        h1RejectReason = "H1 optional only; M15 EMA50/200 + VWAP is the primary regime";
+        const latestM5 = m5.at(-1)?.time ?? "";
+        if (latestM5 && latestM5 !== this.lastEvaluatedM5) {
+          this.lastEvaluatedM5 = latestM5;
+          const freshNewsBlock = await getAutoTradeTimeBlockReason(config.tradeScannerTimezone);
+          const evaluation = explainXauRftp(m5, m15, h1, {
+            now: new Date(),
+            newsWindowClear: !freshNewsBlock,
+            bid: snapshot.bid,
+            ask: snapshot.ask,
+            spreadPrice: snapshot.spread,
+          }, {
+            ...defaultXauRftpConfig,
+            allowBuy: config.autoAllowBuy !== false,
+            allowSell: config.autoAllowSell !== false,
+          });
+          signal = evaluation.signal;
+          entryCandles = m5;
+          entryTf = "M5";
+          m15RejectReason = evaluation.reason;
+        }
+      } else if (strategyMode === "xau_micro_scalp") {
         h1RejectReason = "micro-scalp uses H1+M15 EMA50 bias filter";
         const scalpConfig = microScalpConfigForSymbol(config.mt5Symbol, {
           allowBuy: config.autoAllowBuy !== false,
@@ -642,6 +711,25 @@ export class AutoTradeRunner {
             );
           }
         }
+      } else if (strategyMode === "xau_price_action") {
+        h1RejectReason = "Price Action reversal: M15 quét thanh khoản + M5 từ chối/engulfing";
+        const latestM5 = m5.at(-1)?.time ?? "";
+        if (latestM5 && latestM5 !== this.lastEvaluatedM5) {
+          this.lastEvaluatedM5 = latestM5;
+          const freshNewsBlock = await getAutoTradeTimeBlockReason(config.tradeScannerTimezone);
+          const nextSignal = evaluateXauClassicPriceActionSignal(m5, m15, h1, {
+            now: new Date(),
+            newsWindowClear: !freshNewsBlock,
+            spreadPrice: snapshot.spread ?? undefined,
+          });
+          if (nextSignal) {
+            signal = nextSignal;
+            entryCandles = m5;
+            entryTf = "M5";
+          } else {
+            m15RejectReason = "PA reversal: chưa có M15 quét thanh khoản + M5 từ chối/engulfing hợp lệ";
+          }
+        }
       } else {
         // PA v0.2: H1 bias (chính) + H4 context filter -> Setup A (sweep reversal)
         // hoặc Setup B (BOS continuation) trên M15 -> retest zone -> M5 trigger.
@@ -654,6 +742,7 @@ export class AutoTradeRunner {
           const freshNewsBlock = await getAutoTradeTimeBlockReason(config.tradeScannerTimezone);
           const nextSignal = evaluateXauIctSignal(m5, m15, h1, h4, defaultXauIctConfig, {
             newsWindowClear: !freshNewsBlock,
+            spreadPrice: snapshot.spread ?? undefined,
           });
           if (nextSignal) {
             signal = nextSignal;
@@ -662,6 +751,7 @@ export class AutoTradeRunner {
           } else {
             m15RejectReason = explainXauIctRejection(m5, m15, h1, h4, defaultXauIctConfig, {
               newsWindowClear: !freshNewsBlock,
+              spreadPrice: snapshot.spread ?? undefined,
             });
           }
         }
@@ -1257,6 +1347,29 @@ export class AutoTradeRunner {
   }
 }
 
+export function countConsecutiveLossesToday(
+  deals: ClosedMt5Deal[],
+  timeZone: string,
+  now = new Date(),
+): number {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone,
+  });
+  const today = formatter.format(now);
+  const todayDeals = deals
+    .filter((deal) => formatter.format(new Date(deal.time)) === today)
+    .sort((left, right) => Date.parse(right.time) - Date.parse(left.time));
+  let losses = 0;
+  for (const deal of todayDeals) {
+    if (deal.net_profit >= 0) break;
+    losses += 1;
+  }
+  return losses;
+}
+
 export function emptyNews(): NewsSnapshot {
   return {
     items: [],
@@ -1271,15 +1384,80 @@ export function emptyNews(): NewsSnapshot {
 // Blackout tin tức: CHỈ theo sự kiện nhập tay (AUTO_NEWS_BLACKOUT_EVENTS).
 // Đã gỡ phần tự tải lịch kinh tế (ForexFactory/FairEconomy) — người dùng tự
 // theo dõi tin nóng và tắt bot khi cần, nên không chặn/không phụ thuộc mạng nữa.
-async function getAutoTradeTimeBlockReason(timeZone: string): Promise<string | null> {
+export async function getAutoTradeTimeBlockReason(timeZone: string): Promise<string | null> {
   const config = useRuntimeConfig();
-  return newsBlackoutBlockReason({
+  const manualBlock = newsBlackoutBlockReason({
     now: new Date(),
     enabled: config.autoNewsBlackoutEnabled,
     events: config.autoNewsBlackoutEvents,
     minutes: config.autoNewsBlackoutMinutes,
     timeZone,
   });
+  if (manualBlock || !config.autoNewsBlackoutEnabled) return manualBlock;
+  return remoteCalendarBlockReason({
+    now: new Date(),
+    url: config.autoNewsCalendarUrl,
+    currencies: config.autoNewsCalendarCurrencies,
+    impacts: config.autoNewsCalendarImpacts,
+    cacheMinutes: config.autoNewsCalendarCacheMinutes,
+    beforeMinutes: config.autoNewsBlackoutBeforeMinutes,
+    afterMinutes: config.autoNewsBlackoutAfterMinutes,
+    timeZone,
+  });
+}
+
+interface RemoteCalendarEvent {
+  title?: string;
+  country?: string;
+  currency?: string;
+  date?: string;
+  impact?: string;
+}
+
+let calendarCache: { expiresAt: number; events: RemoteCalendarEvent[] } | null = null;
+
+async function remoteCalendarBlockReason(input: {
+  now: Date;
+  url: string;
+  currencies: string;
+  impacts: string;
+  cacheMinutes: number;
+  beforeMinutes: number;
+  afterMinutes: number;
+  timeZone: string;
+}): Promise<string | null> {
+  try {
+    if (!calendarCache || calendarCache.expiresAt <= Date.now()) {
+      const response = await fetch(input.url, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) throw new Error(`calendar HTTP ${response.status}`);
+      const events = (await response.json()) as RemoteCalendarEvent[];
+      calendarCache = {
+        events: Array.isArray(events) ? events : [],
+        expiresAt: Date.now() + Math.max(1, input.cacheMinutes) * 60_000,
+      };
+    }
+    const currencies = new Set(input.currencies.split(",").map((value) => value.trim().toUpperCase()).filter(Boolean));
+    const impacts = new Set(input.impacts.split(",").map((value) => value.trim().toUpperCase()).filter(Boolean));
+    for (const event of calendarCache.events) {
+      const currency = String(event.currency ?? event.country ?? "").toUpperCase();
+      const impact = String(event.impact ?? "").toUpperCase();
+      if (!currencies.has(currency) || !impacts.has(impact)) continue;
+      const eventMs = Date.parse(event.date ?? "");
+      if (!Number.isFinite(eventMs)) continue;
+      const diffMinutes = (input.now.getTime() - eventMs) / 60_000;
+      if (diffMinutes >= -input.beforeMinutes && diffMinutes <= input.afterMinutes) {
+        const side = diffMinutes < 0 ? `${Math.ceil(-diffMinutes)}m before` : `${Math.ceil(diffMinutes)}m after`;
+        return `news blackout: ${side} ${event.title ?? "high-impact USD event"} (${formatInTimeZone(new Date(eventMs), input.timeZone)})`;
+      }
+    }
+    return null;
+  } catch (error) {
+    // Mandatory news gate: if the calendar cannot be verified, do not open a new trade.
+    return `news calendar unavailable (fail closed): ${error instanceof Error ? error.message : error}`;
+  }
 }
 
 export function isHighImpactCalendarEvent(

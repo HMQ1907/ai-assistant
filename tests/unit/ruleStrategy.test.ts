@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Candle } from "../../types/trading";
 import {
   defaultXauIctConfig,
+  evaluateXauClassicPriceActionSignal,
   evaluateXauIctSignal,
   explainXauIctRejection,
   resolveIctSession,
@@ -15,19 +16,26 @@ function addMinutes(iso: string, minutes: number): string {
   return new Date(Date.parse(iso) + minutes * 60_000).toISOString();
 }
 
+const fixtureConfig = {
+  ...defaultXauIctConfig,
+  minStopLossAtr: 0,
+  maxStopLossAtr: 10,
+};
+
 describe("resolveIctSession", () => {
-  it("chỉ cho phép LONDON_OPEN (08:00-10:29) và LONDON_NY_OVERLAP (13:00-15:59) UTC", () => {
+  it("cho phép toàn bộ 08:00-17:59 UTC theo Frequency Mode", () => {
     const cases: Array<[string, string, boolean]> = [
       ["2026-06-01T00:00:00.000Z", "ASIA", false],
       ["2026-06-01T07:59:00.000Z", "ASIA", false],
       ["2026-06-01T08:00:00.000Z", "LONDON_OPEN", true],
       ["2026-06-01T10:29:00.000Z", "LONDON_OPEN", true],
-      ["2026-06-01T10:30:00.000Z", "LONDON_MID", false],
-      ["2026-06-01T12:59:00.000Z", "LONDON_MID", false],
+      ["2026-06-01T10:30:00.000Z", "LONDON_CONTINUATION", true],
+      ["2026-06-01T12:59:00.000Z", "LONDON_CONTINUATION", true],
       ["2026-06-01T13:00:00.000Z", "LONDON_NY_OVERLAP", true],
       ["2026-06-01T15:59:00.000Z", "LONDON_NY_OVERLAP", true],
-      ["2026-06-01T16:00:00.000Z", "NY_LATE", false],
-      ["2026-06-01T20:59:00.000Z", "NY_LATE", false],
+      ["2026-06-01T16:00:00.000Z", "NY_LATE", true],
+      ["2026-06-01T17:59:00.000Z", "NY_LATE", true],
+      ["2026-06-01T18:00:00.000Z", "ROLLOVER_LOW_PRIORITY", false],
       ["2026-06-01T21:00:00.000Z", "ROLLOVER_LOW_PRIORITY", false],
       ["2026-06-01T23:59:00.000Z", "ROLLOVER_LOW_PRIORITY", false],
     ];
@@ -57,6 +65,28 @@ describe("evaluateXauIctSignal — edge cases", () => {
     );
     expect(evaluateXauIctSignal(m5, m15, flatH4)).toBeNull();
     expect(explainXauIctRejection(m5, m15, flatH4)).toMatch(/NEUTRAL/);
+  });
+});
+
+describe("evaluateXauClassicPriceActionSignal", () => {
+  it("phát BUY sau M15 quét đáy và M5 nến từ chối, đồng thời nhận RR cấu hình", () => {
+    const start = "2026-06-01T08:00:00.000Z";
+    const m15 = Array.from({ length: 8 }, (_, i) => c(addMinutes(start, i * 15), 100, 101, 99, 100));
+    m15[7] = c(m15[7]!.time, 99.5, 101.2, 98.5, 100.9);
+    const m5 = Array.from({ length: 8 }, (_, i) => c(addMinutes("2026-06-01T09:10:00.000Z", i * 5), 100, 100.4, 99.5, 100.1));
+    m5[7] = c(m5[7]!.time, 99.2, 100.8, 98.9, 100.7);
+    const h1 = Array.from({ length: 8 }, (_, i) => c(addMinutes(start, i * 60), 100, 101, 99, 100));
+
+    const signal = evaluateXauClassicPriceActionSignal(m5, m15, h1, { now: new Date("2026-06-01T09:45:00.000Z") }, {
+      sweepLookbackM15: 6,
+      m15CloseEdgeMax: 0.25,
+      m5MinBodyRatio: 0.35,
+      m5CloseEdgeMax: 0.25,
+      stopAtrBuffer: 0.15,
+      targetR: 1,
+    });
+    expect(signal?.direction).toBe("BUY");
+    expect((signal!.takeProfit - signal!.entry) / (signal!.entry - signal!.stopLoss)).toBeCloseTo(1, 2);
   });
 });
 
@@ -116,8 +146,8 @@ function buildBullishFixture(): { m5: Candle[]; m15: Candle[]; h4: Candle[] } {
   // ----- M5: 1 nến filler + 1 nến rejection chạm zone [2005.0, 2007.5], đóng lại
   // trên zoneLow với close gần đỉnh range (rejection bullish). -----
   const m5: Candle[] = [
-    c("2026-06-01T09:30:00.000Z", 2006.0, 2006.2, 2005.9, 2006.1),
-    c("2026-06-01T09:35:00.000Z", 2005.3, 2006.6, 2005.1, 2006.5),
+    c("2026-06-01T09:45:00.000Z", 2006.0, 2006.2, 2005.9, 2006.1),
+    c("2026-06-01T09:50:00.000Z", 2005.3, 2006.6, 2005.1, 2006.5),
   ];
 
   return { m5, m15, h4 };
@@ -126,8 +156,8 @@ function buildBullishFixture(): { m5: Candle[]; m15: Candle[]; h4: Candle[] } {
 describe("evaluateXauIctSignal — full PA v0.1 chain (happy path)", () => {
   it("phát BUY khi sweep + displacement + M15 BOS + retest zone + M5 rejection đều hợp lệ trong session cho phép", () => {
     const { m5, m15, h4 } = buildBullishFixture();
-    const signal = evaluateXauIctSignal(m5, m15, h4, defaultXauIctConfig, {
-      now: new Date("2026-06-01T09:35:00.000Z"),
+    const signal = evaluateXauIctSignal(m5, m15, h4, h4, fixtureConfig, {
+      now: new Date("2026-06-01T09:50:00.000Z"),
       newsWindowClear: true,
     });
     expect(signal).not.toBeNull();
@@ -136,23 +166,23 @@ describe("evaluateXauIctSignal — full PA v0.1 chain (happy path)", () => {
     expect(signal!.stopLoss).toBeLessThan(signal!.entry);
     expect(signal!.takeProfit).toBeGreaterThan(signal!.entry);
     const rr = (signal!.takeProfit - signal!.entry) / (signal!.entry - signal!.stopLoss);
-    expect(rr).toBeCloseTo(defaultXauIctConfig.minTargetR, 2);
+    expect(rr).toBeCloseTo(fixtureConfig.minTargetR, 2);
     expect(signal!.strategyKind).toBe("ICT_SETUP");
   });
 
   it("KHÔNG phát tín hiệu nếu nến trigger rơi ngoài session cho phép (final-time gate, không cache)", () => {
     const { m5, m15, h4 } = buildBullishFixture();
-    // Cùng dữ liệu hệt happy-path, chỉ đổi `now` sang 11:00 UTC = LONDON_MID (không cho phép).
-    const options = { now: new Date("2026-06-01T11:00:00.000Z"), newsWindowClear: true };
-    expect(evaluateXauIctSignal(m5, m15, h4, defaultXauIctConfig, options)).toBeNull();
-    expect(explainXauIctRejection(m5, m15, h4, defaultXauIctConfig, options)).toMatch(/session/i);
+    // Cùng dữ liệu hệt happy-path, chỉ đổi `now` sang sau 18:00 UTC (không cho phép).
+    const options = { now: new Date("2026-06-01T18:05:00.000Z"), newsWindowClear: true };
+    expect(evaluateXauIctSignal(m5, m15, h4, h4, fixtureConfig, options)).toBeNull();
+    expect(explainXauIctRejection(m5, m15, h4, h4, fixtureConfig, options)).toMatch(/session/i);
   });
 
   it("KHÔNG phát tín hiệu khi đang trong news blackout tại thời điểm trigger", () => {
     const { m5, m15, h4 } = buildBullishFixture();
     const options = { now: new Date("2026-06-01T09:35:00.000Z"), newsWindowClear: false };
-    expect(evaluateXauIctSignal(m5, m15, h4, defaultXauIctConfig, options)).toBeNull();
-    expect(explainXauIctRejection(m5, m15, h4, defaultXauIctConfig, options)).toMatch(/news/i);
+    expect(evaluateXauIctSignal(m5, m15, h4, h4, fixtureConfig, options)).toBeNull();
+    expect(explainXauIctRejection(m5, m15, h4, h4, fixtureConfig, options)).toMatch(/news/i);
   });
 
   it("KHÔNG phát tín hiệu nếu M15 đã đóng xuyên ngược qua mức BOS trước khi retest (setup invalidated, §5)", () => {
@@ -160,18 +190,17 @@ describe("evaluateXauIctSignal — full PA v0.1 chain (happy path)", () => {
     // Thêm 1 nến M15 sau displacement đóng NGƯỢC xuống dưới BOS_LEVEL (2005.0).
     const invalidated = [...m15, c(addMinutes(m15[39]!.time, 15), 2004.0, 2004.5, 2003.5, 2004.0)];
     const options = { now: new Date("2026-06-01T09:35:00.000Z"), newsWindowClear: true };
-    expect(evaluateXauIctSignal(m5, invalidated, h4, defaultXauIctConfig, options)).toBeNull();
-    expect(explainXauIctRejection(m5, invalidated, h4, defaultXauIctConfig, options)).toMatch(/xuyên ngược/i);
+    expect(evaluateXauIctSignal(m5, invalidated, h4, h4, fixtureConfig, options)).toBeNull();
+    expect(explainXauIctRejection(m5, invalidated, h4, h4, fixtureConfig, options)).toMatch(/xuyên ngược/i);
   });
 
   it("KHÔNG phát tín hiệu nếu retest quá hạn (> retestExpiryM5Bars nến M5 sau displacement)", () => {
     const { m5, m15, h4 } = buildBullishFixture();
-    const lateTrigger = [
-      m5[0]!,
-      c("2026-06-01T10:15:00.000Z", 2005.3, 2006.6, 2005.1, 2006.5), // 45 phút sau displacement > 8 nến M5 (40 phút)
-    ];
+    const lateTrigger = Array.from({ length: 10 }, (_, index) =>
+      c(addMinutes("2026-06-01T09:50:00.000Z", index * 5), 2005.3, 2006.6, 2005.1, 2006.5),
+    );
     const options = { now: new Date("2026-06-01T10:15:00.000Z"), newsWindowClear: true };
-    expect(evaluateXauIctSignal(lateTrigger, m15, h4, defaultXauIctConfig, options)).toBeNull();
-    expect(explainXauIctRejection(lateTrigger, m15, h4, defaultXauIctConfig, options)).toMatch(/retest quá hạn/i);
+    expect(evaluateXauIctSignal(lateTrigger, m15, h4, h4, fixtureConfig, options)).toBeNull();
+    expect(explainXauIctRejection(lateTrigger, m15, h4, h4, fixtureConfig, options)).toMatch(/retest quá hạn/i);
   });
 });

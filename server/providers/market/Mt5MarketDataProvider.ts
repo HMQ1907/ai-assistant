@@ -25,6 +25,7 @@ interface Mt5BridgeCandle {
   low: number;
   close: number;
   volume: number;
+  spread?: number;
 }
 
 interface Mt5BridgeSnapshot {
@@ -119,6 +120,7 @@ export class Mt5MarketDataProvider implements MarketDataProvider {
           low: candle.low,
           close: candle.close,
           volume: candle.volume,
+          spread: candle.spread,
         })),
         timeframe,
       );
@@ -219,7 +221,8 @@ export class Mt5MarketDataProvider implements MarketDataProvider {
   private async fetchSnapshot(): Promise<Mt5BridgeSnapshot> {
     const url = new URL("/snapshot", this.options.bridgeUrl);
     url.searchParams.set("symbol", this.options.symbol);
-    url.searchParams.set("count", String(marketCandleRequestCount));
+    // RFTP needs EMA200 plus roughly 20 trading days of M15 ATR history.
+    url.searchParams.set("count", "2000");
 
     let response: Response;
     try {

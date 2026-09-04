@@ -42,7 +42,7 @@ export class TradeScannerService {
         botToken: config.telegramBotToken,
         chatId: config.telegramChatId,
       });
-      await telegram.sendMessage(formatTelegramAlert(analysis.result, analysis.history.id));
+      await telegram.sendMessage(formatTelegramMarketAlert(analysis.result, analysis.history.id));
       console.info("[trade-scanner] telegram alert sent");
     } catch (error) {
       await this.notifyFailure(error);
@@ -105,6 +105,12 @@ export class TradeScannerService {
     if (recommendation.decision !== "TRADE") {
       const detail = recommendation.no_trade_reason || recommendation.summary || "NO_TRADE";
       return detail.slice(0, 160);
+    }
+    if (recommendation.order_type !== "MARKET") {
+      return `scanner sends MARKET entries only; received ${recommendation.order_type}`;
+    }
+    if (recommendation.direction !== "BUY" && recommendation.direction !== "SELL") {
+      return "missing BUY/SELL direction";
     }
     const riskReward = parseRiskReward(recommendation.risk_reward ?? "");
     if (riskReward < config.tradeScannerMinRiskReward) {
@@ -176,6 +182,40 @@ function signalSignature(recommendation: AiTradeRecommendation): string {
     bucket(recommendation.entry_zone?.to ?? null),
     bucket(recommendation.stop_loss),
   ].join("|");
+}
+
+export function formatTelegramMarketAlert(recommendation: AiTradeRecommendation, historyId: string): string {
+  const action = recommendation.direction === "BUY" ? "BUY NOW" : "SELL NOW";
+  const entry = recommendation.entry_zone?.from ?? recommendation.current_price;
+  const lossAt001Lot = recommendation.stop_loss === null
+    ? null
+    : Math.abs(entry - recommendation.stop_loss) * tradingRules.xauUsdOuncesPerLot * 0.01;
+  const profitAt001Lot = recommendation.take_profit === null
+    ? null
+    : Math.abs(recommendation.take_profit - entry) * tradingRules.xauUsdOuncesPerLot * 0.01;
+  return [
+    `XAUUSD — ${action}`,
+    "",
+    `Entry market: ${entry}`,
+    `SL: ${recommendation.stop_loss}`,
+    `TP: ${recommendation.take_profit}`,
+    `RR: ${recommendation.risk_reward ?? `>= 1:${tradingRules.minRiskReward}`}`,
+    ...(lossAt001Lot !== null && profitAt001Lot !== null
+      ? [`Ước tính 0.01 lot: SL -$${lossAt001Lot.toFixed(2)} / TP +$${profitAt001Lot.toFixed(2)}`]
+      : []),
+    "Hiệu lực: vào ngay khi nhận; nếu đã quá 1 nến M5 hoặc giá chạy xa Entry thì bỏ.",
+    "",
+    `Lý do: ${recommendation.trade_reason || recommendation.summary}`,
+    ...(recommendation.invalid_conditions.length
+      ? ["", "Thoát/hủy nếu:", ...recommendation.invalid_conditions.map((item) => `- ${item}`)]
+      : []),
+    ...(recommendation.risk_factors.length
+      ? ["", "Cảnh báo:", ...recommendation.risk_factors.map((item) => `- ${item}`)]
+      : []),
+    "",
+    `Signal ID: ${historyId}`,
+    "Tín hiệu đánh tay; tự kiểm tra giá chưa chạy xa Entry. Không phải cam kết lợi nhuận.",
+  ].join("\n");
 }
 
 function formatTelegramAlert(recommendation: AiTradeRecommendation, historyId: string): string {

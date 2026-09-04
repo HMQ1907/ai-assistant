@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "generatedAt": "2026-08-18T14:00:00+07:00",
+  "plans": [
+    {
+      "planId": "xau-20260818-1400-buy-retest",
+      "symbol": "XAUUSDm",
+      "status": "ACTIVE",
+      "priority": 100,
+      "generatedAt": "2026-08-18T14:00:00+07:00",
+      "expiresAt": "2026-08-18T23:00:00+07:00",
+      "regime": "TRANSITION",
+      "direction": "BUY",
+      "thesis": "Example only: wait for a closed M5 retest; never copy these prices into live trading.",
+      "zone": {
+        "low": 4396.8,
+        "high": 4398.0,
+        "proximityAtr": 0.35
+      },
+      "trigger": {
+        "timeframe": "M5",
+        "confirmationTimeframe": "M5",
+        "mode": "BREAKOUT_RETEST",
+        "requireClosed": true,
+        "minVolumeRatio": 0.8
+      },
+      "risk": {
+        "invalidationPrice": 4394.8,
+        "firstBarrier": 4404.0,
+        "conservativeTakeProfit": 4403.4,
+        "minimumSlBuffer": 0.0,
+        "maxSpread": 0.35,
+        "minRrAfterCost": 1.6
+      },
+      "execution": { "mode": "SIGNAL_ONLY", "autoExecute": false },
+      "preMortem": "Reject if the retest closes back below invalidation or the first barrier no longer leaves 1.6R after cost."
+    }
+  ]
+}

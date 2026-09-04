@@ -70,6 +70,21 @@ interface BridgeActiveOrdersResponse {
   orders: ActiveMt5Order[];
 }
 
+export interface ClosedMt5Deal {
+  ticket: number;
+  position_id: number;
+  symbol: string;
+  time: string;
+  net_profit: number;
+  comment: string;
+}
+
+interface BridgeDealsResponse {
+  ok: boolean;
+  symbol: string;
+  deals: ClosedMt5Deal[];
+}
+
 // Chuyển (direction + order_type của AI) sang order_type mà bridge hiểu.
 function toBridgeOrderType(
   direction: Exclude<TradeDirection, "NONE">,
@@ -125,6 +140,21 @@ export class Mt5OrderService {
       price: body.price,
       volume: body.volume,
     };
+  }
+
+  async getClosedDeals(hours = 48): Promise<ClosedMt5Deal[]> {
+    const url = new URL("/deals", this.options.bridgeUrl);
+    url.searchParams.set("symbol", this.options.symbol);
+    url.searchParams.set("hours", String(hours));
+    const response = await fetch(url, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(this.options.timeoutMs ?? 15_000),
+    });
+    if (!response.ok) {
+      throw new Error(`MT5 bridge /deals returned HTTP ${response.status}`);
+    }
+    const body = (await response.json()) as BridgeDealsResponse;
+    return body.deals ?? [];
   }
 
   async cancelOrder(ticket: number): Promise<CancelOrderResult> {

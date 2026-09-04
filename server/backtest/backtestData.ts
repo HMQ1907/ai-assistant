@@ -11,6 +11,7 @@ interface BridgeCandlesResponse {
     low: number;
     close: number;
     volume: number;
+    spread?: number;
   }>;
 }
 
@@ -57,6 +58,7 @@ export async function fetchBacktestCandles(
       low: Number(candle.low),
       close: Number(candle.close),
       volume: Number(candle.volume),
+      ...(candle.spread !== undefined ? { spread: Number(candle.spread) } : {}),
     }))
     .filter(
       (candle) =>

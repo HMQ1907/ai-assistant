@@ -2,10 +2,17 @@ import type { Candle } from "../../types/trading";
 import { tradingRules } from "../config/tradingRules";
 import {
   defaultXauIctConfig,
+  evaluateXauClassicPriceActionSignal,
   evaluateXauIctSignal,
   explainXauIctRejection,
   type XauIctConfig,
+  type XauClassicPriceActionConfig,
 } from "../strategy/ruleStrategy";
+import {
+  defaultXauRftpConfig,
+  evaluateXauRftpSignal,
+  type XauRftpConfig,
+} from "../strategy/xauRftpStrategy";
 
 /**
  * Backtester TÁI HIỆN đúng luồng auto-bot mode ICT rulebook (khung vào lệnh M5),
@@ -35,6 +42,9 @@ export interface XauIctBacktestConfig {
   // (SL distance * lot * ouncesPerLot) > accountSizeUsd * maxLossPercentPerTrade%.
   maxLossPercentPerTrade: number;
   ictConfig: XauIctConfig;
+  classicConfig?: XauClassicPriceActionConfig;
+  rftpConfig?: XauRftpConfig;
+  strategyMode?: "ICT" | "CLASSIC" | "RFTP";
 }
 
 export const defaultXauIctBacktestConfig: XauIctBacktestConfig = {
@@ -46,6 +56,7 @@ export const defaultXauIctBacktestConfig: XauIctBacktestConfig = {
   accountStartUsd: 200,
   maxLossPercentPerTrade: 15,
   ictConfig: defaultXauIctConfig,
+  strategyMode: "ICT",
 };
 
 export interface XauBacktestTrade {
@@ -99,9 +110,13 @@ interface OpenPosition {
 }
 
 /** Đủ cho previous-day + Asia range + lookback chuỗi sweep/displacement/swing confirm. */
-const M15_WINDOW = 600;
+const M15_WINDOW = 2_100;
 const H4_WINDOW = 200;
 const H1_WINDOW = 300;
+const M5_MS = 5 * 60_000;
+const M15_MS = 15 * 60_000;
+const H1_MS = 60 * 60_000;
+const H4_MS = 4 * 60 * 60_000;
 
 function tailWindow(candles: Candle[], lastIdx: number, window: number): Candle[] {
   return candles.slice(Math.max(0, lastIdx + 1 - window), lastIdx + 1);
@@ -150,21 +165,31 @@ export function runXauIctBacktest(
 
     if (i <= cooldownUntil) continue;
 
-    // Căn M15/H4/H1 tới thời điểm nến M5 hiện tại (chỉ dùng nến đã đóng <= bar.time).
-    while (m15Idx + 1 < m15.length && (m15[m15Idx + 1]?.time ?? "") <= bar.time) m15Idx += 1;
-    while (h4Idx + 1 < h4.length && (h4[h4Idx + 1]?.time ?? "") <= bar.time) h4Idx += 1;
-    while (h1Idx + 1 < h1.length && (h1[h1Idx + 1]?.time ?? "") <= bar.time) h1Idx += 1;
+    // MT5 lưu timestamp là LÚC MỞ nến. Chỉ đưa nến HTF vào engine khi nó đã đóng
+    // tại thời điểm nến M5 trigger đóng, tránh lookahead bias trong backtest.
+    const triggerCloseMs = Date.parse(bar.time) + M5_MS;
+    while (m15Idx + 1 < m15.length && Date.parse(m15[m15Idx + 1]?.time ?? "") + M15_MS <= triggerCloseMs) m15Idx += 1;
+    while (h4Idx + 1 < h4.length && Date.parse(h4[h4Idx + 1]?.time ?? "") + H4_MS <= triggerCloseMs) h4Idx += 1;
+    while (h1Idx + 1 < h1.length && Date.parse(h1[h1Idx + 1]?.time ?? "") + H1_MS <= triggerCloseMs) h1Idx += 1;
     const m15Slice = tailWindow(m15, m15Idx, M15_WINDOW);
     const h4Slice = tailWindow(h4, h4Idx, H4_WINDOW);
     const h1Slice = h1.length ? tailWindow(h1, h1Idx, H1_WINDOW) : [];
-    const m5Slice = tailWindow(m5, i, 20);
+    const m5Slice = tailWindow(m5, i, config.strategyMode === "RFTP" ? 120 : 20);
 
     const evalOptions = {
       now: new Date(bar.time),
       newsWindowClear: true,
       spreadPrice: config.spreadPrice,
     };
-    const signal = evaluateXauIctSignal(m5Slice, m15Slice, h1Slice, h4Slice, config.ictConfig, evalOptions);
+    const signal = config.strategyMode === "RFTP"
+      ? evaluateXauRftpSignal(m5Slice, m15Slice, h1Slice, {
+          now: new Date(triggerCloseMs),
+          newsWindowClear: true,
+          spreadPrice: bar.spread ?? config.spreadPrice,
+        }, config.rftpConfig ?? defaultXauRftpConfig)
+      : config.strategyMode === "CLASSIC"
+        ? evaluateXauClassicPriceActionSignal(m5Slice, m15Slice, h1Slice, evalOptions, config.classicConfig)
+        : evaluateXauIctSignal(m5Slice, m15Slice, h1Slice, h4Slice, config.ictConfig, evalOptions);
     if (!signal) {
       if (debugReasons) {
         const reason = explainXauIctRejection(m5Slice, m15Slice, h1Slice, h4Slice, config.ictConfig, evalOptions);
@@ -201,7 +226,7 @@ export function runXauIctBacktest(
   }
 
   if (debugReasons) {
-    const sorted = [...reasonCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15);
+    const sorted = [...reasonCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 40);
     console.log("\n[DEBUG_ICT_REASONS] top lý do NO_TRADE (đã gộp số):");
     for (const [reason, count] of sorted) {
       console.log(`  ${String(count).padStart(6)}x  ${reason}`);

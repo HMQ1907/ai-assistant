@@ -82,6 +82,8 @@ export default defineNuxtConfig({
     autoScalpMaxOpenTrades: Number(process.env.AUTO_SCALP_MAX_OPEN_TRADES || 2),
     autoNewsBlackoutEnabled: process.env.AUTO_NEWS_BLACKOUT_ENABLED === "true",
     autoNewsBlackoutMinutes: Number(process.env.AUTO_NEWS_BLACKOUT_MINUTES || 60),
+    autoNewsBlackoutBeforeMinutes: Number(process.env.AUTO_NEWS_BLACKOUT_BEFORE_MINUTES || 20),
+    autoNewsBlackoutAfterMinutes: Number(process.env.AUTO_NEWS_BLACKOUT_AFTER_MINUTES || 15),
     autoNewsBlackoutEvents: process.env.AUTO_NEWS_BLACKOUT_EVENTS || "",
     autoNewsCalendarUrl:
       process.env.AUTO_NEWS_CALENDAR_URL ||

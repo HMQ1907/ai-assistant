@@ -54,6 +54,102 @@ SUPABASE_SERVICE_ROLE_KEY=
 
 Không expose `SUPABASE_SERVICE_ROLE_KEY`, `MARKET_DATA_API_KEY`, `NEWS_API_KEY` hoặc `EVOLINK_API_KEY` ra frontend.
 
+## Codex Watch Plan + Prefilter/Executor XAU 1 Phút
+
+Luồng mặc định tách việc đọc thị trường và việc canh trigger:
+
+1. Heartbeat Codex 15 phút đọc H4/H1/M15/M5 và ghi tối đa hai vùng chờ vào
+   `.runtime-logs/codex-xau-watch-plan.json`.
+2. Prefilter local đọc bridge MT5 mỗi phút, chỉ dùng nến đã đóng và không gọi
+   LLM.
+3. Giá gần vùng chỉ chuyển plan sang `ARMED`. Một trigger M1/M5 đóng hợp lệ mới
+   tạo `CANDIDATE`.
+4. Plan có `execution.autoExecute=true` được script recheck news, health,
+   orders, daily P/L, snapshot, spread, drift và RR rồi đặt đúng một MARKET
+   order. Plan không cấp quyền này và mọi broad candidate vẫn chờ Codex review.
+
+Khởi động:
+
+```powershell
+npm run mt5:bridge
+npm run xau:prefilter
+```
+
+Chạy một lượt để kiểm tra:
+
+```powershell
+npm run xau:prefilter:once
+```
+
+Kết quả được ghi vào `.runtime-logs/codex-xau-prefilter-signal.json`, còn trạng
+thái từng plan nằm ở `.runtime-logs/codex-xau-watch-state.json`. Các trạng thái
+watch gồm `NO_PLAN`, `WATCHING`, `ARMED`, `TRIGGER_REJECTED`, `TRIGGERED`,
+`INVALIDATED` và `EXPIRED`. Chỉ `TRIGGERED` sinh `CANDIDATE`. Script chỉ được
+đặt lệnh mới từ watch plan cấp quyền rõ ràng; không sửa/đóng lệnh và không được
+auto-trade broad discovery.
+
+Schema tham khảo nằm tại `scripts/codex-xau-watch-plan.example.json`. Mỗi plan
+phải có `planId`, `expiresAt`, `direction`, vùng `zone`, `trigger.mode`,
+`risk.invalidationPrice`, `risk.firstBarrier`, giới hạn spread và RR tối thiểu.
+Muốn script tự thực thi, plan còn phải có `execution.autoExecute=true`, MARKET,
+volume đúng `0.04`, `maxEntryDriftAtr` và `maxTriggerAgeSeconds`. Thiếu bất kỳ
+trường nào đều fail closed. Signature được ghi `ATTEMPTED` trước POST nên lỗi
+timeout cũng không thể retry và đặt trùng.
+Trigger hỗ trợ:
+
+- `REJECTION`: rejection/engulfing đóng trong vùng.
+- `RETEST_HOLD`: chạm vùng rồi đóng giữ lại phía thuận hướng.
+- `BREAKOUT_RETEST`: đã có breakout trước đó, sau đó retest và đóng giữ vùng.
+- `CLOSE_THROUGH`: nến đóng xuyên vùng theo đúng hướng; chỉ dùng khi Codex chủ
+  động chọn vì dễ thành chase hơn các mode retest.
+
+Signature là `planId + direction + trigger mode + confirmation timeframe + thời gian nến đóng`.
+Vì vậy cùng một nến không wake lặp, nhưng một retest hợp lệ mới ở nến khác không
+bị cooldown 45 phút chặn nhầm. Có thể bật bộ quét rộng cũ bằng biến môi trường
+`CODEX_XAU_ENABLE_BROAD_PREFILTER=1`; mặc định tắt để script chỉ canh vùng do
+Codex lập.
+
+Mỗi vòng 1 phút cũng ghi một dòng JSON vào
+`.runtime-logs/codex-xau-prefilter-history-YYYY-MM-DD.jsonl`. Dòng audit gồm
+`decision`, regime, P/L ngày, quote/spread, nến M5 đóng gần nhất, cấu trúc,
+trigger, volume và risk gate. Đây là kết luận deterministic (`llmCalled=false`,
+`quotaUsed=false`), không phải quyết định giao dịch cuối của Codex. Chỉ packet
+`CANDIDATE`/`FOLLOW_REQUIRED` mới kích hoạt wake và dùng quota.
+
+### Đánh thức đúng Codex task khi có candidate
+
+Chạy wake server song song với prefilter:
+
+```powershell
+npm run xau:wake
+```
+
+Server chỉ bind `127.0.0.1:8776`, tự quan sát packet và resume task Codex bằng
+Codex CLI local. Candidate được chống lặp theo signature của đúng nến trigger;
+`FOLLOW_REQUIRED` tối đa một wake mỗi 5 phút; chỉ một turn được chạy tại một
+thời điểm. Heartbeat 15 phút vẫn là fallback nếu wake server tạm dừng.
+
+Cấu hình tùy chọn tại `.runtime-logs/codex-thread-wake-config.json`:
+
+```json
+{
+  "threadId": "019ffe00-b62b-7850-810f-9cb897653e9c",
+  "cwd": "D:\\hmq\\AI ASSISTANT",
+  "model": "",
+  "timeoutSeconds": 720
+}
+```
+
+Kiểm tra toàn luồng mà không gọi Codex/quota:
+
+```powershell
+npm run xau:wake:dry
+```
+
+API thủ công dùng `POST http://127.0.0.1:8776/wake`, body là packet JSON và
+header `Authorization: Bearer <token>`. Token tự sinh tại
+`.runtime-logs/codex-thread-wake-token`; không đưa token vào source hoặc log.
+
 ## Supabase
 
 Project chỉ dùng một bảng: `analysis_history`.

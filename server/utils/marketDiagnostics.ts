@@ -19,6 +19,7 @@ export interface RawProviderCandle {
   low?: unknown;
   close?: unknown;
   volume?: unknown;
+  spread?: unknown;
 }
 
 export interface ParsedCandleResult {
@@ -42,6 +43,7 @@ export function parseProviderCandles(
     const low = parseFinitePrice(item.low);
     const close = parseFinitePrice(item.close);
     const volume = Number(item.volume ?? 0);
+    const spread = item.spread === undefined ? undefined : Number(item.spread);
 
     if (!timestamp) {
       countReason(reasons, "INVALID_TIMESTAMP");
@@ -53,6 +55,7 @@ export function parseProviderCandles(
       low === null ||
       close === null ||
       !Number.isFinite(volume)
+      || (spread !== undefined && !Number.isFinite(spread))
     ) {
       countReason(reasons, "INVALID_NUMBER");
       continue;
@@ -70,6 +73,7 @@ export function parseProviderCandles(
       low,
       close,
       volume,
+      ...(spread !== undefined ? { spread } : {}),
     };
 
     if (!hasValidShape(candle)) {

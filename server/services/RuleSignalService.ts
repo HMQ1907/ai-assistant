@@ -8,6 +8,7 @@ import {
   convictionScore,
   defaultRuleStrategyConfig,
   defaultXauIctConfig,
+  evaluateXauClassicPriceActionSignal,
   evaluateManualReversalScalpSignal,
   evaluateXauIctSignal,
   explainManualReversalScalpRejection,
@@ -19,12 +20,17 @@ import {
   explainXauMicroScalpRejection,
   microScalpConfigForSymbol,
 } from "../strategy/xauMicroScalpStrategy";
+import {
+  defaultXauRftpConfig,
+  explainXauRftp,
+} from "../strategy/xauRftpStrategy";
 import { symbolCodeFromMt5Symbol, symbolLabel } from "../utils/symbols";
 import { AiAnalysisService } from "./AiAnalysisService";
 import { AnalysisHistoryService } from "./AnalysisHistoryService";
 import {
   buildAutoRecommendation,
   emptyNews,
+  getAutoTradeTimeBlockReason,
   highSpreadBlockReason,
   newsBlackoutBlockReason,
   rewardRisk,
@@ -123,9 +129,12 @@ export async function runRuleSignalScan(input: RuleSignalScanInput) {
   }
 
   // ===== Đánh giá rule engine theo đúng mode của bot =====
-  const evaluation = evaluateByStrategyMode(config, snapshot);
+  const configuredNewsBlock = await getAutoTradeTimeBlockReason(config.tradeScannerTimezone);
+  const evaluation = evaluateByStrategyMode(config, snapshot, !configuredNewsBlock);
   const minRr =
-    evaluation.mode === "xau_micro_scalp"
+    evaluation.mode === "xau_rftp"
+      ? defaultXauRftpConfig.targetR
+      : evaluation.mode === "xau_micro_scalp"
       ? microScalpConfigForSymbol(config.mt5Symbol).minRr
       : defaultXauIctConfig.minTargetR;
 
@@ -209,6 +218,7 @@ export async function runRuleSignalScan(input: RuleSignalScanInput) {
   }
 
   const warnings: string[] = [];
+  let aiConfirmation: string | null = null;
   if (!isInsideTradeScannerWindow()) {
     warnings.push(
       "Ngoài khung giờ quét London–NY — thanh khoản/spread có thể xấu hơn; cân nhắc kỹ trước khi vào.",
@@ -259,11 +269,19 @@ export async function runRuleSignalScan(input: RuleSignalScanInput) {
           }),
         );
       }
+      aiConfirmation = `AI ALLOW ${veto.parsed.confidence}%: ${veto.parsed.summary}`;
       warnings.push(...veto.parsed.warnings.map((item) => `AI veto: ${item}`));
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      warnings.push(
-        `CẢNH BÁO: AI veto không chạy được (${msg.slice(0, 160)}). Tự soi tin tức/lịch kinh tế trước khi vào lệnh.`,
+      return saveAndReturn(
+        historyService,
+        payload,
+        `manual rule-engine scan (${evaluation.mode}): AI veto unavailable`,
+        buildRuleNoTrade(symbol, snapshot, payload, {
+          reasons: [`AI veto không chạy được: ${msg.slice(0, 160)}`],
+          summaryTitle: `Setup ${signal.direction} ${entryTf} không được AI xác nhận`,
+          rejectedSignal: { signal, entryTf },
+        }),
       );
     }
   }
@@ -276,6 +294,9 @@ export async function runRuleSignalScan(input: RuleSignalScanInput) {
     payload,
     minRr,
   );
+  if (aiConfirmation) {
+    recommendation.trade_reason = `${recommendation.trade_reason} ${aiConfirmation}`;
+  }
   recommendation.risk_factors = [...recommendation.risk_factors, ...warnings];
   recommendation.summary = `Rule Engine (${evaluation.mode}) ${entryTf}: ${signal.direction} — entry ${signal.entry}, SL ${signal.stopLoss}, TP ${signal.takeProfit}. Bạn tự quản trị lot và vào lệnh.`;
   recommendation.entry_plan =
@@ -297,8 +318,10 @@ export interface StrategyEvaluation {
   mode:
     | "manual_scalp"
     | "xau_micro_scalp"
+    | "xau_rftp"
     | "manual_scalp"
-    | "xau_ict";
+    | "xau_ict"
+    | "xau_price_action";
   signal: RuleSignal | null;
   entryTf: string;
   entryCandles: Candle[];
@@ -326,6 +349,7 @@ export function evaluateByStrategyMode(
     tradeScannerTimezone?: string;
   },
   snapshot: MarketSnapshot,
+  newsWindowClearOverride?: boolean,
 ): StrategyEvaluation {
   const m1 = snapshot.candles.M1 ?? [];
   const h1 = snapshot.candles.H1;
@@ -334,7 +358,36 @@ export function evaluateByStrategyMode(
   const m5 = snapshot.candles.M5;
   const rawMode = String(config.autoStrategyMode).toLowerCase();
   const mode: StrategyEvaluation["mode"] =
-    rawMode === "xau_micro_scalp" ? "xau_micro_scalp" : "xau_ict";
+    rawMode === "xau_rftp" ? "xau_rftp" : rawMode === "xau_micro_scalp" ? "xau_micro_scalp" : rawMode === "xau_price_action" ? "xau_price_action" : "xau_ict";
+
+  if (mode === "xau_rftp") {
+    const now = new Date();
+    const evaluation = explainXauRftp(m5, m15, h1, {
+      now,
+      newsWindowClear: newsWindowClearOverride ?? !newsBlackoutBlockReason({
+        now,
+        enabled: config.autoNewsBlackoutEnabled ?? false,
+        events: config.autoNewsBlackoutEvents ?? "",
+        minutes: config.autoNewsBlackoutMinutes ?? 60,
+        timeZone: config.tradeScannerTimezone ?? "Asia/Saigon",
+      }),
+      bid: snapshot.bid,
+      ask: snapshot.ask,
+      spreadPrice: snapshot.spread,
+    }, {
+      ...defaultXauRftpConfig,
+      allowBuy: config.autoAllowBuy !== false,
+      allowSell: config.autoAllowSell !== false,
+    });
+    return {
+      mode,
+      signal: evaluation.signal,
+      entryTf: "M5",
+      entryCandles: m5,
+      rejectReasons: evaluation.signal ? [] : [evaluation.reason],
+      pendingNote: evaluation.signal ? null : "RFTP chờ M15 regime + M5 pullback/rejection và breakout trong tối đa 3 nến.",
+    };
+  }
 
   if (mode === "xau_micro_scalp") {
     const scalpConfig = microScalpConfigForSymbol(config.mt5Symbol, {
@@ -382,18 +435,45 @@ export function evaluateByStrategyMode(
     };
   }
 
+  if (mode === "xau_price_action") {
+    const now = new Date();
+    const options = {
+      now,
+      newsWindowClear: newsWindowClearOverride ?? !newsBlackoutBlockReason({
+        now,
+        enabled: config.autoNewsBlackoutEnabled ?? false,
+        events: config.autoNewsBlackoutEvents ?? "",
+        minutes: config.autoNewsBlackoutMinutes ?? 60,
+        timeZone: config.tradeScannerTimezone ?? "Asia/Saigon",
+      }),
+      spreadPrice: snapshot.spread ?? undefined,
+    };
+    const signal = evaluateXauClassicPriceActionSignal(m5, m15, h1, options);
+    return {
+      mode,
+      signal,
+      entryTf: "M5",
+      entryCandles: m5,
+      rejectReasons: signal ? [] : ["Price Action reversal: chờ M15 quét thanh khoản rồi M5 từ chối/engulfing xác nhận."],
+      pendingNote: signal ? null : "PA reversal quét lại sau mỗi nến M5 đóng.",
+    };
+  }
+
   // xau_ict: H1 bias (chính) + H4 context -> Setup A (sweep reversal) hoặc
   // Setup B (BOS continuation) -> M15 BOS -> retest zone -> M5 trigger.
   // newsWindowClear đánh giá ngay tại đây (thời điểm gọi = thời điểm quét/bấm tay),
   // không cache từ trước — khớp nguyên tắc "final-time gate" của rulebook.
-  const newsWindowClear = !newsBlackoutBlockReason({
+  const newsWindowClear = newsWindowClearOverride ?? !newsBlackoutBlockReason({
     now: new Date(),
     enabled: config.autoNewsBlackoutEnabled ?? false,
     events: config.autoNewsBlackoutEvents ?? "",
     minutes: config.autoNewsBlackoutMinutes ?? 60,
     timeZone: config.tradeScannerTimezone ?? "Asia/Saigon",
   });
-  const signal = evaluateXauIctSignal(m5, m15, h1, h4, defaultXauIctConfig, { newsWindowClear });
+  const signal = evaluateXauIctSignal(m5, m15, h1, h4, defaultXauIctConfig, {
+    newsWindowClear,
+    spreadPrice: snapshot.spread ?? undefined,
+  });
   if (signal) {
     return {
       mode,
@@ -409,7 +489,10 @@ export function evaluateByStrategyMode(
     signal: null,
     entryTf: "M5",
     entryCandles: m5,
-    rejectReasons: [explainXauIctRejection(m5, m15, h1, h4, defaultXauIctConfig, { newsWindowClear })],
+    rejectReasons: [explainXauIctRejection(m5, m15, h1, h4, defaultXauIctConfig, {
+      newsWindowClear,
+      spreadPrice: snapshot.spread ?? undefined,
+    })],
     pendingNote: "PA v0.2: cần H1 bias + Setup A (sweep+displacement+BOS) hoặc Setup B (BOS continuation) + retest zone + M5 trigger trong khung giờ cho phép. Quét lại sau mỗi nến M5 đóng.",
   };
 }
@@ -557,10 +640,21 @@ async function saveAndReturn(
   rawLabel: string,
   recommendation: AiTradeRecommendation,
 ) {
-  const history = await historyService.create({
-    requestPayload: payload,
-    aiResponseRaw: rawLabel,
-    parsedResult: recommendation,
-  });
-  return { result: recommendation, history };
+  try {
+    const history = await historyService.create({
+      requestPayload: payload,
+      aiResponseRaw: rawLabel,
+      parsedResult: recommendation,
+    });
+    return { result: recommendation, history: { id: history.id } };
+  } catch (error) {
+    // History must not become a single point of failure for the manual alert
+    // path. The recommendation is still based on fresh MT5 data and (when
+    // enabled) AI veto; only the remote audit record is unavailable.
+    console.warn(
+      "[rule-signal] Supabase history unavailable; returning unsaved signal:",
+      error instanceof Error ? error.message : error,
+    );
+    return { result: recommendation, history: { id: `local-${Date.now()}` } };
+  }
 }

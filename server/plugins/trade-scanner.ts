@@ -61,10 +61,15 @@ export default defineNitroPlugin((nitroApp) => {
 
     if (isScannerSlot(now)) {
       const trackerSlot = slotKey(now, tz);
-      if (globalThis.__outcomeTrackerLastSlot !== trackerSlot) {
-        globalThis.__outcomeTrackerLastSlot = trackerSlot;
-        void outcomeTracker.trackOnce();
-      }
+        if (globalThis.__outcomeTrackerLastSlot !== trackerSlot) {
+          globalThis.__outcomeTrackerLastSlot = trackerSlot;
+          void outcomeTracker.trackOnce().catch((error) => {
+            console.warn(
+              "[trade-loop] outcome tracking skipped:",
+              error instanceof Error ? error.message : error,
+            );
+          });
+        }
     }
 
     if (autoMode) {

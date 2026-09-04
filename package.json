@@ -5,6 +5,10 @@
   "scripts": {
     "dev": "nuxt dev",
     "mt5:bridge": "powershell -ExecutionPolicy Bypass -File scripts/start-mt5-bridge.ps1",
+    "xau:prefilter": "powershell -ExecutionPolicy Bypass -File scripts/start-codex-xau-prefilter.ps1",
+    "xau:prefilter:once": "powershell -ExecutionPolicy Bypass -File scripts/start-codex-xau-prefilter.ps1 -Once",
+    "xau:wake": "powershell -ExecutionPolicy Bypass -File scripts/start-codex-thread-wake-server.ps1",
+    "xau:wake:dry": "powershell -ExecutionPolicy Bypass -File scripts/start-codex-thread-wake-server.ps1 -DryRun",
     "build": "npm run typecheck && set NUXT_IGNORE_LOCK=1&& nuxt build",
     "lint": "nuxt typecheck",
     "preview": "nuxt preview",

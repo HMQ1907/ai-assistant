@@ -3,7 +3,12 @@ $ErrorActionPreference = "Stop"
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $projectRoot
 
-$python = (Get-Command python -ErrorAction Stop).Source
+$python = Get-Command python -All -ErrorAction Stop |
+  Where-Object { $_.Source -notlike '*\Microsoft\WindowsApps\*' } |
+  Select-Object -First 1 -ExpandProperty Source
+if (-not $python) {
+  throw 'Không tìm thấy Python thật (chỉ thấy WindowsApps alias). Cài Python hoặc sửa PATH.'
+}
 $pythonRoot = Split-Path -Parent $python
 $sitePackages = Join-Path $pythonRoot "Lib\site-packages"
 

@@ -21,16 +21,18 @@ export default defineEventHandler(async (event) => {
     : config.mt5Symbol;
   const m5Bars = clampInt(query.bars, 20000, 2000, 90000);
   const m15Bars = Math.min(20000, Math.ceil(m5Bars / 3) + 600);
+  const h1Bars = Math.min(12000, Math.ceil(m5Bars / 12) + 400);
   const h4Bars = Math.min(6000, Math.ceil(m5Bars / 48) + 300);
   const spread = clampNumber(query.spread, /XAU/i.test(symbol) ? 0.3 : 0.0002, 0, 100);
   const splitPct = clampNumber(query.splitPct, 0.6, 0.4, 0.8);
   const minIsTrades = clampInt(query.minIsTrades, 15, 5, 100);
 
-  let m5, m15, h4;
+  let m5, m15, h1, h4;
   try {
-    [m5, m15, h4] = await Promise.all([
+    [m5, m15, h1, h4] = await Promise.all([
       fetchBacktestCandles(config.mt5BridgeUrl, symbol, "M5", m5Bars),
       fetchBacktestCandles(config.mt5BridgeUrl, symbol, "M15", m15Bars),
+      fetchBacktestCandles(config.mt5BridgeUrl, symbol, "H1", h1Bars),
       fetchBacktestCandles(config.mt5BridgeUrl, symbol, "H4", h4Bars),
     ]);
   } catch (error) {
@@ -46,7 +48,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const evaluated = buildGrid().map((variant) => {
-    const result = runXauIctBacktest(m5, m15, h4, {
+    const result = runXauIctBacktest(m5, m15, h1, h4, {
       ...defaultXauIctBacktestConfig,
       maxHoldBars: variant.maxHoldBars,
       spreadPrice: spread,

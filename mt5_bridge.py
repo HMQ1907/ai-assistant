@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Optional
 
@@ -89,7 +89,7 @@ def ensure_trading_enabled():
         )
 
 
-def rate_to_candle(rate):
+def rate_to_candle(rate, point=1.0):
     return {
         "time": datetime.fromtimestamp(int(rate["time"]), timezone.utc).isoformat(),
         "open": float(rate["open"]),
@@ -97,6 +97,7 @@ def rate_to_candle(rate):
         "low": float(rate["low"]),
         "close": float(rate["close"]),
         "volume": float(rate["tick_volume"]),
+        "spread": float(rate["spread"]) * float(point),
     }
 
 
@@ -151,6 +152,7 @@ def root():
             "/order",
             "/order/cancel",
             "/order/{ticket}",
+            "/deals",
             "/docs",
         ],
     }
@@ -185,10 +187,46 @@ def health():
         }
 
 
+@app.get("/deals")
+def closed_deals(
+    symbol: str = "XAUUSDm",
+    hours: int = Query(default=48, ge=1, le=720),
+):
+    """Closed exit deals used by the bot's consecutive-loss daily kill switch."""
+    with mt5_lock:
+        ensure_mt5()
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(hours=hours)
+        deals = mt5.history_deals_get(start, end, group=f"*{symbol}*")
+        if deals is None:
+            raise HTTPException(
+                status_code=500,
+                detail=f"history_deals_get failed: {mt5.last_error()}",
+            )
+        exit_entries = {mt5.DEAL_ENTRY_OUT, mt5.DEAL_ENTRY_OUT_BY}
+        rows = []
+        for deal in deals:
+            if deal.entry not in exit_entries:
+                continue
+            rows.append({
+                "ticket": int(deal.ticket),
+                "position_id": int(deal.position_id),
+                "symbol": deal.symbol,
+                "time": timestamp_to_iso(deal.time),
+                "profit": float(deal.profit),
+                "commission": float(deal.commission),
+                "swap": float(deal.swap),
+                "fee": float(deal.fee),
+                "net_profit": float(deal.profit + deal.commission + deal.swap + deal.fee),
+                "comment": getattr(deal, "comment", "") or "",
+            })
+        return {"ok": True, "symbol": symbol, "deals": rows}
+
+
 @app.get("/snapshot")
 def snapshot(
     symbol: str = "XAUUSDm",
-    count: int = Query(default=350, ge=200, le=500),
+    count: int = Query(default=2000, ge=200, le=5000),
 ):
     with mt5_lock:
         ensure_mt5()
@@ -216,7 +254,7 @@ def snapshot(
                     status_code=500,
                     detail=f"No candles for {symbol} {name}: {mt5.last_error()}",
                 )
-            candles[name] = [rate_to_candle(rate) for rate in rates]
+            candles[name] = [rate_to_candle(rate, info.point) for rate in rates]
 
         return {
             "symbol": symbol,
@@ -265,7 +303,7 @@ def candles_history(
             "symbol": symbol,
             "timeframe": timeframe,
             "count": len(rates),
-            "candles": [rate_to_candle(rate) for rate in rates],
+            "candles": [rate_to_candle(rate, mt5.symbol_info(symbol).point) for rate in rates],
         }
 
 

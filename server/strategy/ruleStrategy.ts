@@ -400,7 +400,7 @@ export type IctSessionLabel =
   | "NY_LATE"
   | "ROLLOVER_LOW_PRIORITY";
 
-export type IctSetupKind = "SWEEP_REVERSAL" | "BOS_CONTINUATION";
+export type IctSetupKind = "SWEEP_REVERSAL" | "BOS_CONTINUATION" | "INTERNAL_BREAKOUT";
 
 export interface XauIctConfig {
   symbolLabel: "XAUUSD";
@@ -429,6 +429,33 @@ export interface XauIctConfig {
   zoneBodyFraction: number;
   /** Retest phải xảy ra trong tối đa N nến M5 sau khi displacement đóng. */
   retestExpiryM5Bars: number;
+  /** ATR dùng cho sweep, khoảng cách entry/SL và volatility gate. */
+  atrPeriod: number;
+  minSweepDepthAtr: number;
+  maxSweepDepthAtr: number;
+  maxEntryDistanceAtr: number;
+  minStopLossAtr: number;
+  maxStopLossAtr: number;
+  volatilityReferenceBars: number;
+  minVolatilityRatio: number;
+  maxVolatilityRatio: number;
+  /** Frequency Mode: nếu H1 đang pullback/range nhẹ, dùng pivot gần nhất thay vì bỏ cả ngày. */
+  h1UseLatestPivotFallback: boolean;
+  /** H4 neutral là context, không chặn continuation theo H1 trong Frequency Mode. */
+  allowContinuationWhenH4Neutral: boolean;
+  /** Chỉ dùng cho nghiên cứu tần suất; live baseline vẫn false để không continuation ngược H4. */
+  allowContinuationAgainstH4: boolean;
+  /** Setup B Frequency: cho phép BOS qua internal range M15 khi chưa có swing 2/2. */
+  continuationInternalLookback: number;
+  /** Setup C: M15 internal breakout -> retest -> M5 confirmation, thống kê tách khỏi A/B. */
+  setupCEnabled: boolean;
+  setupCInternalLookback: number;
+  setupCBodyRangeRatio: number;
+  setupCClosePositionMax: number;
+  setupCRetestExpiryM5Bars: number;
+  /** Phần thân breakout M15 được coi là pullback zone cho Setup C (1.0 = toàn thân). */
+  setupCZoneBodyFraction: number;
+  setupCAllowAgainstH4: boolean;
   /** M5 trigger: close phải nằm trong X% ngoài cùng range (rejection/strong-close). */
   m5TriggerClosePositionMax: number;
   /** M5 engulfing: thân nến trigger phải >= mult × thân nến trước. */
@@ -455,6 +482,26 @@ export const defaultXauIctConfig: XauIctConfig = {
   equalLevelToleranceFixed: 0.2,
   zoneBodyFraction: 0.5,
   retestExpiryM5Bars: 8,
+  atrPeriod: 14,
+  minSweepDepthAtr: 0.05,
+  maxSweepDepthAtr: 0.35,
+  maxEntryDistanceAtr: 0.25,
+  minStopLossAtr: 0.8,
+  maxStopLossAtr: 2.0,
+  volatilityReferenceBars: 20,
+  minVolatilityRatio: 0.7,
+  maxVolatilityRatio: 2.0,
+  h1UseLatestPivotFallback: true,
+  allowContinuationWhenH4Neutral: true,
+  allowContinuationAgainstH4: false,
+  continuationInternalLookback: 6,
+  setupCEnabled: true,
+  setupCInternalLookback: 4,
+  setupCBodyRangeRatio: 0.45,
+  setupCClosePositionMax: 0.35,
+  setupCRetestExpiryM5Bars: 24,
+  setupCZoneBodyFraction: 1.0,
+  setupCAllowAgainstH4: true,
   m5TriggerClosePositionMax: 0.3,
   m5EngulfingBodyMult: 1.0,
   m5StrongCloseBodyRatio: 0.6,
@@ -471,7 +518,85 @@ export interface XauIctEvaluationOptions {
    */
   newsWindowClear?: boolean;
   /** Spread giá thực tế (nếu có) để tính BOS_BUFFER/SL_BUFFER. */
-  spreadPrice?: number;
+  spreadPrice?: number | undefined;
+}
+
+/** Parameters for the short-horizon M15 sweep / M5 rejection strategy.
+ * Kept separate from the ICT configuration so research can tune this model
+ * without silently changing the live default rules.
+ */
+export interface XauClassicPriceActionConfig {
+  sweepLookbackM15: number;
+  m15CloseEdgeMax: number;
+  m5MinBodyRatio: number;
+  m5CloseEdgeMax: number;
+  stopAtrBuffer: number;
+  targetR: number;
+}
+
+export const defaultXauClassicPriceActionConfig: XauClassicPriceActionConfig = {
+  sweepLookbackM15: 6,
+  m15CloseEdgeMax: 0.25,
+  m5MinBodyRatio: 0.35,
+  m5CloseEdgeMax: 0.25,
+  stopAtrBuffer: 0.15,
+  targetR: 1.3,
+};
+
+/** Price Action mean-reversion: M15 sweep range ngắn -> M5 rejection/engulfing. */
+export function evaluateXauClassicPriceActionSignal(
+  m5: Candle[],
+  m15: Candle[],
+  h1: Candle[],
+  options: XauIctEvaluationOptions = {},
+  config: XauClassicPriceActionConfig = defaultXauClassicPriceActionConfig,
+): RuleSignal | null {
+  const now = options.now ?? new Date();
+  if (!resolveIctSession(now).allowed || options.newsWindowClear === false) return null;
+  if (m5.length < 8 || m15.length < config.sweepLookbackM15 + 2 || h1.length < 8) return null;
+  const sweep = m15.at(-1)!;
+  const prior = m15.slice(-(config.sweepLookbackM15 + 1), -1);
+  const priorHigh = Math.max(...prior.map((candle) => candle.high));
+  const priorLow = Math.min(...prior.map((candle) => candle.low));
+  const buySweep = sweep.low < priorLow && sweep.close > priorLow;
+  const sellSweep = sweep.high > priorHigh && sweep.close < priorHigh;
+  if (!buySweep && !sellSweep) return null;
+  const direction: IctDirection = buySweep ? "BUY" : "SELL";
+  const level = buySweep ? priorLow : priorHigh;
+  const sweepRange = sweep.high - sweep.low;
+  if (sweepRange <= 0) return null;
+  const sweepCloseStrong = direction === "BUY"
+    ? (sweep.high - sweep.close) / sweepRange <= config.m15CloseEdgeMax
+    : (sweep.close - sweep.low) / sweepRange <= config.m15CloseEdgeMax;
+  if (!sweepCloseStrong) return null;
+
+  const last = m5.at(-1)!;
+  const m5Range = last.high - last.low;
+  const m5Body = Math.abs(last.close - last.open);
+  const m5Directional = direction === "BUY" ? last.close > last.open : last.close < last.open;
+  const m5Strong = m5Range > 0 && m5Body / m5Range >= config.m5MinBodyRatio;
+  const prev = m5.at(-2)!;
+  const engulfing = direction === "BUY" ? last.close > prev.high : last.close < prev.low;
+  const touched = direction === "BUY" ? last.low <= level : last.high >= level;
+  const closeAtEdge = direction === "BUY"
+    ? (last.high - last.close) / m5Range <= config.m5CloseEdgeMax
+    : (last.close - last.low) / m5Range <= config.m5CloseEdgeMax;
+  if (!m5Directional || !touched || !closeAtEdge || (!m5Strong && !engulfing)) return null;
+
+  const entry = last.close;
+  const m5Atr = atr(m5, 5) ?? Math.max(m5Range, 0.01);
+  const stopLoss = direction === "BUY" ? sweep.low - m5Atr * config.stopAtrBuffer : sweep.high + m5Atr * config.stopAtrBuffer;
+  const risk = direction === "BUY" ? entry - stopLoss : stopLoss - entry;
+  if (!Number.isFinite(risk) || risk <= 0) return null;
+  const takeProfit = direction === "BUY" ? entry + config.targetR * risk : entry - config.targetR * risk;
+  return {
+    direction,
+    entry: roundIct(entry, 3),
+    stopLoss: roundIct(stopLoss, 3),
+    takeProfit: roundIct(takeProfit, 3),
+    reason: `XAUUSD PRICE_ACTION_REVERSAL: M15 liquidity sweep, M5 rejection/engulfing, RR ${config.targetR.toFixed(2)}.`,
+    strategyKind: "ICT_SETUP",
+  };
 }
 
 /**
@@ -560,7 +685,10 @@ function buildXauIctSignal(
   const spreadPrice = options.spreadPrice ?? config.defaultSpreadPrice;
   const newsWindowClear = options.newsWindowClear ?? true;
 
-  const minM15 = config.swingConfirmBars * 2 + Math.max(config.displacementExpiryM15Bars, MAX_CHAIN_LOOKBACK_M15) + 30;
+  const minM15 = Math.max(
+    config.atrPeriod + 1,
+    config.swingConfirmBars * 2 + Math.max(config.displacementExpiryM15Bars, MAX_CHAIN_LOOKBACK_M15) + 12,
+  );
   if (m15.length < minM15) {
     return { signal: null, reason: `ICT blocked: M15 candles ${m15.length} < ${minM15}` };
   }
@@ -572,7 +700,7 @@ function buildXauIctSignal(
   }
 
   // ===== 1) H1 BIAS chính (§2) + H4 context filter =====
-  const h1Bias = resolveTrendBias(h1, config.swingConfirmBars);
+  const h1Bias = resolveTrendBias(h1, config.swingConfirmBars, config.h1UseLatestPivotFallback);
   if (h1Bias === "NEUTRAL") {
     return { signal: null, reason: "ICT blocked: H1 bias NEUTRAL (chưa có chuỗi HH/HL hoặc LL/LH rõ)" };
   }
@@ -581,25 +709,40 @@ function buildXauIctSignal(
     h4.length >= config.swingConfirmBars * 2 + 8 ? resolveTrendBias(h4, config.swingConfirmBars) : "NEUTRAL";
   const h4Opposes =
     (direction === "BUY" && h4Bias === "BEARISH") || (direction === "SELL" && h4Bias === "BULLISH");
-  if (h4Opposes) {
+  const m15Atr = atr(m15, config.atrPeriod);
+  const atrReference = medianRecentAtr(m15, config.atrPeriod, config.volatilityReferenceBars);
+  if (!m15Atr || !atrReference) {
+    return { signal: null, reason: "ICT blocked: M15 ATR unavailable for volatility gate" };
+  }
+  const volatilityRatio = m15Atr / atrReference;
+  if (volatilityRatio < config.minVolatilityRatio || volatilityRatio > config.maxVolatilityRatio) {
     return {
       signal: null,
-      reason: `ICT blocked: H4 ${h4Bias} ngược hướng H1 ${h1Bias} (context filter chặn cả Setup A và B)`,
+      reason: `ICT blocked: M15 volatility ${volatilityRatio.toFixed(2)}× reference outside ${config.minVolatilityRatio.toFixed(2)}–${config.maxVolatilityRatio.toFixed(2)}×`,
     };
   }
 
   // ===== 2) Key liquidity + Setup A (sweep reversal) hoặc Setup B (BOS continuation) (§3-5) =====
   const m15Swings = findConfirmedSwings(m15, config.swingConfirmBars);
   const liquidityLevels = collectKeyLiquidity(m15, h1, m15Swings, config);
-  const chain =
-    findSweepReversalChain(m15, liquidityLevels, direction, config, spreadPrice) ??
-    findBosContinuationChain(m15, direction, config, spreadPrice);
+  const sweepChain = findSweepReversalChain(m15, liquidityLevels, direction, config, spreadPrice, m15Atr);
+  // H4 ngược H1: chỉ Setup A. H4 neutral vẫn cho Setup B theo final logic Frequency Mode.
+  const continuationChain = (!h4Opposes || config.allowContinuationAgainstH4) &&
+    (h4Bias !== "NEUTRAL" || config.allowContinuationWhenH4Neutral)
+    ? findBosContinuationChain(m15, direction, config, spreadPrice)
+    : null;
+  const setupCChain = config.setupCEnabled && (!h4Opposes || config.setupCAllowAgainstH4)
+    ? findInternalBreakoutChain(m15, direction, config, spreadPrice)
+    : null;
+  const chain = sweepChain ?? continuationChain ?? setupCChain;
   if (!chain) {
     return {
       signal: null,
       reason:
-        `ICT blocked: không tìm được Setup A (sweep+displacement+BOS) hoặc Setup B ` +
-        `(BOS continuation, không cần sweep) cho ${direction} khớp H1 ${h1Bias}`,
+        h4Opposes
+          ? `ICT blocked: H4 ${h4Bias} ngược H1 nên yêu cầu Setup A (sweep+displacement+BOS) tại key liquidity, nhưng không tìm thấy cho ${direction}`
+          : `ICT blocked: không tìm được Setup A (sweep+displacement+BOS), Setup B ` +
+            `(BOS continuation) hoặc Setup C (internal breakout-retest) cho ${direction} khớp H1 ${h1Bias}`,
     };
   }
 
@@ -618,15 +761,19 @@ function buildXauIctSignal(
   if (!displacementCandle) {
     return { signal: null, reason: "ICT blocked: displacement candle missing" };
   }
-  const zoneCreatedAt = displacementCandle.time;
+  // Candle timestamp của MT5 là lúc MỞ. Zone chỉ tồn tại sau khi M15 displacement ĐÓNG.
+  const zoneCreatedAt = new Date(Date.parse(displacementCandle.time) + 15 * 60_000).toISOString();
   const m5SinceZone = m5.filter((candle) => candle.time > zoneCreatedAt);
   if (m5SinceZone.length === 0) {
     return { signal: null, reason: "ICT blocked: chưa có nến M5 nào sau khi displacement đóng" };
   }
-  if (m5SinceZone.length > config.retestExpiryM5Bars) {
+  const retestExpiry = chain.setupKind === "INTERNAL_BREAKOUT"
+    ? config.setupCRetestExpiryM5Bars
+    : config.retestExpiryM5Bars;
+  if (m5SinceZone.length > retestExpiry) {
     return {
       signal: null,
-      reason: `ICT blocked: retest quá hạn (${m5SinceZone.length} nến M5 > ${config.retestExpiryM5Bars})`,
+      reason: `ICT blocked: retest quá hạn (${m5SinceZone.length} nến M5 > ${retestExpiry})`,
     };
   }
   const lastM5 = m5.at(-1);
@@ -640,11 +787,24 @@ function buildXauIctSignal(
     };
   }
   const entry = lastM5.close;
+  const entryDistance = distanceToZone(entry, zone);
+  if (entryDistance > config.maxEntryDistanceAtr * m15Atr) {
+    return {
+      signal: null,
+      reason: `ICT blocked: entry cách retest zone ${entryDistance.toFixed(config.priceDigits)} > ${(config.maxEntryDistanceAtr * m15Atr).toFixed(config.priceDigits)} (${config.maxEntryDistanceAtr}×ATR_M15)`,
+    };
+  }
 
   // ===== 5) SL cấu trúc (§8) =====
   const slResult = resolveStopLoss(direction, entry, chain, zone, m15, spreadPrice, config);
   if (!slResult) {
     return { signal: null, reason: "ICT blocked: SL không hợp lệ (khoảng cách <= 0)" };
+  }
+  if (slResult.distance < config.minStopLossAtr * m15Atr || slResult.distance > config.maxStopLossAtr * m15Atr) {
+    return {
+      signal: null,
+      reason: `ICT blocked: SL distance ${slResult.distance.toFixed(config.priceDigits)} outside ${(config.minStopLossAtr * m15Atr).toFixed(config.priceDigits)}–${(config.maxStopLossAtr * m15Atr).toFixed(config.priceDigits)} (${config.minStopLossAtr}–${config.maxStopLossAtr}×ATR_M15)`,
+    };
   }
   const stopLoss = direction === "BUY" ? entry - slResult.distance : entry + slResult.distance;
 
@@ -719,7 +879,7 @@ function findConfirmedSwings(candles: Candle[], confirmBars: number): SwingPoint
  * Trend bias theo HH/HL (bullish) hoặc LL/LH (bearish); mâu thuẫn/thiếu dữ
  * liệu -> NEUTRAL (§2 v0.2). Dùng chung cho H1 (bias chính) và H4 (context).
  */
-function resolveTrendBias(candles: Candle[], confirmBars: number): TrendBias {
+function resolveTrendBias(candles: Candle[], confirmBars: number, allowLatestPivotFallback = false): TrendBias {
   const swings = findConfirmedSwings(candles, confirmBars);
   const highs = swings.filter((s) => s.side === "HIGH");
   const lows = swings.filter((s) => s.side === "LOW");
@@ -738,6 +898,13 @@ function resolveTrendBias(candles: Candle[], confirmBars: number): TrendBias {
 
   if (higherHigh && higherLow && lastClose >= lastLow.price) return "BULLISH";
   if (lowerLow && lowerHigh && lastClose <= lastHigh.price) return "BEARISH";
+  if (allowLatestPivotFallback) {
+    const latestPivot = swings.at(-1);
+    if (latestPivot?.side === "LOW" && higherLow && lastClose >= lastLow.price) return "BULLISH";
+    if (latestPivot?.side === "LOW" && lowerLow && lastClose <= lastHigh.price) return "BEARISH";
+    if (latestPivot?.side === "HIGH" && higherHigh && lastClose >= lastLow.price) return "BULLISH";
+    if (latestPivot?.side === "HIGH" && lowerHigh && lastClose <= lastHigh.price) return "BEARISH";
+  }
   return "NEUTRAL";
 }
 
@@ -851,15 +1018,19 @@ function collectKeyLiquidity(
   return levels;
 }
 
-/** Sweep bullish/bearish (§3) — v0.1 không còn ràng buộc độ sâu (không có ATR để chuẩn hóa). */
-function checkBullishSweep(candle: Candle, level: LiquidityLevel): boolean {
+/** Sweep phải đóng trở lại qua liquidity và có độ sâu hợp lệ theo ATR M15. */
+function checkBullishSweep(candle: Candle, level: LiquidityLevel, m15Atr: number, config: XauIctConfig): boolean {
   if (level.side !== "LOW") return false;
-  return candle.low < level.price && candle.close > level.price;
+  const depth = level.price - candle.low;
+  return candle.low < level.price && candle.close > level.price &&
+    depth >= config.minSweepDepthAtr * m15Atr && depth <= config.maxSweepDepthAtr * m15Atr;
 }
 
-function checkBearishSweep(candle: Candle, level: LiquidityLevel): boolean {
+function checkBearishSweep(candle: Candle, level: LiquidityLevel, m15Atr: number, config: XauIctConfig): boolean {
   if (level.side !== "HIGH") return false;
-  return candle.high > level.price && candle.close < level.price;
+  const depth = candle.high - level.price;
+  return candle.high > level.price && candle.close < level.price &&
+    depth >= config.minSweepDepthAtr * m15Atr && depth <= config.maxSweepDepthAtr * m15Atr;
 }
 
 /** PDH/PDL/Asia được ưu tiên hơn Equal High/Low, ưu tiên hơn swing thường (khi 1 nến quét trúng nhiều mức). */
@@ -939,6 +1110,7 @@ function findSweepReversalChain(
   direction: IctDirection,
   config: XauIctConfig,
   spreadPrice: number,
+  m15Atr: number,
 ): ChainResult | null {
   const startIdx = Math.max(1, m15.length - 1 - MAX_CHAIN_LOOKBACK_M15 - config.displacementExpiryM15Bars);
   const candidateLevels = direction === "BUY" ? liquidityLevels.filter((l) => l.side === "LOW") : liquidityLevels.filter((l) => l.side === "HIGH");
@@ -949,7 +1121,9 @@ function findSweepReversalChain(
 
     let sweptLevel: LiquidityLevel | null = null;
     for (const level of candidateLevels) {
-      const ok = direction === "BUY" ? checkBullishSweep(candle, level) : checkBearishSweep(candle, level);
+      const ok = direction === "BUY"
+        ? checkBullishSweep(candle, level, m15Atr, config)
+        : checkBearishSweep(candle, level, m15Atr, config);
       if (ok && (!sweptLevel || rankLiquidityKind(level.kind) > rankLiquidityKind(sweptLevel.kind))) {
         sweptLevel = level;
       }
@@ -991,7 +1165,7 @@ function findBosContinuationChain(
     const dCandle = m15[dIdx];
     if (!dCandle) continue;
     if (!isDisplacementCandle(dCandle, direction, config.displacementBodyRangeRatioB, config.displacementClosePositionMaxB)) continue;
-    const bos = checkBos(m15, dIdx, direction, spreadPrice, config);
+    const bos = checkContinuationBos(m15, dIdx, direction, spreadPrice, config);
     if (!bos.confirmed || bos.swingRef === null) continue;
     return {
       setupKind: "BOS_CONTINUATION",
@@ -999,6 +1173,71 @@ function findBosContinuationChain(
       sweepLevel: null,
       displacementIndex: dIdx,
       swingRef: bos.swingRef,
+    };
+  }
+  return null;
+}
+
+/** Setup B có thể phá swing xác nhận hoặc internal range gần nhất để tăng tần suất. */
+function checkContinuationBos(
+  m15: Candle[],
+  displacementIndex: number,
+  direction: IctDirection,
+  spreadPrice: number,
+  config: XauIctConfig,
+): { confirmed: boolean; swingRef: number | null } {
+  const strict = checkBos(m15, displacementIndex, direction, spreadPrice, config);
+  if (strict.confirmed) return strict;
+  const candle = m15[displacementIndex];
+  const start = Math.max(0, displacementIndex - config.continuationInternalLookback);
+  const prior = m15.slice(start, displacementIndex);
+  if (!candle || prior.length < config.continuationInternalLookback) return strict;
+  const swingRef = direction === "BUY"
+    ? Math.max(...prior.map((item) => item.high))
+    : Math.min(...prior.map((item) => item.low));
+  const buffer = resolveBuffer(spreadPrice, config);
+  const confirmed = direction === "BUY"
+    ? candle.close > swingRef + buffer
+    : candle.close < swingRef - buffer;
+  return { confirmed, swingRef };
+}
+
+/**
+ * Setup C — Internal Breakout Retest.
+ * Dùng range 4 nến M15 ngay trước nến breakout, vì vậy không phụ thuộc swing lớn
+ * hoặc liquidity sweep; vẫn bắt buộc close phá range, retest zone và M5 trigger.
+ */
+function findInternalBreakoutChain(
+  m15: Candle[],
+  direction: IctDirection,
+  config: XauIctConfig,
+  spreadPrice: number,
+): ChainResult | null {
+  const startIdx = Math.max(config.setupCInternalLookback, m15.length - 1 - MAX_CHAIN_LOOKBACK_M15);
+  const buffer = resolveBuffer(spreadPrice, config);
+  for (let dIdx = m15.length - 1; dIdx >= startIdx; dIdx -= 1) {
+    const candle = m15[dIdx];
+    if (!candle || !isDisplacementCandle(
+      candle,
+      direction,
+      config.setupCBodyRangeRatio,
+      config.setupCClosePositionMax,
+    )) continue;
+    const prior = m15.slice(dIdx - config.setupCInternalLookback, dIdx);
+    if (prior.length !== config.setupCInternalLookback) continue;
+    const swingRef = direction === "BUY"
+      ? Math.max(...prior.map((item) => item.high))
+      : Math.min(...prior.map((item) => item.low));
+    const breaksRange = direction === "BUY"
+      ? candle.close > swingRef + buffer
+      : candle.close < swingRef - buffer;
+    if (!breaksRange) continue;
+    return {
+      setupKind: "INTERNAL_BREAKOUT",
+      sweepIndex: null,
+      sweepLevel: null,
+      displacementIndex: dIdx,
+      swingRef,
     };
   }
   return null;
@@ -1048,10 +1287,37 @@ function resolveEntryZone(
   if (!displacementCandle) return null;
   const body = Math.abs(displacementCandle.close - displacementCandle.open);
   const bosLevel = chain.swingRef;
+  if (chain.setupKind === "INTERNAL_BREAKOUT") {
+    const zoneBody = body * config.setupCZoneBodyFraction;
+    if (direction === "BUY") {
+      return { low: displacementCandle.close - zoneBody, high: displacementCandle.close };
+    }
+    return { low: displacementCandle.close, high: displacementCandle.close + zoneBody };
+  }
   if (direction === "BUY") {
     return { low: bosLevel, high: bosLevel + config.zoneBodyFraction * body };
   }
   return { low: bosLevel - config.zoneBodyFraction * body, high: bosLevel };
+}
+
+function distanceToZone(value: number, zone: { low: number; high: number }): number {
+  if (value < zone.low) return zone.low - value;
+  if (value > zone.high) return value - zone.high;
+  return 0;
+}
+
+/** Median của ATR M15 tại từng nến đã đóng, dùng làm volatility reference không lookahead. */
+function medianRecentAtr(candles: Candle[], period: number, sampleBars: number): number | null {
+  const values: number[] = [];
+  const start = Math.max(period + 1, candles.length - sampleBars + 1);
+  for (let end = start; end <= candles.length; end += 1) {
+    const value = atr(candles.slice(0, end), period);
+    if (value !== null && Number.isFinite(value) && value > 0) values.push(value);
+  }
+  if (values.length === 0) return null;
+  values.sort((a, b) => a - b);
+  const middle = Math.floor(values.length / 2);
+  return values.length % 2 === 0 ? (values[middle - 1]! + values[middle]!) / 2 : values[middle]!;
 }
 
 /**
